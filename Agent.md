@@ -37,8 +37,8 @@
   - `Simple`: a first-time-user DJI-style assisted mode tuned closer to consumer `Normal` mode than a hard beginner lock. It auto-levels, uses gradual velocity-style horizontal assist with smoother acceleration/deceleration, keeps vertical hover compensation active, and lets the camera tilt independently. Simple-mode left/right input is now standard again on both keyboard and controller: left goes left, right goes right.
   - `Free Fly`: a spectator-style look-to-fly mode that intentionally ignores the rigid-body drone feel. It now moves kinematically like a smooth Unreal spectator camera instead of using the elastic physics response from the main drone modes.
 - When entering `Drone Pilot`, a temporary entry assist still forces both self-level and hover on until the player gives real up/down throttle input, so the drone does not immediately drop on camera switch.
-- Press `M` on keyboard or the controller back/view button to toggle `Map Mode`:
-- Controller back/view button now has split behavior:
+- Press `M` on keyboard or the controller back/view button for map controls:
+- Keyboard `M` and controller back/view now both have split behavior:
   - tap: toggles the normal full `Map Mode`
   - hold: enters a temporary `MiniMap` view instead
 - the drone camera becomes a top-down view
@@ -49,10 +49,11 @@
   - `WASD` / left stick pan in X/Y
   - `Q` / `E` move altitude down / up
   - `RT` moves altitude down and `LT` moves altitude up
-- Held `MiniMap` mode is a temporary overhead follow camera:
-  - the drone flies to a fixed sky height above the player
-  - it follows the player instead of taking manual pan input
-  - releasing the controller map button returns to the previous camera mode
+- Held `MiniMap` mode is a latched overhead follow state:
+  - entering minimap now forces the player camera to first person while the drone flies to a fixed sky height above the player
+  - the drone follows the player instead of taking manual pan input
+  - pressing `V` while in minimap exits minimap and returns the drone to first-person buddy behavior
+  - pressing the map button again while minimap is active jumps the view to the drone's minimap camera instead of exiting minimap
 - The drone is no longer a detached hidden sphere inside the character. Its visible physics body is the authoritative collision body in all modes.
 - The drone body visual scale is exposed on `ADroneCompanion` as `DroneBodyVisualScale`.
 - The third-person proxy mesh is only for the faked third-person camera path. When leaving third person, it must stop casting hidden shadow immediately; hiding it is not enough because `bCastHiddenShadow` will otherwise keep the shadow alive.

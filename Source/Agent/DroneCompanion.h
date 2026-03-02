@@ -164,16 +164,16 @@ public:
 	float PilotHoverSelfRightMaxCorrectionRate = 540.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
-	float SimpleMaxHorizontalSpeed = 2600.0f;
+	float SimpleMaxHorizontalSpeed = 1000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
-	float SimpleMaxVerticalSpeed = 2600.0f;
+	float SimpleMaxVerticalSpeed = 750.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
-	float SimpleVelocityResponse = 1.35f;
+	float SimpleVelocityResponse = 1.1f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
-	float SimpleRotationResponse = 10.0f;
+	float SimpleRotationResponse = 5.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
 	float SimpleYawFollowSpeed = 7.0f;
@@ -182,7 +182,7 @@ public:
 	float SimpleInputExpo = 0.2f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
-	float SimpleMaxTiltDegrees = 28.0f;
+	float SimpleMaxTiltDegrees = 10.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
 	float SimpleBrakingResponse = 2.25f;
@@ -191,7 +191,7 @@ public:
 	float SimpleCollectiveRange = 1800.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
-	float SimpleAttitudeHoldRate = 8.0f;
+	float SimpleAttitudeHoldRate = 12.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
 	float SimpleCameraTiltAxisSpeed = 55.0f;
@@ -200,16 +200,16 @@ public:
 	float SimpleMaxDistanceFromTarget = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
-	float FreeFlyMaxSpeed = 2600.0f;
+	float FreeFlyMaxSpeed = 2200.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
-	float FreeFlyAcceleration = 4500.0f;
+	float FreeFlyAcceleration = 1200.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
 	float FreeFlyDeceleration = 12000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
-	float FreeFlyRotationResponse = 8.0f;
+	float FreeFlyRotationResponse = 4.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Autopilot")
 	FVector ThirdPersonOffset = FVector(-340.0f, 0.0f, 140.0f);
@@ -272,7 +272,7 @@ public:
 	float AutopilotAngularResponse = 5.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Camera")
-	float DroneCameraTiltStep = 5.0f;
+	float DroneCameraTiltStep = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Camera")
 	float DroneMinCameraTilt = -45.0f;
