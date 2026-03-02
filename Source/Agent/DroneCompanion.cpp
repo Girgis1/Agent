@@ -224,25 +224,43 @@ void ADroneCompanion::ResetPilotInputs()
 	CurrentHoverCommandInput = 0.0f;
 	CurrentHoverVerticalAcceleration = 0.0f;
 	CurrentHoverLiftDot = 1.0f;
+	FreeFlyCurrentVelocity = FVector::ZeroVector;
+	bPilotHoverAssistTemporarilySuppressed = false;
 }
 
 void ADroneCompanion::SetUseSimplePilotControls(bool bEnable)
 {
+	const bool bNeedsModeChange = bUseSimplePilotControls != bEnable || (bEnable && bUseFreeFlyPilotControls);
+	if (!bNeedsModeChange)
+	{
+		return;
+	}
+
 	bUseSimplePilotControls = bEnable;
 	if (bEnable)
 	{
 		bUseFreeFlyPilotControls = false;
 	}
+	FreeFlyCurrentVelocity = FVector::ZeroVector;
+
 	RefreshCameraMountRotation();
 }
 
 void ADroneCompanion::SetUseFreeFlyPilotControls(bool bEnable)
 {
+	const bool bNeedsModeChange = bUseFreeFlyPilotControls != bEnable || (bEnable && bUseSimplePilotControls);
+	if (!bNeedsModeChange)
+	{
+		return;
+	}
+
 	bUseFreeFlyPilotControls = bEnable;
 	if (bEnable)
 	{
 		bUseSimplePilotControls = false;
 	}
+	FreeFlyCurrentVelocity = FVector::ZeroVector;
+
 	RefreshCameraMountRotation();
 }
 
@@ -281,6 +299,7 @@ void ADroneCompanion::SetPilotHoverModeEnabled(bool bEnable)
 	CurrentHoverCommandInput = 0.0f;
 	CurrentHoverVerticalAcceleration = 0.0f;
 	CurrentHoverLiftDot = 1.0f;
+	bPilotHoverAssistTemporarilySuppressed = false;
 }
 
 void ADroneCompanion::SetNextMapModeUsesEntryLift(bool bEnable)
@@ -392,16 +411,12 @@ void ADroneCompanion::UpdateCrashRecovery(float DeltaSeconds)
 	}
 
 	CrashRecoveryTimeRemaining = FMath::Max(0.0f, CrashRecoveryTimeRemaining - DeltaSeconds);
-
-	if (CrashRecoveryTimeRemaining > 0.0f)
-	{
-		return;
-	}
-
 	const bool bLinearSettled = DroneBody->GetPhysicsLinearVelocity().Size() <= DroneCrashSettleLinearSpeed;
 	const bool bAngularSettled = DroneBody->GetPhysicsAngularVelocityInDegrees().Size() <= DroneCrashSettleAngularSpeed;
+	const bool bRecoveredByVelocity = bLinearSettled && bAngularSettled;
+	const bool bRecoveredByTime = CrashRecoveryTimeRemaining <= 0.0f;
 
-	if (bLinearSettled && bAngularSettled)
+	if (bRecoveredByVelocity || bRecoveredByTime)
 	{
 		bCrashed = false;
 	}
@@ -419,27 +434,59 @@ void ADroneCompanion::UpdateComplexFlight(float DeltaSeconds)
 		PilotThrottleInput,
 		DeltaSeconds,
 		PilotThrottleResponse);
+	const FVector CurrentUpVector = DroneBody->GetUpVector().GetSafeNormal();
+	const float LiftDot = FVector::DotProduct(CurrentUpVector, FVector::UpVector);
+	const float CurrentSpeed = DroneBody->GetPhysicsLinearVelocity().Size();
 
 	if (bPilotHoverModeEnabled)
 	{
-		const float GravityAcceleration = GetWorld() ? FMath::Abs(GetWorld()->GetGravityZ()) : 980.0f;
-		const float LiftDot = FVector::DotProduct(DroneBody->GetUpVector().GetSafeNormal(), FVector::UpVector);
-		const float EffectiveLiftDot = LiftDot > 0.0f
-			? FMath::Max(LiftDot, FMath::Max(KINDA_SMALL_NUMBER, PilotHoverMinUpDot))
-			: FMath::Max(KINDA_SMALL_NUMBER, PilotHoverMinUpDot);
-		const float BaseAcceleration = GravityAcceleration / EffectiveLiftDot;
-		const float CommandAcceleration = AppliedThrottleInput * PilotHoverCollectiveRange;
-		const float TotalAcceleration = FMath::Max(0.0f, BaseAcceleration + CommandAcceleration);
+		if (!bPilotHoverAssistTemporarilySuppressed
+			&& LiftDot <= PilotHoverSelfRightMinUpDot
+			&& CurrentSpeed <= FMath::Max(0.0f, PilotHoverSelfRightActivationSpeed))
+		{
+			bPilotHoverAssistTemporarilySuppressed = true;
+		}
+		else if (bPilotHoverAssistTemporarilySuppressed
+			&& LiftDot >= PilotHoverSelfRightRestoreUpDot)
+		{
+			bPilotHoverAssistTemporarilySuppressed = false;
+		}
+	}
+	else
+	{
+		bPilotHoverAssistTemporarilySuppressed = false;
+	}
 
-		CurrentHoverBaseAcceleration = BaseAcceleration;
-		CurrentHoverCommandInput = AppliedThrottleInput;
-		CurrentHoverVerticalAcceleration = TotalAcceleration;
+	const bool bHoverAssistActive = bPilotHoverModeEnabled && !bPilotHoverAssistTemporarilySuppressed;
+	const bool bShouldHoverSelfRight = bPilotHoverAssistTemporarilySuppressed && bPilotStabilizerEnabled;
+
+	if (bPilotHoverModeEnabled)
+	{
+		CurrentHoverCommandInput = bHoverAssistActive ? AppliedThrottleInput : 0.0f;
 		CurrentHoverLiftDot = LiftDot;
+		if (!bHoverAssistActive)
+		{
+			CurrentHoverBaseAcceleration = 0.0f;
+			CurrentHoverVerticalAcceleration = 0.0f;
+		}
+		else
+		{
+			const float GravityAcceleration = GetWorld() ? FMath::Abs(GetWorld()->GetGravityZ()) : 980.0f;
+			const float EffectiveLiftDot = LiftDot > 0.0f
+				? FMath::Max(LiftDot, FMath::Max(KINDA_SMALL_NUMBER, PilotHoverMinUpDot))
+				: FMath::Max(KINDA_SMALL_NUMBER, PilotHoverMinUpDot);
+			const float BaseAcceleration = GravityAcceleration / EffectiveLiftDot;
+			const float CommandAcceleration = AppliedThrottleInput * PilotHoverCollectiveRange;
+			const float TotalAcceleration = FMath::Max(0.0f, BaseAcceleration + CommandAcceleration);
 
-		DroneBody->AddForce(
-			DroneBody->GetUpVector() * TotalAcceleration,
-			NAME_None,
-			true);
+			CurrentHoverBaseAcceleration = BaseAcceleration;
+			CurrentHoverVerticalAcceleration = TotalAcceleration;
+
+			DroneBody->AddForce(
+				CurrentUpVector * TotalAcceleration,
+				NAME_None,
+				true);
+		}
 	}
 	else
 	{
@@ -460,9 +507,15 @@ void ADroneCompanion::UpdateComplexFlight(float DeltaSeconds)
 
 	if (bPilotStabilizerEnabled)
 	{
+		const float UprightAssist = bShouldHoverSelfRight
+			? FMath::Max(PilotUprightAssist, PilotHoverSelfRightAssist)
+			: PilotUprightAssist;
+		const float MaxCorrectionRate = bShouldHoverSelfRight
+			? FMath::Max(PilotStabilizerMaxCorrectionRate, PilotHoverSelfRightMaxCorrectionRate)
+			: PilotStabilizerMaxCorrectionRate;
 		DesiredLocalAngularVelocity += BuildUprightAssistAngularVelocity(
-			PilotUprightAssist,
-			PilotStabilizerMaxCorrectionRate);
+			UprightAssist,
+			MaxCorrectionRate);
 	}
 
 	ApplyDesiredAngularVelocity(DesiredLocalAngularVelocity, DeltaSeconds, PilotAngularResponse);
@@ -495,37 +548,42 @@ void ADroneCompanion::UpdateSimpleFlight(float DeltaSeconds)
 		PilotThrottleResponse);
 
 	const FVector CurrentVelocity = DroneBody->GetPhysicsLinearVelocity();
-	const FVector CurrentUpVector = DroneBody->GetUpVector().GetSafeNormal();
 	const float GravityAcceleration = GetWorld() ? FMath::Abs(GetWorld()->GetGravityZ()) : 980.0f;
+	const FVector CurrentUpVector = DroneBody->GetUpVector().GetSafeNormal();
 	const float LiftDot = FVector::DotProduct(CurrentUpVector, FVector::UpVector);
-	const float EffectiveLiftDot = LiftDot > 0.0f
-		? FMath::Max(LiftDot, FMath::Max(KINDA_SMALL_NUMBER, PilotHoverMinUpDot))
-		: FMath::Max(KINDA_SMALL_NUMBER, PilotHoverMinUpDot);
-	const float BaseAcceleration = GravityAcceleration / EffectiveLiftDot;
-	const float CommandAcceleration = AppliedThrottleInput * SimpleCollectiveRange;
-	const float TotalAcceleration = FMath::Max(0.0f, BaseAcceleration + CommandAcceleration);
+	const float DesiredVerticalSpeed = AppliedThrottleInput * SimpleMaxVerticalSpeed;
+	const float VerticalSpeedError = DesiredVerticalSpeed - CurrentVelocity.Z;
+	const float VerticalAcceleration = FMath::Clamp(
+		VerticalSpeedError * FMath::Max(SimpleBrakingResponse, 1.0f),
+		-FMath::Max(0.0f, SimpleCollectiveRange),
+		FMath::Max(0.0f, SimpleCollectiveRange));
 
-	CurrentHoverBaseAcceleration = BaseAcceleration;
+	CurrentHoverBaseAcceleration = GravityAcceleration;
 	CurrentHoverCommandInput = AppliedThrottleInput;
-	CurrentHoverVerticalAcceleration = TotalAcceleration;
+	CurrentHoverVerticalAcceleration = VerticalAcceleration;
 	CurrentHoverLiftDot = LiftDot;
 
 	DroneBody->AddForce(
-		CurrentUpVector * TotalAcceleration,
+		FVector::UpVector * (GravityAcceleration + VerticalAcceleration),
 		NAME_None,
 		true);
 
+	// Simple mode must move in the drone's yaw frame because character look is locked while piloting.
+	const FRotator ReferenceYawRotation(0.0f, DroneBody->GetComponentRotation().Yaw, 0.0f);
+	const FVector DesiredHorizontalVelocity = (
+		(FRotationMatrix(ReferenceYawRotation).GetUnitAxis(EAxis::X) * ShapedPitchInput) +
+		(FRotationMatrix(ReferenceYawRotation).GetUnitAxis(EAxis::Y) * ShapedRollInput)).GetClampedToMaxSize(1.0f) * SimpleMaxHorizontalSpeed;
 	FVector HorizontalVelocity = CurrentVelocity;
 	HorizontalVelocity.Z = 0.0f;
 
-	float HorizontalBrakeStrength = SimpleVelocityResponse;
-	if (FMath::IsNearlyZero(ShapedPitchInput, 0.025f) && FMath::IsNearlyZero(ShapedRollInput, 0.025f))
-	{
-		HorizontalBrakeStrength = FMath::Max(SimpleVelocityResponse, SimpleBrakingResponse);
-	}
+	const bool bHasHorizontalInput = !DesiredHorizontalVelocity.IsNearlyZero(1.0f);
+	const float HorizontalResponse = bHasHorizontalInput
+		? FMath::Max(SimpleVelocityResponse, 0.0f)
+		: FMath::Max(SimpleVelocityResponse, SimpleBrakingResponse);
+	const FVector HorizontalAcceleration = (DesiredHorizontalVelocity - HorizontalVelocity) * HorizontalResponse;
 
 	DroneBody->AddForce(
-		-HorizontalVelocity * HorizontalBrakeStrength,
+		FVector(HorizontalAcceleration.X, HorizontalAcceleration.Y, 0.0f),
 		NAME_None,
 		true);
 
@@ -535,15 +593,6 @@ void ADroneCompanion::UpdateSimpleFlight(float DeltaSeconds)
 		const float Overspeed = HorizontalSpeed - SimpleMaxHorizontalSpeed;
 		DroneBody->AddForce(
 			-HorizontalVelocity.GetSafeNormal() * (Overspeed * FMath::Max(SimpleBrakingResponse, 1.0f)),
-			NAME_None,
-			true);
-	}
-
-	if (FMath::Abs(CurrentVelocity.Z) > SimpleMaxVerticalSpeed)
-	{
-		const float VerticalOverspeed = FMath::Abs(CurrentVelocity.Z) - SimpleMaxVerticalSpeed;
-		DroneBody->AddForce(
-			FVector(0.0f, 0.0f, -FMath::Sign(CurrentVelocity.Z) * VerticalOverspeed * FMath::Max(SimpleBrakingResponse, 1.0f)),
 			NAME_None,
 			true);
 	}
@@ -594,31 +643,34 @@ void ADroneCompanion::UpdateFreeFlyFlight(float DeltaSeconds)
 		(RightDirection * PilotRollInput) +
 		(UpDirection * PilotThrottleInput)).GetClampedToMaxSize(1.0f) * FreeFlyMaxSpeed;
 
-	const FVector CurrentVelocity = DroneBody->GetPhysicsLinearVelocity();
-	const bool bHasInput = !DesiredVelocity.IsNearlyZero();
-	const float Response = bHasInput ? FreeFlyAcceleration : FMath::Max(FreeFlyAcceleration, FreeFlyDeceleration);
-	FVector VelocityCorrection = (DesiredVelocity - CurrentVelocity) * Response;
-	const float GravityCompensation = GetWorld() ? FMath::Abs(GetWorld()->GetGravityZ()) : 980.0f;
-	VelocityCorrection.Z += GravityCompensation;
-
-	CurrentHoverBaseAcceleration = GravityCompensation;
-	CurrentHoverCommandInput = PilotThrottleInput;
-	CurrentHoverVerticalAcceleration = VelocityCorrection.Z;
-	CurrentHoverLiftDot = 1.0f;
-
-	DroneBody->AddForce(VelocityCorrection, NAME_None, true);
-
-	const FRotator DesiredRotation(ViewReferenceRotation.Pitch, ViewReferenceRotation.Yaw, 0.0f);
-	const FRotator DeltaRotation = (DesiredRotation - DroneBody->GetComponentRotation()).GetNormalized();
-	const FVector DesiredLocalAngularVelocity(
-		-DeltaRotation.Roll * FreeFlyRotationResponse,
-		-DeltaRotation.Pitch * FreeFlyRotationResponse,
-		DeltaRotation.Yaw * FreeFlyRotationResponse);
-
-	ApplyDesiredAngularVelocity(
-		DesiredLocalAngularVelocity,
+	const bool bHasInput = !DesiredVelocity.IsNearlyZero(1.0f);
+	const float VelocityChangeRate = bHasInput
+		? FMath::Max(0.0f, FreeFlyAcceleration)
+		: FMath::Max(0.0f, FreeFlyDeceleration);
+	FreeFlyCurrentVelocity = FMath::VInterpConstantTo(
+		FreeFlyCurrentVelocity,
+		DesiredVelocity,
 		DeltaSeconds,
-		FreeFlyRotationResponse);
+		VelocityChangeRate);
+
+	const FVector NewLocation = DroneBody->GetComponentLocation() + (FreeFlyCurrentVelocity * DeltaSeconds);
+	const FRotator NewRotation(ViewReferenceRotation.Pitch, ViewReferenceRotation.Yaw, 0.0f);
+
+	DroneBody->SetWorldLocationAndRotation(
+		NewLocation,
+		NewRotation,
+		false,
+		nullptr,
+		ETeleportType::TeleportPhysics);
+	DroneBody->SetPhysicsLinearVelocity(FVector::ZeroVector);
+	DroneBody->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+	PreviousLinearVelocity = FreeFlyCurrentVelocity;
+
+	CurrentHoverBaseAcceleration = 0.0f;
+	CurrentHoverCommandInput = PilotThrottleInput;
+	CurrentHoverVerticalAcceleration = 0.0f;
+	CurrentHoverLiftDot = 1.0f;
+	AppliedThrottleInput = PilotThrottleInput;
 }
 
 void ADroneCompanion::UpdateMapFlight(float DeltaSeconds)
@@ -766,10 +818,16 @@ void ADroneCompanion::ClampVelocity() const
 		return;
 	}
 
-	const FVector CurrentLinearVelocity = DroneBody->GetPhysicsLinearVelocity();
-	if (CurrentLinearVelocity.SizeSquared() > FMath::Square(DroneMaxLinearSpeed))
+	float MaxAllowedLinearSpeed = DroneMaxLinearSpeed;
+	if (CompanionMode == EDroneCompanionMode::BuddyFollow && BuddyMaxLinearSpeed > 0.0f)
 	{
-		DroneBody->SetPhysicsLinearVelocity(CurrentLinearVelocity.GetClampedToMaxSize(DroneMaxLinearSpeed));
+		MaxAllowedLinearSpeed = FMath::Min(MaxAllowedLinearSpeed, BuddyMaxLinearSpeed);
+	}
+
+	const FVector CurrentLinearVelocity = DroneBody->GetPhysicsLinearVelocity();
+	if (CurrentLinearVelocity.SizeSquared() > FMath::Square(MaxAllowedLinearSpeed))
+	{
+		DroneBody->SetPhysicsLinearVelocity(CurrentLinearVelocity.GetClampedToMaxSize(MaxAllowedLinearSpeed));
 	}
 
 	const FVector CurrentAngularVelocity = DroneBody->GetPhysicsAngularVelocityInDegrees();
@@ -940,8 +998,12 @@ void ADroneCompanion::UpdateDebugOutput() const
 		: FColor::Red;
 	const FString HoverDebugText = FString::Printf(
 		TEXT("Hover Assist: %s"),
-		bPilotHoverModeEnabled ? TEXT("ON") : TEXT("OFF"));
-	const FColor HoverDebugColor = bPilotHoverModeEnabled ? FColor::Green : FColor::Red;
+		bPilotHoverAssistTemporarilySuppressed
+			? TEXT("AUTO OFF")
+			: (bPilotHoverModeEnabled ? TEXT("ON") : TEXT("OFF")));
+	const FColor HoverDebugColor = bPilotHoverAssistTemporarilySuppressed
+		? FColor::Yellow
+		: (bPilotHoverModeEnabled ? FColor::Green : FColor::Red);
 	const FString DebugText = FString::Printf(
 		TEXT("Drone Companion\n")
 		TEXT("Mode: %s  Stab: %s  Hover: %s  Crashed: %s  Recovery: %.2fs\n")

@@ -70,7 +70,7 @@ AAgentCharacter::AAgentCharacter()
 	ThirdPersonDroneProxyMesh->SetVisibility(false, true);
 	ThirdPersonDroneProxyMesh->SetOwnerNoSee(true);
 	ThirdPersonDroneProxyMesh->SetCanEverAffectNavigation(false);
-	ThirdPersonDroneProxyMesh->SetRelativeScale3D(FVector(0.25f));
+	ThirdPersonDroneProxyMesh->SetRelativeScale3D(FVector(ThirdPersonDroneProxyScale));
 
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> DroneProxyMesh(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
 	if (DroneProxyMesh.Succeeded())
@@ -117,6 +117,11 @@ void AAgentCharacter::BeginPlay()
 	{
 		SetThirdPersonProxyVisible(true);
 		AttachThirdPersonProxyToComponent(FollowCamera);
+	}
+
+	if (ThirdPersonDroneProxyMesh)
+	{
+		ThirdPersonDroneProxyMesh->SetRelativeScale3D(FVector(FMath::Max(0.01f, ThirdPersonDroneProxyScale)));
 	}
 
 	FVector InitialThirdPersonLocation = FVector::ZeroVector;
@@ -612,6 +617,8 @@ void AAgentCharacter::SetThirdPersonProxyVisible(bool bVisible)
 
 	ThirdPersonDroneProxyMesh->SetHiddenInGame(!bVisible, true);
 	ThirdPersonDroneProxyMesh->SetVisibility(bVisible, true);
+	ThirdPersonDroneProxyMesh->SetCastShadow(bVisible);
+	ThirdPersonDroneProxyMesh->bCastHiddenShadow = bVisible;
 }
 
 void AAgentCharacter::AttachThirdPersonProxyToComponent(USceneComponent* AttachmentParent)
@@ -638,7 +645,7 @@ void AAgentCharacter::UpdateDronePilotInputs(float DeltaSeconds)
 	const bool bSimplePilotMode = !bMapModeActive && IsSimpleDronePilotMode();
 	const bool bFreeFlyPilotMode = !bMapModeActive && IsFreeFlyDronePilotMode();
 	const float KeyboardForwardInput = (bDronePitchForwardHeld ? 1.0f : 0.0f) - (bDronePitchBackwardHeld ? 1.0f : 0.0f);
-	const float KeyboardRightInput = (bDroneRollRightHeld ? 1.0f : 0.0f) - (bDroneRollLeftHeld ? 1.0f : 0.0f);
+	float KeyboardRightInput = (bDroneRollRightHeld ? 1.0f : 0.0f) - (bDroneRollLeftHeld ? 1.0f : 0.0f);
 	float KeyboardVerticalInput = 0.0f;
 	float KeyboardYawInput = 0.0f;
 

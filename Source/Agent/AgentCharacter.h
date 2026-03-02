@@ -193,6 +193,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera")
 	float ThirdPersonDroneTransitionDuration = 0.45f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera")
+	float ThirdPersonDroneProxyScale = 0.5f;
+
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<ADroneCompanion> DroneCompanion = nullptr;

@@ -10,6 +10,7 @@
 - Engine version: Unreal Engine 5.7
 - Base template: third-person C++ template using Enhanced Input
 - Module note: `Source/Agent/Agent.Build.cs` must include `PhysicsCore` because the drone crash system uses `UPhysicalMaterial`.
+- Source-control note: do not gitignore `Content/__ExternalActors__` in this project. The template maps are using external actor packages there, so those files are part of the real level data, not disposable generated junk.
 
 ## Current Gameplay Systems
 - `AAgentCharacter` in `Source/Agent/AgentCharacter.*` now coordinates player movement, camera mode switching, and spawning the persistent companion drone.
@@ -32,8 +33,8 @@
   - `Complex`: full acro / rate with no self-level and no hover assist
   - `Horizon`: self-level (`Angle / Horizon`) on, hover assist off
   - `Horizon + Hover`: self-level plus helicopter-style hover assist (neutral throttle sits near hover, but tilt still drives forward flight)
-  - `Simple`: a first-time-user DJI-style assisted mode built on stabilized rigid-body flight. It always self-levels, keeps a hover-style collective baseline, limits tilt angle, adds strong braking, and lets the camera tilt independently
-  - `Free Fly`: a spectator-style look-to-fly mode that behaves like a free camera; the drone follows the active view direction instead of acro inputs
+  - `Simple`: a first-time-user DJI-style assisted mode tuned closer to consumer `Normal` mode than a hard beginner lock. It auto-levels, uses gradual velocity-style horizontal assist with smoother acceleration/deceleration, keeps vertical hover compensation active, and lets the camera tilt independently. Simple-mode left/right input is now standard again on both keyboard and controller: left goes left, right goes right.
+  - `Free Fly`: a spectator-style look-to-fly mode that intentionally ignores the rigid-body drone feel. It now moves kinematically like a smooth Unreal spectator camera instead of using the elastic physics response from the main drone modes.
 - When entering `Drone Pilot`, a temporary entry assist still forces both self-level and hover on until the player gives real up/down throttle input, so the drone does not immediately drop on camera switch.
 - Press `M` on keyboard or the controller back/view button to toggle `Map Mode`:
   - the drone camera becomes a top-down view
@@ -46,6 +47,8 @@
   - `RT` moves altitude down and `LT` moves altitude up
 - The drone is no longer a detached hidden sphere inside the character. Its visible physics body is the authoritative collision body in all modes.
 - The drone body visual scale is exposed on `ADroneCompanion` as `DroneBodyVisualScale`.
+- The third-person proxy mesh is only for the faked third-person camera path. When leaving third person, it must stop casting hidden shadow immediately; hiding it is not enough because `bCastHiddenShadow` will otherwise keep the shadow alive.
+- `BuddyFollow` now has its own exposed max speed (`BuddyMaxLinearSpeed`) so the companion can drift back over visibly instead of rocketing to the player.
 - Drone controls in `Drone Pilot`:
   - `Complex`, `Horizon`, and `Horizon + Hover`:
     - Keyboard: `W` / `S` pitch, `A` / `D` roll, `Q` / `E` yaw, `R` / `F` thrust
@@ -62,14 +65,16 @@
   - always-simulating rigid-body flight on the drone actor
   - pilot mode with five presets: `Complex`, `Horizon`, `Horizon + Hover`, `Simple`, and `Free Fly`
   - optional complex-mode hover-thrust assist that keeps the drone flying like a thrust vehicle while making neutral throttle sit near hover instead of dropping immediately
-  - a rebuilt simple mode that now uses stabilized tilt + hover-collective flight, strong braking, limited tilt, camera tilt on the right stick, and an optional follow-target distance cap
-  - a dedicated spectator-style free-fly mode that uses the current view direction for movement and ignores the acro / hover assist stack
+  - a rebuilt simple mode that now uses DJI-like assisted horizontal velocity control, vertical hover compensation, stronger braking, faster default tilt, camera tilt on the right stick, and an optional follow-target distance cap
+  - a dedicated spectator-style free-fly mode that now teleports smoothly like a utility camera and does not inherit the physics "snap" / elastic response from the main drone modes
   - a fully faked third-person camera path where the player uses the stock spring-arm `FollowCamera`, the real drone is despawned in third person, and a hidden-shadow proxy mesh is attached to the character camera path purely for visual continuity
   - a dedicated top-down map mode with its own movement model and a 2-second camera pitch / FOV transition in and out
-  - a smoother third-person-to-drone handoff that reuses the drone's internal camera transition system instead of snapping straight into the pilot camera framing
+  - camera mount transitions are driven internally by `ADroneCompanion`, and the per-tick mode sync should not force-refresh the camera mount anymore unless the mode actually changes; this keeps the map transition and the third-person-to-drone pilot-entry transition visible again
   - an autonomous buddy-follow mode so the drone can ride near the player's left shoulder during first person
   - exposed crash detection and timed recovery while the drone remains physics-simulated
-  - crash recovery now waits until linear speed is below `CrashSelfRightActivationSpeed` (default `200` uu/s) before forcing self-right correction, even if the player has acro mode selected
+  - crash recovery now recovers on either condition: the recovery timer expires or the drone settles below the crash velocity thresholds; it no longer waits for both, which prevents long "fall all the way to the ground" lockouts
+  - crash recovery still waits until linear speed is below `CrashSelfRightActivationSpeed` (default `200` uu/s) before forcing self-right correction, even if the player has acro mode selected
+  - `Horizon + Hover` / stabilized hover now temporarily disables hover assist if the drone is upside down enough and slower than `PilotHoverSelfRightActivationSpeed` (default `20` uu/s); once the body is upright again (`PilotHoverSelfRightRestoreUpDot`), hover assist automatically restores. This prevents hover from pinning the drone upside down against the ground.
   - crash detection now uses pre-impact velocity plus collision impulse, so hard hits are measured before physics has a chance to bleed the speed off
   - runtime physical material tuning for friction and bounce
   - live on-screen drone debug output with mode, crash state, impact info, pilot inputs, and camera tilt
@@ -78,6 +83,8 @@
 - The drone is now being treated as a persistent companion vehicle instead of an effect inside the character camera rig.
 - The main camera fantasy is a three-mode loop: normal third-person camera with a drone proxy animation, direct drone piloting, and first-person character view with the drone as a left-shoulder companion.
 - Physics changes should continue pushing the main drone modes toward a believable flying rigid body that can be knocked around; `Free Fly` is the intentional exception as a utility spectator-style mode.
+- Guardrail for future edits: in any drone mode where character look input is locked (`Complex`, `Horizon`, `Horizon + Hover`, and `Simple`), never drive planar movement from `GetControlRotation()` / `ViewReferenceRotation`. That frame freezes when look is locked and makes the drone feel world-locked. Use the drone body's yaw (or the live drone camera yaw if camera yaw is ever decoupled) as the movement frame instead. `Free Fly` and `Map` are the exceptions because they intentionally use view-driven movement.
+- Speed rule for the main piloted modes: keep the user-facing max speed aligned at `2600` uu/s unless they explicitly ask for a different cap. That currently applies to the rigid-body clamp, `Simple`, `Free Fly`, and map translation speeds. `BuddyFollow` is intentionally exempt because it has its own slower return cap.
 
 ## Future Version Notes
 - Continue tuning the flight feel toward professional FPV sims like DRL / Liftoff / VelociDrone style handling.
