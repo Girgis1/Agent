@@ -26,7 +26,8 @@
   - `Horizon + Hover`
   - `Simple`
   - `Free Fly`
-- `B` on keyboard and `D-pad Left` on controller cycle forward through those five modes.
+  - `Roll`
+- `B` on keyboard and `D-pad Left` on controller cycle forward through those six modes.
 - Controller shoulders now cycle the same mode list instead of acting as direct toggles:
   - right bumper cycles forward
   - left bumper cycles backward
@@ -36,9 +37,12 @@
   - `Horizon + Hover`: self-level plus helicopter-style hover assist (neutral throttle sits near hover, but tilt still drives forward flight)
   - `Simple`: a first-time-user DJI-style assisted mode tuned closer to consumer `Normal` mode than a hard beginner lock. It auto-levels, uses gradual velocity-style horizontal assist with smoother acceleration/deceleration, keeps vertical hover compensation active, and lets the camera tilt independently. Simple-mode left/right input is now standard again on both keyboard and controller: left goes left, right goes right.
   - `Free Fly`: a spectator-style look-to-fly mode that intentionally ignores the rigid-body drone feel. It now moves kinematically like a smooth Unreal spectator camera instead of using the elastic physics response from the main drone modes.
+  - `Roll`: a grounded first-person ball mode. The camera stays visually upright while the drone body rolls underneath it, movement is torque-based on the ground, and `Space` / controller `A` trigger a roll jump. Roll mode bypasses the drone crash / recovery system entirely, resets inherited flight momentum on entry, snaps to an upright yaw-only pose above the floor if it's near the ground, and only applies roll drive while grounded so it behaves like its own ball controller instead of inheriting flight-state reactions.
+  - Roll mode's upright camera override should only run during active `PilotControlled` roll play; it must not override scripted camera transitions such as pilot entry or map/minimap camera transitions.
+  - Roll mode can apply a small visual camera lean while steering left/right. This is only a camera effect; it should not feed back into physics or self-righting.
 - When entering `Drone Pilot`, a temporary entry assist still forces both self-level and hover on until the player gives real up/down throttle input, so the drone does not immediately drop on camera switch.
-- Press `M` on keyboard or the controller back/view button to toggle `Map Mode`:
-- Controller back/view button now has split behavior:
+- Press `M` on keyboard or the controller back/view button for map controls:
+- Keyboard `M` and controller back/view now both have split behavior:
   - tap: toggles the normal full `Map Mode`
   - hold: enters a temporary `MiniMap` view instead
 - the drone camera becomes a top-down view
@@ -49,10 +53,11 @@
   - `WASD` / left stick pan in X/Y
   - `Q` / `E` move altitude down / up
   - `RT` moves altitude down and `LT` moves altitude up
-- Held `MiniMap` mode is a temporary overhead follow camera:
-  - the drone flies to a fixed sky height above the player
-  - it follows the player instead of taking manual pan input
-  - releasing the controller map button returns to the previous camera mode
+- Held `MiniMap` mode is a latched overhead follow state:
+  - entering minimap now forces the player camera to first person while the drone flies to a fixed sky height above the player
+  - the drone follows the player instead of taking manual pan input
+  - pressing `V` while in minimap exits minimap and returns the drone to first-person buddy behavior
+  - pressing the map button again while minimap is active jumps the view to the drone's minimap camera instead of exiting minimap
 - The drone is no longer a detached hidden sphere inside the character. Its visible physics body is the authoritative collision body in all modes.
 - The drone body visual scale is exposed on `ADroneCompanion` as `DroneBodyVisualScale`.
 - The third-person proxy mesh is only for the faked third-person camera path. When leaving third person, it must stop casting hidden shadow immediately; hiding it is not enough because `bCastHiddenShadow` will otherwise keep the shadow alive.
@@ -68,11 +73,14 @@
   - `Free Fly`:
     - Keyboard: `WASD` move, `Q` / `E` and `R` / `F` move vertically, mouse / look controls where the camera faces
     - Controller: left stick moves, right stick looks, `RT` rises, `LT` drops
+  - `Roll`:
+    - Keyboard: `WASD` roll the ball along the ground relative to camera yaw, `Space` jumps
+    - Controller: left stick rolls the ball along the ground relative to camera yaw, right stick looks, `A` jumps
   - Shared:
-    - D-pad up / down adjusts drone camera tilt outside of map mode
+    - D-pad up / down adjusts drone camera FOV in `+5` / `-5` steps
 - Drone systems currently include:
   - always-simulating rigid-body flight on the drone actor
-  - pilot mode with five presets: `Complex`, `Horizon`, `Horizon + Hover`, `Simple`, and `Free Fly`
+  - pilot mode with six presets: `Complex`, `Horizon`, `Horizon + Hover`, `Simple`, `Free Fly`, and `Roll`
   - optional complex-mode hover-thrust assist that keeps the drone flying like a thrust vehicle while making neutral throttle sit near hover instead of dropping immediately
   - a rebuilt simple mode that now uses DJI-like assisted horizontal velocity control, vertical hover compensation, stronger braking, faster default tilt, camera tilt on the right stick, and an optional follow-target distance cap
   - a dedicated spectator-style free-fly mode that now teleports smoothly like a utility camera and does not inherit the physics "snap" / elastic response from the main drone modes
@@ -88,6 +96,7 @@
   - crash detection now uses pre-impact velocity plus collision impulse, so hard hits are measured before physics has a chance to bleed the speed off
   - runtime physical material tuning for friction and bounce
   - live on-screen drone debug output with mode, crash state, impact info, pilot inputs, and camera tilt
+  - roll mode now has a dedicated output-log diagnostic path (`bLogRollModeDiagnostics`, `RollModeLogInterval`) that logs roll entry, ignored roll collisions, and throttled `RollTick` state snapshots so we can inspect grounding, forced rotations, linear/angular velocity, and camera lean when the ball misbehaves
 
 ## Current Direction
 - The drone is now being treated as a persistent companion vehicle instead of an effect inside the character camera rig.

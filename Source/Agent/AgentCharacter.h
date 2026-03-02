@@ -34,7 +34,8 @@ enum class EAgentDronePilotControlMode : uint8
 	Horizon,
 	HorizonHover,
 	Simple,
-	FreeFly
+	FreeFly,
+	Roll
 };
 
 /**
@@ -104,12 +105,15 @@ protected:
 	bool IsDroneInputModeActive() const;
 	bool IsSimpleDronePilotMode() const;
 	bool IsFreeFlyDronePilotMode() const;
+	bool IsRollDronePilotMode() const;
 	void SetDronePilotControlMode(EAgentDronePilotControlMode NewMode);
 	void CycleDronePilotControlMode(int32 Direction);
 	void ToggleDronePilotControlMode();
 	void ToggleMapMode();
 	void EnterMiniMapMode();
 	void ExitMiniMapMode();
+	void FocusMiniMapDroneCamera();
+	void UpdateKeyboardMapButtonHold(float DeltaSeconds);
 	void UpdateControllerMapButtonHold(float DeltaSeconds);
 	void SetThirdPersonProxyVisible(bool bVisible);
 	void AttachThirdPersonProxyToComponent(USceneComponent* AttachmentParent);
@@ -143,6 +147,8 @@ protected:
 	void OnDroneHoverModePressed();
 	void OnDroneStabilizerTogglePressed();
 	void OnMapModePressed();
+	void OnKeyboardMapButtonPressed();
+	void OnKeyboardMapButtonReleased();
 	void OnControllerMapButtonPressed();
 	void OnControllerMapButtonReleased();
 
@@ -221,6 +227,9 @@ protected:
 	bool bMiniMapModeActive = false;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
+	bool bMiniMapViewingDroneCamera = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
 	EAgentDronePilotControlMode DronePilotControlMode = EAgentDronePilotControlMode::Complex;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
@@ -236,10 +245,13 @@ protected:
 	bool bDefaultUseControllerRotationYaw = false;
 	bool bDefaultOrientRotationToMovement = true;
 	bool bThirdPersonTransitionActive = false;
+	bool bKeyboardMapButtonHeld = false;
+	bool bKeyboardMapButtonTriggeredMiniMap = false;
 	bool bControllerMapButtonHeld = false;
 	bool bControllerMapButtonTriggeredMiniMap = false;
 
 	float ThirdPersonTransitionElapsed = 0.0f;
+	float KeyboardMapButtonHeldDuration = 0.0f;
 	float ControllerMapButtonHeldDuration = 0.0f;
 	FVector ThirdPersonTransitionStartLocation = FVector::ZeroVector;
 	FRotator ThirdPersonTransitionStartRotation = FRotator::ZeroRotator;

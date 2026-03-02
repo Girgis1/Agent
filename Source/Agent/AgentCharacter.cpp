@@ -134,6 +134,7 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
+	UpdateKeyboardMapButtonHold(DeltaSeconds);
 	UpdateControllerMapButtonHold(DeltaSeconds);
 
 	if (DroneCompanion)
@@ -142,6 +143,7 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 		DroneCompanion->SetViewReferenceRotation(GetControlRotation());
 		DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
 		DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
+		DroneCompanion->SetUseRollPilotControls(IsDronePilotMode() && !bMapModeActive && IsRollDronePilotMode());
 		ApplyDroneAssistState();
 		FVector ThirdPersonTargetLocation = FVector::ZeroVector;
 		FRotator ThirdPersonTargetRotation = FRotator::ZeroRotator;
@@ -190,8 +192,13 @@ void AAgentCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 
 	PlayerInputComponent->BindKey(EKeys::V, IE_Pressed, this, &AAgentCharacter::CycleViewMode);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Top, IE_Pressed, this, &AAgentCharacter::CycleViewMode);
+	PlayerInputComponent->BindKey(EKeys::SpaceBar, IE_Pressed, this, &AAgentCharacter::DoJumpStart);
+	PlayerInputComponent->BindKey(EKeys::SpaceBar, IE_Released, this, &AAgentCharacter::DoJumpEnd);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Bottom, IE_Pressed, this, &AAgentCharacter::DoJumpStart);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Bottom, IE_Released, this, &AAgentCharacter::DoJumpEnd);
 	PlayerInputComponent->BindKey(EKeys::B, IE_Pressed, this, &AAgentCharacter::OnDroneControlModeTogglePressed);
-	PlayerInputComponent->BindKey(EKeys::M, IE_Pressed, this, &AAgentCharacter::OnMapModePressed);
+	PlayerInputComponent->BindKey(EKeys::M, IE_Pressed, this, &AAgentCharacter::OnKeyboardMapButtonPressed);
+	PlayerInputComponent->BindKey(EKeys::M, IE_Released, this, &AAgentCharacter::OnKeyboardMapButtonReleased);
 	PlayerInputComponent->BindKey(EKeys::W, IE_Pressed, this, &AAgentCharacter::OnDronePitchForwardPressed);
 	PlayerInputComponent->BindKey(EKeys::W, IE_Released, this, &AAgentCharacter::OnDronePitchForwardReleased);
 	PlayerInputComponent->BindKey(EKeys::S, IE_Pressed, this, &AAgentCharacter::OnDronePitchBackwardPressed);
@@ -277,6 +284,8 @@ void AAgentCharacter::CycleViewMode()
 void AAgentCharacter::ApplyViewMode(EAgentViewMode NewMode, bool bBlend)
 {
 	bMapModeActive = false;
+	bMiniMapModeActive = false;
+	bMiniMapViewingDroneCamera = false;
 	const EAgentViewMode PreviousViewMode = CurrentViewMode;
 	const bool bWasDronePilot = PreviousViewMode == EAgentViewMode::DronePilot;
 	FVector ThirdPersonTargetLocation = GetActorLocation();
@@ -426,6 +435,7 @@ void AAgentCharacter::ApplyViewMode(EAgentViewMode NewMode, bool bBlend)
 			DroneCompanion->SetViewReferenceRotation(GetControlRotation());
 			DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
 			DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
+			DroneCompanion->SetUseRollPilotControls(IsDronePilotMode() && !bMapModeActive && IsRollDronePilotMode());
 			ApplyDroneAssistState();
 			DroneCompanion->SetCompanionMode(EDroneCompanionMode::PilotControlled);
 		}
@@ -477,6 +487,7 @@ void AAgentCharacter::ApplyViewMode(EAgentViewMode NewMode, bool bBlend)
 			DroneCompanion->SetViewReferenceRotation(GetControlRotation());
 			DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
 			DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
+			DroneCompanion->SetUseRollPilotControls(IsDronePilotMode() && !bMapModeActive && IsRollDronePilotMode());
 			ApplyDroneAssistState();
 			DroneCompanion->SetCompanionMode(EDroneCompanionMode::BuddyFollow);
 		}
@@ -494,6 +505,13 @@ void AAgentCharacter::ApplyDroneAssistState()
 	}
 
 	if (IsFreeFlyDronePilotMode())
+	{
+		DroneCompanion->SetPilotStabilizerEnabled(false);
+		DroneCompanion->SetPilotHoverModeEnabled(false);
+		return;
+	}
+
+	if (IsRollDronePilotMode())
 	{
 		DroneCompanion->SetPilotStabilizerEnabled(false);
 		DroneCompanion->SetPilotHoverModeEnabled(false);
@@ -564,6 +582,7 @@ void AAgentCharacter::SpawnDroneCompanionAtTransform(
 	DroneCompanion->SetViewReferenceRotation(GetControlRotation());
 	DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
 	DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
+	DroneCompanion->SetUseRollPilotControls(IsDronePilotMode() && !bMapModeActive && IsRollDronePilotMode());
 	ApplyDroneAssistState();
 
 	FVector ThirdPersonTargetLocation = FVector::ZeroVector;
@@ -649,6 +668,7 @@ void AAgentCharacter::UpdateDronePilotInputs(float DeltaSeconds)
 
 	const bool bSimplePilotMode = !bMapModeActive && IsSimpleDronePilotMode();
 	const bool bFreeFlyPilotMode = !bMapModeActive && IsFreeFlyDronePilotMode();
+	const bool bRollPilotMode = !bMapModeActive && IsRollDronePilotMode();
 	const float KeyboardForwardInput = (bDronePitchForwardHeld ? 1.0f : 0.0f) - (bDronePitchBackwardHeld ? 1.0f : 0.0f);
 	float KeyboardRightInput = (bDroneRollRightHeld ? 1.0f : 0.0f) - (bDroneRollLeftHeld ? 1.0f : 0.0f);
 	float KeyboardVerticalInput = 0.0f;
@@ -670,6 +690,11 @@ void AAgentCharacter::UpdateDronePilotInputs(float DeltaSeconds)
 		const float KeyboardUpInput = (bDroneYawRightHeld ? 1.0f : 0.0f) + (bDroneThrottleUpHeld ? 1.0f : 0.0f);
 		const float KeyboardDownInput = (bDroneYawLeftHeld ? 1.0f : 0.0f) + (bDroneThrottleDownHeld ? 1.0f : 0.0f);
 		KeyboardVerticalInput = FMath::Clamp(KeyboardUpInput - KeyboardDownInput, -1.0f, 1.0f);
+	}
+	else if (bRollPilotMode)
+	{
+		KeyboardYawInput = 0.0f;
+		KeyboardVerticalInput = 0.0f;
 	}
 	else
 	{
@@ -708,6 +733,13 @@ void AAgentCharacter::UpdateDronePilotInputs(float DeltaSeconds)
 		GamepadRightInput = DroneGamepadYawInput;
 		GamepadForwardInput = DroneGamepadThrottleInput;
 	}
+	else if (bRollPilotMode)
+	{
+		GamepadVerticalInput = 0.0f;
+		GamepadYawInput = 0.0f;
+		GamepadRightInput = DroneGamepadYawInput;
+		GamepadForwardInput = DroneGamepadThrottleInput;
+	}
 
 	const float VerticalInput = FMath::Clamp(KeyboardVerticalInput + GamepadVerticalInput, -1.0f, 1.0f);
 	const float YawInput = FMath::Clamp(KeyboardYawInput + GamepadYawInput, -1.0f, 1.0f);
@@ -717,6 +749,7 @@ void AAgentCharacter::UpdateDronePilotInputs(float DeltaSeconds)
 	if (bDroneEntryAssistActive
 		&& IsDronePilotMode()
 		&& !bFreeFlyPilotMode
+		&& !bRollPilotMode
 		&& FMath::Abs(VerticalInput) > FMath::Max(0.0f, DroneEntryAssistReleaseThreshold))
 	{
 		bDroneEntryAssistActive = false;
@@ -769,6 +802,11 @@ bool AAgentCharacter::IsFreeFlyDronePilotMode() const
 	return DronePilotControlMode == EAgentDronePilotControlMode::FreeFly;
 }
 
+bool AAgentCharacter::IsRollDronePilotMode() const
+{
+	return DronePilotControlMode == EAgentDronePilotControlMode::Roll;
+}
+
 void AAgentCharacter::ToggleDronePilotControlMode()
 {
 	CycleDronePilotControlMode(1);
@@ -780,6 +818,11 @@ void AAgentCharacter::SetDronePilotControlMode(EAgentDronePilotControlMode NewMo
 
 	switch (DronePilotControlMode)
 	{
+	case EAgentDronePilotControlMode::Roll:
+		bUseSimpleDronePilotControls = false;
+		bDroneStabilizerEnabled = false;
+		bDroneHoverModeEnabled = false;
+		break;
 	case EAgentDronePilotControlMode::FreeFly:
 		bUseSimpleDronePilotControls = false;
 		bDroneStabilizerEnabled = false;
@@ -812,21 +855,25 @@ void AAgentCharacter::SetDronePilotControlMode(EAgentDronePilotControlMode NewMo
 	{
 		DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
 		DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
+		DroneCompanion->SetUseRollPilotControls(IsDronePilotMode() && !bMapModeActive && IsRollDronePilotMode());
 		ApplyDroneAssistState();
 	}
 }
 
 void AAgentCharacter::CycleDronePilotControlMode(int32 Direction)
 {
-	constexpr int32 PilotModeCount = 5;
+	constexpr int32 PilotModeCount = 6;
 	const int32 CurrentIndex = static_cast<int32>(DronePilotControlMode);
 	const int32 WrappedIndex = (CurrentIndex + Direction + PilotModeCount) % PilotModeCount;
 	SetDronePilotControlMode(static_cast<EAgentDronePilotControlMode>(WrappedIndex));
 
-	if (DroneCompanion && DroneCompanion->GetCompanionMode() == EDroneCompanionMode::MapMode)
+	if (DroneCompanion
+		&& (DroneCompanion->GetCompanionMode() == EDroneCompanionMode::MapMode
+			|| DroneCompanion->GetCompanionMode() == EDroneCompanionMode::MiniMapFollow))
 	{
 		DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
 		DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
+		DroneCompanion->SetUseRollPilotControls(false);
 	}
 }
 
@@ -871,6 +918,7 @@ void AAgentCharacter::ToggleMapMode()
 		DroneCompanion->SetViewReferenceRotation(GetControlRotation());
 		DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
 		DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
+		DroneCompanion->SetUseRollPilotControls(false);
 		ApplyDroneAssistState();
 		DroneCompanion->SetNextMapModeUsesEntryLift(CurrentViewMode != EAgentViewMode::DronePilot);
 		DroneCompanion->SetCompanionMode(EDroneCompanionMode::MapMode);
@@ -894,24 +942,7 @@ void AAgentCharacter::EnterMiniMapMode()
 		return;
 	}
 
-	APlayerController* PlayerController = Cast<APlayerController>(GetController());
-	if (!DroneCompanion)
-	{
-		FVector DroneSpawnLocation = FVector::ZeroVector;
-		FRotator DroneSpawnRotation = FRotator::ZeroRotator;
-		if (CurrentViewMode == EAgentViewMode::ThirdPerson
-			&& ThirdPersonTransitionCamera
-			&& ThirdPersonTransitionCamera->IsActive())
-		{
-			DroneSpawnLocation = ThirdPersonTransitionCamera->GetComponentLocation();
-			DroneSpawnRotation = ThirdPersonTransitionCamera->GetComponentRotation();
-		}
-		else
-		{
-			GetThirdPersonDroneTarget(DroneSpawnLocation, DroneSpawnRotation);
-		}
-		SpawnDroneCompanionAtTransform(DroneSpawnLocation, DroneSpawnRotation, EDroneCompanionMode::MiniMapFollow);
-	}
+	ApplyViewMode(EAgentViewMode::FirstPerson, true);
 
 	if (!DroneCompanion)
 	{
@@ -919,18 +950,15 @@ void AAgentCharacter::EnterMiniMapMode()
 	}
 
 	bMiniMapModeActive = true;
+	bMiniMapViewingDroneCamera = false;
 	SetThirdPersonProxyVisible(false);
 	DroneCompanion->SetFollowTarget(this);
 	DroneCompanion->SetViewReferenceRotation(GetControlRotation());
 	DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
 	DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
+	DroneCompanion->SetUseRollPilotControls(false);
 	ApplyDroneAssistState();
 	DroneCompanion->SetCompanionMode(EDroneCompanionMode::MiniMapFollow);
-
-	if (PlayerController)
-	{
-		PlayerController->SetViewTargetWithBlend(DroneCompanion.Get(), ViewBlendTime);
-	}
 }
 
 void AAgentCharacter::ExitMiniMapMode()
@@ -940,8 +968,24 @@ void AAgentCharacter::ExitMiniMapMode()
 		return;
 	}
 
-	bMiniMapModeActive = false;
-	ApplyViewMode(CurrentViewMode, true);
+	ApplyViewMode(EAgentViewMode::FirstPerson, true);
+}
+
+void AAgentCharacter::FocusMiniMapDroneCamera()
+{
+	if (!bMiniMapModeActive || !DroneCompanion)
+	{
+		return;
+	}
+
+	APlayerController* PlayerController = Cast<APlayerController>(GetController());
+	if (!PlayerController)
+	{
+		return;
+	}
+
+	bMiniMapViewingDroneCamera = true;
+	PlayerController->SetViewTargetWithBlend(DroneCompanion.Get(), ViewBlendTime);
 }
 
 void AAgentCharacter::UpdateControllerMapButtonHold(float DeltaSeconds)
@@ -957,6 +1001,23 @@ void AAgentCharacter::UpdateControllerMapButtonHold(float DeltaSeconds)
 		&& ControllerMapButtonHeldDuration >= FMath::Max(0.0f, ControllerMapButtonHoldTime))
 	{
 		bControllerMapButtonTriggeredMiniMap = true;
+		EnterMiniMapMode();
+	}
+}
+
+void AAgentCharacter::UpdateKeyboardMapButtonHold(float DeltaSeconds)
+{
+	if (!bKeyboardMapButtonHeld || bKeyboardMapButtonTriggeredMiniMap)
+	{
+		return;
+	}
+
+	KeyboardMapButtonHeldDuration += FMath::Max(0.0f, DeltaSeconds);
+	if (!bMapModeActive
+		&& !bMiniMapModeActive
+		&& KeyboardMapButtonHeldDuration >= FMath::Max(0.0f, ControllerMapButtonHoldTime))
+	{
+		bKeyboardMapButtonTriggeredMiniMap = true;
 		EnterMiniMapMode();
 	}
 }
@@ -986,7 +1047,7 @@ void AAgentCharacter::DoLook(float Yaw, float Pitch)
 {
 	if (IsDroneInputModeActive()
 		&& bLockCharacterMovementDuringDronePilot
-		&& !(IsDronePilotMode() && IsFreeFlyDronePilotMode()))
+		&& !(IsDronePilotMode() && (IsFreeFlyDronePilotMode() || IsRollDronePilotMode())))
 	{
 		return;
 	}
@@ -1002,6 +1063,12 @@ void AAgentCharacter::DoLook(float Yaw, float Pitch)
 
 void AAgentCharacter::DoJumpStart()
 {
+	if (IsDronePilotMode() && IsRollDronePilotMode() && DroneCompanion)
+	{
+		DroneCompanion->TryRollJump();
+		return;
+	}
+
 	if (IsDroneInputModeActive() && bLockCharacterMovementDuringDronePilot)
 	{
 		return;
@@ -1012,6 +1079,11 @@ void AAgentCharacter::DoJumpStart()
 
 void AAgentCharacter::DoJumpEnd()
 {
+	if (IsDronePilotMode() && IsRollDronePilotMode())
+	{
+		return;
+	}
+
 	if (IsDroneInputModeActive() && bLockCharacterMovementDuringDronePilot)
 	{
 		return;
@@ -1134,7 +1206,7 @@ void AAgentCharacter::OnDroneCameraTiltUpPressed()
 {
 	if (DroneCompanion)
 	{
-		DroneCompanion->AdjustCameraTilt(DroneCompanion->DroneCameraTiltStep);
+		DroneCompanion->AdjustCameraFieldOfView(DroneCompanion->DroneCameraFieldOfViewStep);
 	}
 }
 
@@ -1142,7 +1214,7 @@ void AAgentCharacter::OnDroneCameraTiltDownPressed()
 {
 	if (DroneCompanion)
 	{
-		DroneCompanion->AdjustCameraTilt(-DroneCompanion->DroneCameraTiltStep);
+		DroneCompanion->AdjustCameraFieldOfView(-DroneCompanion->DroneCameraFieldOfViewStep);
 	}
 }
 
@@ -1163,6 +1235,40 @@ void AAgentCharacter::OnDroneStabilizerTogglePressed()
 
 void AAgentCharacter::OnMapModePressed()
 {
+	if (bMiniMapModeActive)
+	{
+		FocusMiniMapDroneCamera();
+		return;
+	}
+
+	ToggleMapMode();
+}
+
+void AAgentCharacter::OnKeyboardMapButtonPressed()
+{
+	bKeyboardMapButtonHeld = true;
+	bKeyboardMapButtonTriggeredMiniMap = false;
+	KeyboardMapButtonHeldDuration = 0.0f;
+}
+
+void AAgentCharacter::OnKeyboardMapButtonReleased()
+{
+	const bool bWasMiniMapHold = bKeyboardMapButtonTriggeredMiniMap;
+	bKeyboardMapButtonHeld = false;
+	bKeyboardMapButtonTriggeredMiniMap = false;
+	KeyboardMapButtonHeldDuration = 0.0f;
+
+	if (bWasMiniMapHold)
+	{
+		return;
+	}
+
+	if (bMiniMapModeActive)
+	{
+		FocusMiniMapDroneCamera();
+		return;
+	}
+
 	ToggleMapMode();
 }
 
@@ -1182,10 +1288,14 @@ void AAgentCharacter::OnControllerMapButtonReleased()
 
 	if (bWasMiniMapHold)
 	{
-		ExitMiniMapMode();
+		return;
 	}
-	else
+
+	if (bMiniMapModeActive)
 	{
-		ToggleMapMode();
+		FocusMiniMapDroneCamera();
+		return;
 	}
+
+	ToggleMapMode();
 }
