@@ -10,10 +10,14 @@
 class ADroneCompanion;
 class UCameraComponent;
 class UInputAction;
+class USceneComponent;
+class UStaticMeshComponent;
 class USpringArmComponent;
 struct FInputActionValue;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
+
+enum class EDroneCompanionMode : uint8;
 
 UENUM(BlueprintType)
 enum class EAgentViewMode : uint8
@@ -29,7 +33,8 @@ enum class EAgentDronePilotControlMode : uint8
 	Complex,
 	Horizon,
 	HorizonHover,
-	Simple
+	Simple,
+	FreeFly
 };
 
 /**
@@ -51,6 +56,14 @@ class AAgentCharacter : public ACharacter
 	/** First-person camera on the character */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UCameraComponent* FirstPersonCamera;
+
+	/** Temporary camera used to fake the drone-to-third-person handoff */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	UCameraComponent* ThirdPersonTransitionCamera;
+
+	/** Hidden local proxy mesh that rides with the third-person camera path and only exists for shadowing */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	UStaticMeshComponent* ThirdPersonDroneProxyMesh;
 
 protected:
 	UPROPERTY(EditAnywhere, Category="Input")
@@ -80,16 +93,23 @@ protected:
 	void CycleViewMode();
 	void ApplyViewMode(EAgentViewMode NewMode, bool bBlend);
 	void SpawnDroneCompanion();
+	void SpawnDroneCompanionAtTransform(const FVector& SpawnLocation, const FRotator& SpawnRotation, EDroneCompanionMode InitialMode);
+	void DespawnDroneCompanion();
 	void ApplyDroneAssistState();
-	void UpdateDronePilotInputs();
+	void UpdateDronePilotInputs(float DeltaSeconds);
+	void UpdateThirdPersonTransition(float DeltaSeconds);
 	bool GetThirdPersonDroneTarget(FVector& OutLocation, FRotator& OutRotation) const;
 	void ResetDroneInputState();
 	bool IsDronePilotMode() const;
 	bool IsDroneInputModeActive() const;
+	bool IsSimpleDronePilotMode() const;
+	bool IsFreeFlyDronePilotMode() const;
 	void SetDronePilotControlMode(EAgentDronePilotControlMode NewMode);
 	void CycleDronePilotControlMode(int32 Direction);
 	void ToggleDronePilotControlMode();
 	void ToggleMapMode();
+	void SetThirdPersonProxyVisible(bool bVisible);
+	void AttachThirdPersonProxyToComponent(USceneComponent* AttachmentParent);
 
 	void OnDronePitchForwardPressed();
 	void OnDronePitchForwardReleased();
@@ -167,6 +187,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera")
 	FVector FirstPersonCameraOffset = FVector(0.0f, 0.0f, 64.0f);
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera")
+	float ThirdPersonDroneSwapMaxDistance = 800.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera")
+	float ThirdPersonDroneTransitionDuration = 0.45f;
+
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<ADroneCompanion> DroneCompanion = nullptr;
@@ -195,6 +221,11 @@ protected:
 	bool bViewModeInitialized = false;
 	bool bDefaultUseControllerRotationYaw = false;
 	bool bDefaultOrientRotationToMovement = true;
+	bool bThirdPersonTransitionActive = false;
+
+	float ThirdPersonTransitionElapsed = 0.0f;
+	FVector ThirdPersonTransitionStartLocation = FVector::ZeroVector;
+	FRotator ThirdPersonTransitionStartRotation = FRotator::ZeroRotator;
 
 	float DroneGamepadThrottleInput = 0.0f;
 	float DroneGamepadYawInput = 0.0f;

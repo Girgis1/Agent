@@ -4,8 +4,10 @@
 #include "DroneCompanion.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
+#include "Engine/Engine.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -14,6 +16,7 @@
 #include "GameFramework/SpringArmComponent.h"
 #include "InputActionValue.h"
 #include "InputCoreTypes.h"
+#include "UObject/ConstructorHelpers.h"
 #include "Agent.h"
 
 AAgentCharacter::AAgentCharacter()
@@ -50,6 +53,30 @@ AAgentCharacter::AAgentCharacter()
 	FirstPersonCamera->SetRelativeLocation(FirstPersonCameraOffset);
 	FirstPersonCamera->bUsePawnControlRotation = true;
 	FirstPersonCamera->SetActive(false);
+
+	ThirdPersonTransitionCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("ThirdPersonTransitionCamera"));
+	ThirdPersonTransitionCamera->SetupAttachment(GetCapsuleComponent());
+	ThirdPersonTransitionCamera->bUsePawnControlRotation = false;
+	ThirdPersonTransitionCamera->SetActive(false);
+
+	ThirdPersonDroneProxyMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ThirdPersonDroneProxyMesh"));
+	ThirdPersonDroneProxyMesh->SetupAttachment(FollowCamera);
+	ThirdPersonDroneProxyMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	ThirdPersonDroneProxyMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
+	ThirdPersonDroneProxyMesh->SetGenerateOverlapEvents(false);
+	ThirdPersonDroneProxyMesh->CastShadow = true;
+	ThirdPersonDroneProxyMesh->bCastHiddenShadow = true;
+	ThirdPersonDroneProxyMesh->SetHiddenInGame(true);
+	ThirdPersonDroneProxyMesh->SetVisibility(false, true);
+	ThirdPersonDroneProxyMesh->SetOwnerNoSee(true);
+	ThirdPersonDroneProxyMesh->SetCanEverAffectNavigation(false);
+	ThirdPersonDroneProxyMesh->SetRelativeScale3D(FVector(0.25f));
+
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> DroneProxyMesh(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
+	if (DroneProxyMesh.Succeeded())
+	{
+		ThirdPersonDroneProxyMesh->SetStaticMesh(DroneProxyMesh.Object);
+	}
 }
 
 void AAgentCharacter::BeginPlay()
@@ -82,7 +109,15 @@ void AAgentCharacter::BeginPlay()
 		FirstPersonCamera->SetRelativeLocation(FirstPersonCameraOffset);
 	}
 
-	SpawnDroneCompanion();
+	if (CurrentViewMode != EAgentViewMode::ThirdPerson)
+	{
+		SpawnDroneCompanion();
+	}
+	else
+	{
+		SetThirdPersonProxyVisible(true);
+		AttachThirdPersonProxyToComponent(FollowCamera);
+	}
 
 	FVector InitialThirdPersonLocation = FVector::ZeroVector;
 	FRotator InitialThirdPersonRotation = FRotator::ZeroRotator;
@@ -104,6 +139,7 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 		DroneCompanion->SetFollowTarget(this);
 		DroneCompanion->SetViewReferenceRotation(GetControlRotation());
 		DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
+		DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
 		ApplyDroneAssistState();
 		FVector ThirdPersonTargetLocation = FVector::ZeroVector;
 		FRotator ThirdPersonTargetRotation = FRotator::ZeroRotator;
@@ -114,13 +150,15 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 
 		if (IsDroneInputModeActive())
 		{
-			UpdateDronePilotInputs();
+			UpdateDronePilotInputs(DeltaSeconds);
 		}
 		else
 		{
 			DroneCompanion->ResetPilotInputs();
 		}
 	}
+
+	UpdateThirdPersonTransition(DeltaSeconds);
 
 	if (!bViewModeInitialized && GetController() != nullptr)
 	{
@@ -229,9 +267,39 @@ void AAgentCharacter::CycleViewMode()
 void AAgentCharacter::ApplyViewMode(EAgentViewMode NewMode, bool bBlend)
 {
 	bMapModeActive = false;
-	const bool bWasDronePilot = CurrentViewMode == EAgentViewMode::DronePilot;
+	const EAgentViewMode PreviousViewMode = CurrentViewMode;
+	const bool bWasDronePilot = PreviousViewMode == EAgentViewMode::DronePilot;
+	FVector ThirdPersonTargetLocation = GetActorLocation();
+	FRotator ThirdPersonTargetRotation = GetControlRotation();
+	GetThirdPersonDroneTarget(ThirdPersonTargetLocation, ThirdPersonTargetRotation);
+	FVector ThirdPersonSwapStartLocation = ThirdPersonTargetLocation;
+	FRotator ThirdPersonSwapStartRotation = ThirdPersonTargetRotation;
+	const bool bUseFirstToThirdPersonSwap = NewMode == EAgentViewMode::ThirdPerson
+		&& PreviousViewMode == EAgentViewMode::FirstPerson;
+
+	if (bUseFirstToThirdPersonSwap && DroneCompanion)
+	{
+		DroneCompanion->GetDroneCameraTransform(ThirdPersonSwapStartLocation, ThirdPersonSwapStartRotation);
+		const float AllowedDistance = FMath::Max(0.0f, ThirdPersonDroneSwapMaxDistance);
+		if (AllowedDistance > 0.0f
+			&& FVector::DistSquared(ThirdPersonSwapStartLocation, ThirdPersonTargetLocation) > FMath::Square(AllowedDistance))
+		{
+			if (GEngine)
+			{
+				GEngine->AddOnScreenDebugMessage(
+					static_cast<uint64>(GetUniqueID()) + 14000ULL,
+					2.0f,
+					FColor::Red,
+					TEXT("Drone camera is out of range for third person"));
+			}
+			return;
+		}
+	}
+
 	CurrentViewMode = NewMode;
 	bDroneEntryAssistActive = NewMode == EAgentViewMode::DronePilot && !bWasDronePilot;
+	bThirdPersonTransitionActive = false;
+	ThirdPersonTransitionElapsed = 0.0f;
 
 	const float BlendTime = bBlend ? ViewBlendTime : 0.0f;
 	APlayerController* PlayerController = Cast<APlayerController>(GetController());
@@ -239,14 +307,17 @@ void AAgentCharacter::ApplyViewMode(EAgentViewMode NewMode, bool bBlend)
 
 	if (FirstPersonCamera)
 	{
-		FirstPersonCamera->SetActive(NewMode == EAgentViewMode::FirstPerson);
+		FirstPersonCamera->SetActive(false);
 	}
 
 	if (FollowCamera)
 	{
-		FollowCamera->SetActive(
-			NewMode == EAgentViewMode::ThirdPerson
-			|| (!DroneCompanion && NewMode != EAgentViewMode::FirstPerson));
+		FollowCamera->SetActive(false);
+	}
+
+	if (ThirdPersonTransitionCamera)
+	{
+		ThirdPersonTransitionCamera->SetActive(false);
 	}
 
 	if (CharacterMovementComponent)
@@ -268,57 +339,138 @@ void AAgentCharacter::ApplyViewMode(EAgentViewMode NewMode, bool bBlend)
 		}
 	}
 
-	if (!DroneCompanion)
-	{
-		if (PlayerController)
-		{
-			PlayerController->SetViewTargetWithBlend(this, BlendTime);
-		}
-
-		ResetDroneInputState();
-		return;
-	}
-
-	DroneCompanion->SetFollowTarget(this);
-	DroneCompanion->SetViewReferenceRotation(GetControlRotation());
-	DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
-	ApplyDroneAssistState();
-
 	switch (NewMode)
 	{
 	case EAgentViewMode::ThirdPerson:
 	{
-		FVector ThirdPersonTargetLocation = FVector::ZeroVector;
-		FRotator ThirdPersonTargetRotation = FRotator::ZeroRotator;
-		GetThirdPersonDroneTarget(ThirdPersonTargetLocation, ThirdPersonTargetRotation);
-		DroneCompanion->SetThirdPersonCameraTarget(ThirdPersonTargetLocation, ThirdPersonTargetRotation);
-		if (!bBlend)
+		if (!bUseFirstToThirdPersonSwap)
 		{
-			DroneCompanion->TeleportDroneToTransform(ThirdPersonTargetLocation, ThirdPersonTargetRotation);
+			GetThirdPersonDroneTarget(ThirdPersonTargetLocation, ThirdPersonTargetRotation);
+			ThirdPersonSwapStartLocation = ThirdPersonTargetLocation;
+			ThirdPersonSwapStartRotation = ThirdPersonTargetRotation;
 		}
-		DroneCompanion->SetCompanionMode(EDroneCompanionMode::ThirdPersonFollow);
+		SetThirdPersonProxyVisible(true);
+
+		if (bUseFirstToThirdPersonSwap && ThirdPersonTransitionCamera)
+		{
+			DespawnDroneCompanion();
+			AttachThirdPersonProxyToComponent(ThirdPersonTransitionCamera);
+			ThirdPersonTransitionCamera->SetWorldLocationAndRotation(ThirdPersonSwapStartLocation, ThirdPersonSwapStartRotation);
+			ThirdPersonTransitionStartLocation = ThirdPersonSwapStartLocation;
+			ThirdPersonTransitionStartRotation = ThirdPersonSwapStartRotation;
+			bThirdPersonTransitionActive = bBlend && ThirdPersonDroneTransitionDuration > KINDA_SMALL_NUMBER;
+			ThirdPersonTransitionCamera->SetActive(true);
+
+			if (!bThirdPersonTransitionActive && FollowCamera)
+			{
+				AttachThirdPersonProxyToComponent(FollowCamera);
+				FollowCamera->SetActive(true);
+				ThirdPersonTransitionCamera->SetActive(false);
+			}
+		}
+		else
+		{
+			AttachThirdPersonProxyToComponent(FollowCamera);
+			if (FollowCamera)
+			{
+				FollowCamera->SetActive(true);
+			}
+		}
+
 		if (PlayerController)
 		{
-			PlayerController->SetViewTargetWithBlend(this, BlendTime);
+			PlayerController->SetViewTargetWithBlend(this, bUseFirstToThirdPersonSwap ? 0.0f : (DroneCompanion ? 0.0f : BlendTime));
+		}
+
+		if (!bUseFirstToThirdPersonSwap)
+		{
+			DespawnDroneCompanion();
 		}
 		ResetDroneInputState();
 		break;
 	}
 	case EAgentViewMode::DronePilot:
-		DroneCompanion->SetCompanionMode(EDroneCompanionMode::PilotControlled);
-		if (PlayerController)
+	{
+		SetThirdPersonProxyVisible(false);
+		FVector DroneSpawnLocation = FVector::ZeroVector;
+		FRotator DroneSpawnRotation = FRotator::ZeroRotator;
+		if (PreviousViewMode == EAgentViewMode::ThirdPerson
+			&& ThirdPersonTransitionCamera
+			&& ThirdPersonTransitionCamera->IsActive())
 		{
-			PlayerController->SetViewTargetWithBlend(DroneCompanion.Get(), BlendTime);
+			DroneSpawnLocation = ThirdPersonTransitionCamera->GetComponentLocation();
+			DroneSpawnRotation = ThirdPersonTransitionCamera->GetComponentRotation();
 		}
-		break;
-	case EAgentViewMode::FirstPerson:
-	default:
-		if (PlayerController)
+		else
 		{
-			PlayerController->SetViewTargetWithBlend(this, BlendTime);
+			GetThirdPersonDroneTarget(DroneSpawnLocation, DroneSpawnRotation);
 		}
 
-		DroneCompanion->SetCompanionMode(EDroneCompanionMode::BuddyFollow);
+		if (!DroneCompanion)
+		{
+			SpawnDroneCompanionAtTransform(DroneSpawnLocation, DroneSpawnRotation, EDroneCompanionMode::PilotControlled);
+		}
+		else
+		{
+			DroneCompanion->SetFollowTarget(this);
+			DroneCompanion->SetViewReferenceRotation(GetControlRotation());
+			DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
+			DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
+			ApplyDroneAssistState();
+			DroneCompanion->SetCompanionMode(EDroneCompanionMode::PilotControlled);
+		}
+
+		if (DroneCompanion && PreviousViewMode == EAgentViewMode::ThirdPerson)
+		{
+			DroneCompanion->StartPilotCameraTransitionFromThirdPerson();
+		}
+
+		if (DroneCompanion && PlayerController)
+		{
+			PlayerController->SetViewTargetWithBlend(
+				DroneCompanion.Get(),
+				PreviousViewMode == EAgentViewMode::ThirdPerson ? 0.0f : BlendTime);
+		}
+		break;
+	}
+	case EAgentViewMode::FirstPerson:
+	default:
+		SetThirdPersonProxyVisible(false);
+		if (FirstPersonCamera)
+		{
+			FirstPersonCamera->SetActive(true);
+		}
+
+		if (PlayerController)
+		{
+			PlayerController->SetViewTargetWithBlend(this, bWasDronePilot ? 0.0f : BlendTime);
+		}
+
+		if (!DroneCompanion)
+		{
+			FVector DroneSpawnLocation = FVector::ZeroVector;
+			FRotator DroneSpawnRotation = FRotator::ZeroRotator;
+			if (ThirdPersonTransitionCamera && ThirdPersonTransitionCamera->IsActive())
+			{
+				DroneSpawnLocation = ThirdPersonTransitionCamera->GetComponentLocation();
+				DroneSpawnRotation = ThirdPersonTransitionCamera->GetComponentRotation();
+			}
+			else
+			{
+				GetThirdPersonDroneTarget(DroneSpawnLocation, DroneSpawnRotation);
+			}
+			SpawnDroneCompanionAtTransform(DroneSpawnLocation, DroneSpawnRotation, EDroneCompanionMode::BuddyFollow);
+		}
+		else
+		{
+			DroneCompanion->SetFollowTarget(this);
+			DroneCompanion->SetViewReferenceRotation(GetControlRotation());
+			DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
+			DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
+			ApplyDroneAssistState();
+			DroneCompanion->SetCompanionMode(EDroneCompanionMode::BuddyFollow);
+		}
+
 		ResetDroneInputState();
 		break;
 	}
@@ -328,6 +480,13 @@ void AAgentCharacter::ApplyDroneAssistState()
 {
 	if (!DroneCompanion)
 	{
+		return;
+	}
+
+	if (IsFreeFlyDronePilotMode())
+	{
+		DroneCompanion->SetPilotStabilizerEnabled(false);
+		DroneCompanion->SetPilotHoverModeEnabled(false);
 		return;
 	}
 
@@ -351,6 +510,19 @@ bool AAgentCharacter::GetThirdPersonDroneTarget(FVector& OutLocation, FRotator& 
 
 void AAgentCharacter::SpawnDroneCompanion()
 {
+	const FRotator SpawnYawRotation(0.0f, GetControlRotation().Yaw, 0.0f);
+	const FVector SpawnLocation = GetActorLocation() + FRotationMatrix(SpawnYawRotation).TransformVector(DroneSpawnOffset);
+	const EDroneCompanionMode InitialMode = CurrentViewMode == EAgentViewMode::DronePilot
+		? EDroneCompanionMode::PilotControlled
+		: EDroneCompanionMode::BuddyFollow;
+	SpawnDroneCompanionAtTransform(SpawnLocation, SpawnYawRotation, InitialMode);
+}
+
+void AAgentCharacter::SpawnDroneCompanionAtTransform(
+	const FVector& SpawnLocation,
+	const FRotator& SpawnRotation,
+	EDroneCompanionMode InitialMode)
+{
 	if (DroneCompanion || !GetWorld())
 	{
 		return;
@@ -366,49 +538,122 @@ void AAgentCharacter::SpawnDroneCompanion()
 		return;
 	}
 
-	const FRotator SpawnYawRotation(0.0f, GetControlRotation().Yaw, 0.0f);
-	const FVector SpawnLocation = GetActorLocation() + FRotationMatrix(SpawnYawRotation).TransformVector(DroneSpawnOffset);
-
 	FActorSpawnParameters SpawnParameters{};
 	SpawnParameters.Owner = this;
 	SpawnParameters.Instigator = this;
 	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
-	DroneCompanion = GetWorld()->SpawnActor<ADroneCompanion>(SpawnClass, SpawnLocation, SpawnYawRotation, SpawnParameters);
+	DroneCompanion = GetWorld()->SpawnActor<ADroneCompanion>(SpawnClass, SpawnLocation, SpawnRotation, SpawnParameters);
 
-	if (DroneCompanion)
+	if (!DroneCompanion)
 	{
-		DroneCompanion->SetFollowTarget(this);
-		DroneCompanion->SetViewReferenceRotation(GetControlRotation());
-		DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
-		ApplyDroneAssistState();
-		FVector ThirdPersonTargetLocation = FVector::ZeroVector;
-		FRotator ThirdPersonTargetRotation = FRotator::ZeroRotator;
-		GetThirdPersonDroneTarget(ThirdPersonTargetLocation, ThirdPersonTargetRotation);
-		DroneCompanion->SetThirdPersonCameraTarget(ThirdPersonTargetLocation, ThirdPersonTargetRotation);
-		DroneCompanion->SetCompanionMode(
-			CurrentViewMode == EAgentViewMode::DronePilot
-				? EDroneCompanionMode::PilotControlled
-				: (CurrentViewMode == EAgentViewMode::ThirdPerson
-					? EDroneCompanionMode::ThirdPersonFollow
-					: EDroneCompanionMode::BuddyFollow));
+		return;
+	}
+
+	DroneCompanion->SetFollowTarget(this);
+	DroneCompanion->SetViewReferenceRotation(GetControlRotation());
+	DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
+	DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
+	ApplyDroneAssistState();
+
+	FVector ThirdPersonTargetLocation = FVector::ZeroVector;
+	FRotator ThirdPersonTargetRotation = FRotator::ZeroRotator;
+	GetThirdPersonDroneTarget(ThirdPersonTargetLocation, ThirdPersonTargetRotation);
+	DroneCompanion->SetThirdPersonCameraTarget(ThirdPersonTargetLocation, ThirdPersonTargetRotation);
+	DroneCompanion->SetCompanionMode(InitialMode);
+}
+
+void AAgentCharacter::DespawnDroneCompanion()
+{
+	if (!DroneCompanion)
+	{
+		return;
+	}
+
+	DroneCompanion->Destroy();
+	DroneCompanion = nullptr;
+}
+
+void AAgentCharacter::UpdateThirdPersonTransition(float DeltaSeconds)
+{
+	if (!bThirdPersonTransitionActive || !ThirdPersonTransitionCamera || !FollowCamera)
+	{
+		return;
+	}
+
+	ThirdPersonTransitionElapsed = FMath::Min(
+		ThirdPersonTransitionElapsed + FMath::Max(0.0f, DeltaSeconds),
+		FMath::Max(KINDA_SMALL_NUMBER, ThirdPersonDroneTransitionDuration));
+	const float RawAlpha = ThirdPersonTransitionElapsed / FMath::Max(KINDA_SMALL_NUMBER, ThirdPersonDroneTransitionDuration);
+	const float Alpha = FMath::InterpEaseInOut(0.0f, 1.0f, RawAlpha, 2.0f);
+	const FVector TargetLocation = FollowCamera->GetComponentLocation();
+	const FQuat StartRotation = ThirdPersonTransitionStartRotation.Quaternion();
+	const FQuat TargetRotation = FollowCamera->GetComponentRotation().Quaternion();
+
+	ThirdPersonTransitionCamera->SetWorldLocationAndRotation(
+		FMath::Lerp(ThirdPersonTransitionStartLocation, TargetLocation, Alpha),
+		FQuat::Slerp(StartRotation, TargetRotation, Alpha));
+
+	if (RawAlpha >= 1.0f)
+	{
+		bThirdPersonTransitionActive = false;
+		AttachThirdPersonProxyToComponent(FollowCamera);
+		FollowCamera->SetActive(true);
+		ThirdPersonTransitionCamera->SetActive(false);
 	}
 }
 
-void AAgentCharacter::UpdateDronePilotInputs()
+void AAgentCharacter::SetThirdPersonProxyVisible(bool bVisible)
+{
+	if (!ThirdPersonDroneProxyMesh)
+	{
+		return;
+	}
+
+	ThirdPersonDroneProxyMesh->SetHiddenInGame(!bVisible, true);
+	ThirdPersonDroneProxyMesh->SetVisibility(bVisible, true);
+}
+
+void AAgentCharacter::AttachThirdPersonProxyToComponent(USceneComponent* AttachmentParent)
+{
+	if (!ThirdPersonDroneProxyMesh || !AttachmentParent)
+	{
+		return;
+	}
+
+	ThirdPersonDroneProxyMesh->AttachToComponent(
+		AttachmentParent,
+		FAttachmentTransformRules::SnapToTargetIncludingScale);
+	ThirdPersonDroneProxyMesh->SetRelativeLocation(FVector::ZeroVector);
+	ThirdPersonDroneProxyMesh->SetRelativeRotation(FRotator::ZeroRotator);
+}
+
+void AAgentCharacter::UpdateDronePilotInputs(float DeltaSeconds)
 {
 	if (!DroneCompanion || !IsDroneInputModeActive())
 	{
 		return;
 	}
 
-	const bool bUseSimpleStyleInputs = bMapModeActive || bUseSimpleDronePilotControls;
+	const bool bSimplePilotMode = !bMapModeActive && IsSimpleDronePilotMode();
+	const bool bFreeFlyPilotMode = !bMapModeActive && IsFreeFlyDronePilotMode();
 	const float KeyboardForwardInput = (bDronePitchForwardHeld ? 1.0f : 0.0f) - (bDronePitchBackwardHeld ? 1.0f : 0.0f);
 	const float KeyboardRightInput = (bDroneRollRightHeld ? 1.0f : 0.0f) - (bDroneRollLeftHeld ? 1.0f : 0.0f);
 	float KeyboardVerticalInput = 0.0f;
 	float KeyboardYawInput = 0.0f;
 
-	if (bUseSimpleStyleInputs)
+	if (bMapModeActive)
+	{
+		const float KeyboardUpInput = (bDroneYawRightHeld ? 1.0f : 0.0f) + (bDroneThrottleUpHeld ? 1.0f : 0.0f);
+		const float KeyboardDownInput = (bDroneYawLeftHeld ? 1.0f : 0.0f) + (bDroneThrottleDownHeld ? 1.0f : 0.0f);
+		KeyboardVerticalInput = FMath::Clamp(KeyboardUpInput - KeyboardDownInput, -1.0f, 1.0f);
+	}
+	else if (bSimplePilotMode)
+	{
+		KeyboardYawInput = (bDroneYawRightHeld ? 1.0f : 0.0f) - (bDroneYawLeftHeld ? 1.0f : 0.0f);
+		KeyboardVerticalInput = (bDroneThrottleUpHeld ? 1.0f : 0.0f) - (bDroneThrottleDownHeld ? 1.0f : 0.0f);
+	}
+	else if (bFreeFlyPilotMode)
 	{
 		const float KeyboardUpInput = (bDroneYawRightHeld ? 1.0f : 0.0f) + (bDroneThrottleUpHeld ? 1.0f : 0.0f);
 		const float KeyboardDownInput = (bDroneYawLeftHeld ? 1.0f : 0.0f) + (bDroneThrottleDownHeld ? 1.0f : 0.0f);
@@ -421,22 +666,46 @@ void AAgentCharacter::UpdateDronePilotInputs()
 	}
 
 	float GamepadVerticalInput = DroneGamepadThrottleInput;
-	if (bUseSimpleStyleInputs)
+	float GamepadYawInput = DroneGamepadYawInput;
+	float GamepadRightInput = DroneGamepadRollInput;
+	float GamepadForwardInput = DroneGamepadPitchInput;
+
+	if (bMapModeActive)
 	{
-		GamepadVerticalInput = bMapModeActive
-			? (DroneGamepadLeftTriggerInput - DroneGamepadRightTriggerInput)
-			: (DroneGamepadRightTriggerInput - DroneGamepadLeftTriggerInput);
+		GamepadVerticalInput = DroneGamepadLeftTriggerInput - DroneGamepadRightTriggerInput;
+		GamepadYawInput = 0.0f;
+		GamepadRightInput = DroneGamepadYawInput;
+		GamepadForwardInput = DroneGamepadThrottleInput;
 	}
-	const float GamepadYawInput = bUseSimpleStyleInputs ? 0.0f : DroneGamepadYawInput;
-	const float GamepadRightInput = bUseSimpleStyleInputs ? DroneGamepadYawInput : DroneGamepadRollInput;
-	const float GamepadForwardInput = bUseSimpleStyleInputs ? DroneGamepadThrottleInput : DroneGamepadPitchInput;
+	else if (bSimplePilotMode)
+	{
+		GamepadVerticalInput = DroneGamepadRightTriggerInput - DroneGamepadLeftTriggerInput;
+		GamepadYawInput = DroneGamepadRollInput;
+		GamepadRightInput = DroneGamepadYawInput;
+		GamepadForwardInput = DroneGamepadThrottleInput;
+
+		if (FMath::Abs(DroneGamepadPitchInput) > KINDA_SMALL_NUMBER)
+		{
+			DroneCompanion->AdjustCameraTilt(DroneGamepadPitchInput * DroneCompanion->SimpleCameraTiltAxisSpeed * DeltaSeconds);
+		}
+	}
+	else if (bFreeFlyPilotMode)
+	{
+		GamepadVerticalInput = DroneGamepadRightTriggerInput - DroneGamepadLeftTriggerInput;
+		GamepadYawInput = 0.0f;
+		GamepadRightInput = DroneGamepadYawInput;
+		GamepadForwardInput = DroneGamepadThrottleInput;
+	}
 
 	const float VerticalInput = FMath::Clamp(KeyboardVerticalInput + GamepadVerticalInput, -1.0f, 1.0f);
 	const float YawInput = FMath::Clamp(KeyboardYawInput + GamepadYawInput, -1.0f, 1.0f);
 	const float RightInput = FMath::Clamp(KeyboardRightInput + GamepadRightInput, -1.0f, 1.0f);
 	const float ForwardInput = FMath::Clamp(KeyboardForwardInput + GamepadForwardInput, -1.0f, 1.0f);
 
-	if (bDroneEntryAssistActive && IsDronePilotMode() && FMath::Abs(VerticalInput) > FMath::Max(0.0f, DroneEntryAssistReleaseThreshold))
+	if (bDroneEntryAssistActive
+		&& IsDronePilotMode()
+		&& !bFreeFlyPilotMode
+		&& FMath::Abs(VerticalInput) > FMath::Max(0.0f, DroneEntryAssistReleaseThreshold))
 	{
 		bDroneEntryAssistActive = false;
 		ApplyDroneAssistState();
@@ -478,6 +747,16 @@ bool AAgentCharacter::IsDroneInputModeActive() const
 	return IsDronePilotMode() || bMapModeActive;
 }
 
+bool AAgentCharacter::IsSimpleDronePilotMode() const
+{
+	return DronePilotControlMode == EAgentDronePilotControlMode::Simple;
+}
+
+bool AAgentCharacter::IsFreeFlyDronePilotMode() const
+{
+	return DronePilotControlMode == EAgentDronePilotControlMode::FreeFly;
+}
+
 void AAgentCharacter::ToggleDronePilotControlMode()
 {
 	CycleDronePilotControlMode(1);
@@ -489,6 +768,11 @@ void AAgentCharacter::SetDronePilotControlMode(EAgentDronePilotControlMode NewMo
 
 	switch (DronePilotControlMode)
 	{
+	case EAgentDronePilotControlMode::FreeFly:
+		bUseSimpleDronePilotControls = false;
+		bDroneStabilizerEnabled = false;
+		bDroneHoverModeEnabled = false;
+		break;
 	case EAgentDronePilotControlMode::Simple:
 		bUseSimpleDronePilotControls = true;
 		bDroneStabilizerEnabled = true;
@@ -515,13 +799,14 @@ void AAgentCharacter::SetDronePilotControlMode(EAgentDronePilotControlMode NewMo
 	if (DroneCompanion)
 	{
 		DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
+		DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
 		ApplyDroneAssistState();
 	}
 }
 
 void AAgentCharacter::CycleDronePilotControlMode(int32 Direction)
 {
-	constexpr int32 PilotModeCount = 4;
+	constexpr int32 PilotModeCount = 5;
 	const int32 CurrentIndex = static_cast<int32>(DronePilotControlMode);
 	const int32 WrappedIndex = (CurrentIndex + Direction + PilotModeCount) % PilotModeCount;
 	SetDronePilotControlMode(static_cast<EAgentDronePilotControlMode>(WrappedIndex));
@@ -529,24 +814,45 @@ void AAgentCharacter::CycleDronePilotControlMode(int32 Direction)
 	if (DroneCompanion && DroneCompanion->GetCompanionMode() == EDroneCompanionMode::MapMode)
 	{
 		DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
+		DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
 	}
 }
 
 void AAgentCharacter::ToggleMapMode()
 {
-	if (!DroneCompanion)
-	{
-		return;
-	}
-
 	APlayerController* PlayerController = Cast<APlayerController>(GetController());
 
 	if (!bMapModeActive)
 	{
+		if (!DroneCompanion)
+		{
+			FVector DroneSpawnLocation = FVector::ZeroVector;
+			FRotator DroneSpawnRotation = FRotator::ZeroRotator;
+			if (CurrentViewMode == EAgentViewMode::ThirdPerson
+				&& ThirdPersonTransitionCamera
+				&& ThirdPersonTransitionCamera->IsActive())
+			{
+				DroneSpawnLocation = ThirdPersonTransitionCamera->GetComponentLocation();
+				DroneSpawnRotation = ThirdPersonTransitionCamera->GetComponentRotation();
+			}
+			else
+			{
+				GetThirdPersonDroneTarget(DroneSpawnLocation, DroneSpawnRotation);
+			}
+			SpawnDroneCompanionAtTransform(DroneSpawnLocation, DroneSpawnRotation, EDroneCompanionMode::MapMode);
+		}
+
+		if (!DroneCompanion)
+		{
+			return;
+		}
+
+		SetThirdPersonProxyVisible(false);
 		bMapModeActive = true;
 		DroneCompanion->SetFollowTarget(this);
 		DroneCompanion->SetViewReferenceRotation(GetControlRotation());
 		DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
+		DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
 		ApplyDroneAssistState();
 		DroneCompanion->SetNextMapModeUsesEntryLift(CurrentViewMode != EAgentViewMode::DronePilot);
 		DroneCompanion->SetCompanionMode(EDroneCompanionMode::MapMode);
@@ -586,7 +892,9 @@ void AAgentCharacter::DoMove(float Right, float Forward)
 
 void AAgentCharacter::DoLook(float Yaw, float Pitch)
 {
-	if (IsDroneInputModeActive() && bLockCharacterMovementDuringDronePilot)
+	if (IsDroneInputModeActive()
+		&& bLockCharacterMovementDuringDronePilot
+		&& !(IsDronePilotMode() && IsFreeFlyDronePilotMode()))
 	{
 		return;
 	}

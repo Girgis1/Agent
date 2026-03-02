@@ -58,6 +58,9 @@ public:
 	void SetUseSimplePilotControls(bool bEnable);
 
 	UFUNCTION(BlueprintCallable, Category="Drone")
+	void SetUseFreeFlyPilotControls(bool bEnable);
+
+	UFUNCTION(BlueprintCallable, Category="Drone")
 	void SetPilotStabilizerEnabled(bool bEnable);
 
 	UFUNCTION(BlueprintCallable, Category="Drone")
@@ -70,7 +73,13 @@ public:
 	void SetNextMapModeUsesEntryLift(bool bEnable);
 
 	UFUNCTION(BlueprintCallable, Category="Drone")
+	void StartPilotCameraTransitionFromThirdPerson();
+
+	UFUNCTION(BlueprintCallable, Category="Drone")
 	void AdjustCameraTilt(float DeltaDegrees);
+
+	UFUNCTION(BlueprintCallable, Category="Drone")
+	bool GetDroneCameraTransform(FVector& OutLocation, FRotator& OutRotation) const;
 
 	UFUNCTION(BlueprintPure, Category="Drone")
 	float GetCameraTiltDegrees() const { return CameraTiltDegrees; }
@@ -85,7 +94,7 @@ public:
 	float DroneMassKg = 3.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Physics")
-	float DroneBodyVisualScale = 0.25f;
+	float DroneBodyVisualScale = 0.35f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Physics")
 	float DroneBodyLinearDamping = 0.9f;
@@ -142,37 +151,49 @@ public:
 	float SimpleMaxHorizontalSpeed = 1400.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
-	float SimpleMaxVerticalSpeed = 850.0f;
+	float SimpleMaxVerticalSpeed = 900.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
-	float SimpleVelocityResponse = 4.5f;
+	float SimpleVelocityResponse = 5.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
-	float SimpleRotationResponse = 6.0f;
+	float SimpleRotationResponse = 7.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
-	float SimpleYawFollowSpeed = 4.0f;
+	float SimpleYawFollowSpeed = 5.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
-	float SimpleInputExpo = 0.5f;
+	float SimpleInputExpo = 0.35f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
-	float SimpleMaxTiltDegrees = 18.0f;
+	float SimpleMaxTiltDegrees = 16.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
-	float SimpleBrakingResponse = 8.5f;
+	float SimpleBrakingResponse = 10.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
-	float SimpleAltitudeHoldGain = 6.0f;
+	float SimpleCollectiveRange = 1200.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
-	float SimpleAltitudeVelocityDamping = 4.5f;
+	float SimpleAttitudeHoldRate = 8.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
-	float SimpleMaxVerticalCorrection = 1700.0f;
+	float SimpleCameraTiltAxisSpeed = 55.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
 	float SimpleMaxDistanceFromTarget = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
+	float FreeFlyMaxSpeed = 3200.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
+	float FreeFlyAcceleration = 6.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
+	float FreeFlyDeceleration = 8.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
+	float FreeFlyRotationResponse = 8.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Autopilot")
 	FVector ThirdPersonOffset = FVector(-340.0f, 0.0f, 140.0f);
@@ -252,6 +273,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Camera")
 	float MapCameraPitchDegrees = -90.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Camera")
+	float PilotEntryCameraTransitionDuration = 0.35f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Map")
 	float MapEntryRiseHeight = 1200.0f;
 
@@ -323,6 +347,7 @@ protected:
 	void UpdateCrashRecovery(float DeltaSeconds);
 	void UpdateComplexFlight(float DeltaSeconds);
 	void UpdateSimpleFlight(float DeltaSeconds);
+	void UpdateFreeFlyFlight(float DeltaSeconds);
 	void UpdateMapFlight(float DeltaSeconds);
 	void UpdateAutonomousFlight(float DeltaSeconds);
 	void UpdateBuddyDrift(float DeltaSeconds);
@@ -334,7 +359,11 @@ protected:
 	void UpdateDebugOutput() const;
 	void ApplyRuntimePhysicalMaterial();
 	void UpdateCameraTransition(float DeltaSeconds);
-	void StartCameraTransition(const FRotator& TargetRotation, float TargetFieldOfView, bool bInstant);
+	void StartCameraTransition(
+		const FRotator& TargetRotation,
+		float TargetFieldOfView,
+		bool bInstant,
+		float TransitionDuration = -1.0f);
 	FRotator GetDesiredCameraMountRotationForMode(EDroneCompanionMode ForMode) const;
 	float GetDesiredCameraFieldOfViewForMode(EDroneCompanionMode ForMode) const;
 	void RefreshCameraMountRotation();
@@ -356,6 +385,9 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
 	bool bUseSimplePilotControls = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
+	bool bUseFreeFlyPilotControls = false;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
 	bool bPilotStabilizerEnabled = false;
@@ -405,14 +437,12 @@ protected:
 	float PilotYawInput = 0.0f;
 	float PilotRollInput = 0.0f;
 	float PilotPitchInput = 0.0f;
-	float SimpleTargetAltitude = 0.0f;
 	float CameraTransitionStartFieldOfView = 0.0f;
 	float CameraTransitionTargetFieldOfView = 0.0f;
 	float CurrentHoverBaseAcceleration = 0.0f;
 	float CurrentHoverCommandInput = 0.0f;
 	float CurrentHoverVerticalAcceleration = 0.0f;
 	float CurrentHoverLiftDot = 1.0f;
-	bool bSimpleAltitudeTargetInitialized = false;
 	FRotator CameraTransitionStartRotation = FRotator::ZeroRotator;
 	FRotator CameraTransitionTargetRotation = FRotator::ZeroRotator;
 };

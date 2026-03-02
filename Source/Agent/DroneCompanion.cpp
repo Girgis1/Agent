@@ -89,7 +89,11 @@ void ADroneCompanion::Tick(float DeltaSeconds)
 	{
 		if (CompanionMode == EDroneCompanionMode::PilotControlled)
 		{
-			if (bUseSimplePilotControls)
+			if (bUseFreeFlyPilotControls)
+			{
+				UpdateFreeFlyFlight(DeltaSeconds);
+			}
+			else if (bUseSimplePilotControls)
 			{
 				UpdateSimpleFlight(DeltaSeconds);
 			}
@@ -131,7 +135,6 @@ void ADroneCompanion::SetCompanionMode(EDroneCompanionMode NewMode)
 	if (CompanionMode != EDroneCompanionMode::PilotControlled)
 	{
 		ResetPilotInputs();
-		bSimpleAltitudeTargetInitialized = false;
 	}
 
 	if (CompanionMode == EDroneCompanionMode::MapMode && PreviousMode != EDroneCompanionMode::MapMode)
@@ -225,12 +228,22 @@ void ADroneCompanion::ResetPilotInputs()
 
 void ADroneCompanion::SetUseSimplePilotControls(bool bEnable)
 {
-	if (bUseSimplePilotControls != bEnable)
-	{
-		bSimpleAltitudeTargetInitialized = false;
-	}
-
 	bUseSimplePilotControls = bEnable;
+	if (bEnable)
+	{
+		bUseFreeFlyPilotControls = false;
+	}
+	RefreshCameraMountRotation();
+}
+
+void ADroneCompanion::SetUseFreeFlyPilotControls(bool bEnable)
+{
+	bUseFreeFlyPilotControls = bEnable;
+	if (bEnable)
+	{
+		bUseSimplePilotControls = false;
+	}
+	RefreshCameraMountRotation();
 }
 
 void ADroneCompanion::SetPilotStabilizerEnabled(bool bEnable)
@@ -275,10 +288,48 @@ void ADroneCompanion::SetNextMapModeUsesEntryLift(bool bEnable)
 	bNextMapModeUsesEntryLift = bEnable;
 }
 
+void ADroneCompanion::StartPilotCameraTransitionFromThirdPerson()
+{
+	if (!CameraMount || !DroneCamera)
+	{
+		return;
+	}
+
+	CameraMount->SetRelativeRotation(FRotator::ZeroRotator);
+	DroneCamera->SetFieldOfView(ThirdPersonCameraFieldOfView);
+
+	StartCameraTransition(
+		GetDesiredCameraMountRotationForMode(EDroneCompanionMode::PilotControlled),
+		GetDesiredCameraFieldOfViewForMode(EDroneCompanionMode::PilotControlled),
+		false,
+		PilotEntryCameraTransitionDuration);
+}
+
 void ADroneCompanion::AdjustCameraTilt(float DeltaDegrees)
 {
 	CameraTiltDegrees = FMath::Clamp(CameraTiltDegrees + DeltaDegrees, DroneMinCameraTilt, DroneMaxCameraTilt);
 	RefreshCameraMountRotation();
+}
+
+bool ADroneCompanion::GetDroneCameraTransform(FVector& OutLocation, FRotator& OutRotation) const
+{
+	if (DroneCamera)
+	{
+		OutLocation = DroneCamera->GetComponentLocation();
+		OutRotation = DroneCamera->GetComponentRotation();
+		return true;
+	}
+
+	if (DroneBody)
+	{
+		OutLocation = DroneBody->GetComponentLocation();
+		OutRotation = DroneBody->GetComponentRotation();
+		return true;
+	}
+
+	OutLocation = GetActorLocation();
+	OutRotation = GetActorRotation();
+	return true;
 }
 
 void ADroneCompanion::OnDroneBodyHit(
@@ -437,25 +488,65 @@ void ADroneCompanion::UpdateSimpleFlight(float DeltaSeconds)
 	const float ShapedYawInput = ApplyExpo(PilotYawInput);
 	const float ShapedRollInput = ApplyExpo(PilotRollInput);
 	const float ShapedPitchInput = ApplyExpo(PilotPitchInput);
-
-	CurrentHoverCommandInput = ShapedThrottleInput;
-	CurrentHoverLiftDot = 1.0f;
-
-	const FRotator ReferenceYawRotation(0.0f, ViewReferenceRotation.Yaw, 0.0f);
-	const FVector ForwardDirection = FRotationMatrix(ReferenceYawRotation).GetUnitAxis(EAxis::X);
-	const FVector RightDirection = FRotationMatrix(ReferenceYawRotation).GetUnitAxis(EAxis::Y);
-	const FVector DesiredPlanarVelocity = (
-		(ForwardDirection * ShapedPitchInput) +
-		(RightDirection * ShapedRollInput)).GetClampedToMaxSize(1.0f) * SimpleMaxHorizontalSpeed;
+	AppliedThrottleInput = FMath::FInterpTo(
+		AppliedThrottleInput,
+		ShapedThrottleInput,
+		DeltaSeconds,
+		PilotThrottleResponse);
 
 	const FVector CurrentVelocity = DroneBody->GetPhysicsLinearVelocity();
-	const FVector CurrentPlanarVelocity(CurrentVelocity.X, CurrentVelocity.Y, 0.0f);
-	const bool bHasPlanarInput = !DesiredPlanarVelocity.IsNearlyZero();
-	const float HorizontalResponse = bHasPlanarInput
-		? SimpleVelocityResponse
-		: FMath::Max(SimpleVelocityResponse, SimpleBrakingResponse);
-	FVector PlanarAcceleration = (DesiredPlanarVelocity - CurrentPlanarVelocity) * HorizontalResponse;
-	PlanarAcceleration.Z = 0.0f;
+	const FVector CurrentUpVector = DroneBody->GetUpVector().GetSafeNormal();
+	const float GravityAcceleration = GetWorld() ? FMath::Abs(GetWorld()->GetGravityZ()) : 980.0f;
+	const float LiftDot = FVector::DotProduct(CurrentUpVector, FVector::UpVector);
+	const float EffectiveLiftDot = LiftDot > 0.0f
+		? FMath::Max(LiftDot, FMath::Max(KINDA_SMALL_NUMBER, PilotHoverMinUpDot))
+		: FMath::Max(KINDA_SMALL_NUMBER, PilotHoverMinUpDot);
+	const float BaseAcceleration = GravityAcceleration / EffectiveLiftDot;
+	const float CommandAcceleration = AppliedThrottleInput * SimpleCollectiveRange;
+	const float TotalAcceleration = FMath::Max(0.0f, BaseAcceleration + CommandAcceleration);
+
+	CurrentHoverBaseAcceleration = BaseAcceleration;
+	CurrentHoverCommandInput = AppliedThrottleInput;
+	CurrentHoverVerticalAcceleration = TotalAcceleration;
+	CurrentHoverLiftDot = LiftDot;
+
+	DroneBody->AddForce(
+		CurrentUpVector * TotalAcceleration,
+		NAME_None,
+		true);
+
+	FVector HorizontalVelocity = CurrentVelocity;
+	HorizontalVelocity.Z = 0.0f;
+
+	float HorizontalBrakeStrength = SimpleVelocityResponse;
+	if (FMath::IsNearlyZero(ShapedPitchInput, 0.025f) && FMath::IsNearlyZero(ShapedRollInput, 0.025f))
+	{
+		HorizontalBrakeStrength = FMath::Max(SimpleVelocityResponse, SimpleBrakingResponse);
+	}
+
+	DroneBody->AddForce(
+		-HorizontalVelocity * HorizontalBrakeStrength,
+		NAME_None,
+		true);
+
+	const float HorizontalSpeed = HorizontalVelocity.Size();
+	if (HorizontalSpeed > SimpleMaxHorizontalSpeed)
+	{
+		const float Overspeed = HorizontalSpeed - SimpleMaxHorizontalSpeed;
+		DroneBody->AddForce(
+			-HorizontalVelocity.GetSafeNormal() * (Overspeed * FMath::Max(SimpleBrakingResponse, 1.0f)),
+			NAME_None,
+			true);
+	}
+
+	if (FMath::Abs(CurrentVelocity.Z) > SimpleMaxVerticalSpeed)
+	{
+		const float VerticalOverspeed = FMath::Abs(CurrentVelocity.Z) - SimpleMaxVerticalSpeed;
+		DroneBody->AddForce(
+			FVector(0.0f, 0.0f, -FMath::Sign(CurrentVelocity.Z) * VerticalOverspeed * FMath::Max(SimpleBrakingResponse, 1.0f)),
+			NAME_None,
+			true);
+	}
 
 	if (SimpleMaxDistanceFromTarget > KINDA_SMALL_NUMBER && FollowTarget)
 	{
@@ -464,63 +555,70 @@ void ADroneCompanion::UpdateSimpleFlight(float DeltaSeconds)
 		const float MaxDistanceSquared = FMath::Square(SimpleMaxDistanceFromTarget);
 		if (HorizontalOffset.SizeSquared() >= MaxDistanceSquared)
 		{
-			const FVector OutwardDirection = HorizontalOffset.GetSafeNormal();
-			const float OutwardAcceleration = FVector::DotProduct(PlanarAcceleration, OutwardDirection);
-			if (OutwardAcceleration > 0.0f)
-			{
-				PlanarAcceleration -= OutwardDirection * OutwardAcceleration;
-			}
+			const FVector ReturnDirection = -HorizontalOffset.GetSafeNormal();
+			DroneBody->AddForce(
+				ReturnDirection * (HorizontalOffset.Size() - SimpleMaxDistanceFromTarget) * SimpleVelocityResponse,
+				NAME_None,
+				true);
 		}
 	}
 
-	if (!bSimpleAltitudeTargetInitialized)
-	{
-		SimpleTargetAltitude = DroneBody->GetComponentLocation().Z;
-		bSimpleAltitudeTargetInitialized = true;
-	}
-
-	SimpleTargetAltitude += ShapedThrottleInput * (SimpleMaxVerticalSpeed * DeltaSeconds);
-
-	const float CurrentAltitude = DroneBody->GetComponentLocation().Z;
-	const float AltitudeError = SimpleTargetAltitude - CurrentAltitude;
-	float VerticalCorrection = (AltitudeError * SimpleAltitudeHoldGain) -
-		(CurrentVelocity.Z * SimpleAltitudeVelocityDamping);
-	VerticalCorrection = FMath::Clamp(
-		VerticalCorrection,
-		-SimpleMaxVerticalCorrection,
-		SimpleMaxVerticalCorrection);
-	FVector TotalAcceleration = PlanarAcceleration;
-	float GravityCompensation = 980.0f;
-	if (UWorld* World = GetWorld())
-	{
-		GravityCompensation = FMath::Abs(World->GetGravityZ());
-	}
-	CurrentHoverBaseAcceleration = GravityCompensation;
-	TotalAcceleration.Z = VerticalCorrection + GravityCompensation;
-	CurrentHoverVerticalAcceleration = TotalAcceleration.Z;
-
-	DroneBody->AddForce(TotalAcceleration, NAME_None, true);
-
-	float DesiredYaw = ViewReferenceRotation.Yaw;
-	if (!DesiredPlanarVelocity.IsNearlyZero())
-	{
-		DesiredYaw = DesiredPlanarVelocity.Rotation().Yaw;
-	}
-
-	const FRotator DesiredRotation(
-		-ShapedPitchInput * SimpleMaxTiltDegrees,
-		DesiredYaw,
-		-ShapedRollInput * SimpleMaxTiltDegrees);
-	const FRotator DeltaRotation = (DesiredRotation - DroneBody->GetComponentRotation()).GetNormalized();
+	const FRotator CurrentRotation = DroneBody->GetComponentRotation();
+	const float DesiredPitchDegrees = -ShapedPitchInput * SimpleMaxTiltDegrees;
+	const float DesiredRollDegrees = -ShapedRollInput * SimpleMaxTiltDegrees;
+	const float PitchError = FMath::FindDeltaAngleDegrees(CurrentRotation.Pitch, DesiredPitchDegrees);
+	const float RollError = FMath::FindDeltaAngleDegrees(CurrentRotation.Roll, DesiredRollDegrees);
 	const FVector DesiredLocalAngularVelocity(
-		-DeltaRotation.Roll * SimpleRotationResponse,
-		-DeltaRotation.Pitch * SimpleRotationResponse,
-		(DeltaRotation.Yaw * SimpleYawFollowSpeed) + (ShapedYawInput * (PilotYawRate * 0.35f)));
+		-RollError * SimpleAttitudeHoldRate,
+		-PitchError * SimpleAttitudeHoldRate,
+		ShapedYawInput * PilotYawRate);
 
 	ApplyDesiredAngularVelocity(
 		DesiredLocalAngularVelocity,
 		DeltaSeconds,
-		FMath::Max(SimpleRotationResponse, FMath::Max(SimpleYawFollowSpeed, SimpleBrakingResponse)));
+		FMath::Max(SimpleRotationResponse, FMath::Max(SimpleYawFollowSpeed, SimpleAttitudeHoldRate)));
+}
+
+void ADroneCompanion::UpdateFreeFlyFlight(float DeltaSeconds)
+{
+	if (!DroneBody)
+	{
+		return;
+	}
+
+	const FVector ForwardDirection = ViewReferenceRotation.Vector();
+	const FVector RightDirection = FRotationMatrix(ViewReferenceRotation).GetUnitAxis(EAxis::Y);
+	const FVector UpDirection = FVector::UpVector;
+	const FVector DesiredVelocity = (
+		(ForwardDirection * PilotPitchInput) +
+		(RightDirection * PilotRollInput) +
+		(UpDirection * PilotThrottleInput)).GetClampedToMaxSize(1.0f) * FreeFlyMaxSpeed;
+
+	const FVector CurrentVelocity = DroneBody->GetPhysicsLinearVelocity();
+	const bool bHasInput = !DesiredVelocity.IsNearlyZero();
+	const float Response = bHasInput ? FreeFlyAcceleration : FMath::Max(FreeFlyAcceleration, FreeFlyDeceleration);
+	FVector VelocityCorrection = (DesiredVelocity - CurrentVelocity) * Response;
+	const float GravityCompensation = GetWorld() ? FMath::Abs(GetWorld()->GetGravityZ()) : 980.0f;
+	VelocityCorrection.Z += GravityCompensation;
+
+	CurrentHoverBaseAcceleration = GravityCompensation;
+	CurrentHoverCommandInput = PilotThrottleInput;
+	CurrentHoverVerticalAcceleration = VelocityCorrection.Z;
+	CurrentHoverLiftDot = 1.0f;
+
+	DroneBody->AddForce(VelocityCorrection, NAME_None, true);
+
+	const FRotator DesiredRotation(ViewReferenceRotation.Pitch, ViewReferenceRotation.Yaw, 0.0f);
+	const FRotator DeltaRotation = (DesiredRotation - DroneBody->GetComponentRotation()).GetNormalized();
+	const FVector DesiredLocalAngularVelocity(
+		-DeltaRotation.Roll * FreeFlyRotationResponse,
+		-DeltaRotation.Pitch * FreeFlyRotationResponse,
+		DeltaRotation.Yaw * FreeFlyRotationResponse);
+
+	ApplyDesiredAngularVelocity(
+		DesiredLocalAngularVelocity,
+		DeltaSeconds,
+		FreeFlyRotationResponse);
 }
 
 void ADroneCompanion::UpdateMapFlight(float DeltaSeconds)
@@ -785,7 +883,11 @@ void ADroneCompanion::UpdateDebugOutput() const
 	const TCHAR* ModeLabel = TEXT("ThirdPerson");
 	if (CompanionMode == EDroneCompanionMode::PilotControlled)
 	{
-		if (bUseSimplePilotControls)
+		if (bUseFreeFlyPilotControls)
+		{
+			ModeLabel = TEXT("PilotFreeFly");
+		}
+		else if (bUseSimplePilotControls)
 		{
 			ModeLabel = TEXT("PilotSimple");
 		}
@@ -818,7 +920,11 @@ void ADroneCompanion::UpdateDebugOutput() const
 	const FVector Velocity = DroneBody->GetPhysicsLinearVelocity();
 	const FVector AngularVelocity = DroneBody->GetPhysicsAngularVelocityInDegrees();
 	const TCHAR* AssistLabel = TEXT("ACRO / RATE");
-	if (bUseSimplePilotControls)
+	if (bUseFreeFlyPilotControls)
+	{
+		AssistLabel = TEXT("FREE FLY");
+	}
+	else if (bUseSimplePilotControls)
 	{
 		AssistLabel = TEXT("SIMPLE");
 	}
@@ -829,7 +935,9 @@ void ADroneCompanion::UpdateDebugOutput() const
 	const FString AssistDebugText = FString::Printf(
 		TEXT("Flight Assist: %s"),
 		AssistLabel);
-	const FColor AssistDebugColor = (bPilotStabilizerEnabled || bUseSimplePilotControls) ? FColor::Green : FColor::Red;
+	const FColor AssistDebugColor = (bPilotStabilizerEnabled || bUseSimplePilotControls || bUseFreeFlyPilotControls)
+		? FColor::Green
+		: FColor::Red;
 	const FString HoverDebugText = FString::Printf(
 		TEXT("Hover Assist: %s"),
 		bPilotHoverModeEnabled ? TEXT("ON") : TEXT("OFF"));
@@ -926,7 +1034,11 @@ void ADroneCompanion::UpdateCameraTransition(float DeltaSeconds)
 	}
 }
 
-void ADroneCompanion::StartCameraTransition(const FRotator& TargetRotation, float TargetFieldOfView, bool bInstant)
+void ADroneCompanion::StartCameraTransition(
+	const FRotator& TargetRotation,
+	float TargetFieldOfView,
+	bool bInstant,
+	float TransitionDuration)
 {
 	if (!CameraMount || !DroneCamera)
 	{
@@ -938,7 +1050,8 @@ void ADroneCompanion::StartCameraTransition(const FRotator& TargetRotation, floa
 	CameraTransitionStartFieldOfView = DroneCamera->FieldOfView;
 	CameraTransitionTargetFieldOfView = TargetFieldOfView;
 	CameraTransitionElapsed = 0.0f;
-	CameraTransitionTotalDuration = FMath::Max(0.0f, MapCameraTransitionDuration);
+	const float RequestedDuration = TransitionDuration >= 0.0f ? TransitionDuration : MapCameraTransitionDuration;
+	CameraTransitionTotalDuration = FMath::Max(0.0f, RequestedDuration);
 
 	if (bInstant || CameraTransitionTotalDuration <= KINDA_SMALL_NUMBER)
 	{
@@ -961,6 +1074,11 @@ FRotator ADroneCompanion::GetDesiredCameraMountRotationForMode(EDroneCompanionMo
 	if (ForMode == EDroneCompanionMode::MapMode)
 	{
 		return FRotator(MapCameraPitchDegrees, 0.0f, 0.0f);
+	}
+
+	if (ForMode == EDroneCompanionMode::PilotControlled && bUseFreeFlyPilotControls)
+	{
+		return FRotator::ZeroRotator;
 	}
 
 	return FRotator(CameraTiltDegrees, 0.0f, 0.0f);
