@@ -106,6 +106,10 @@ void ADroneCompanion::Tick(float DeltaSeconds)
 		{
 			UpdateMapFlight(DeltaSeconds);
 		}
+		else if (CompanionMode == EDroneCompanionMode::MiniMapFollow)
+		{
+			UpdateMiniMapFlight(DeltaSeconds);
+		}
 		else
 		{
 			UpdateAutonomousFlight(DeltaSeconds);
@@ -137,12 +141,23 @@ void ADroneCompanion::SetCompanionMode(EDroneCompanionMode NewMode)
 		ResetPilotInputs();
 	}
 
-	if (CompanionMode == EDroneCompanionMode::MapMode && PreviousMode != EDroneCompanionMode::MapMode)
+	const bool bEnteringTopDownMode =
+		(CompanionMode == EDroneCompanionMode::MapMode || CompanionMode == EDroneCompanionMode::MiniMapFollow)
+		&& (PreviousMode != EDroneCompanionMode::MapMode && PreviousMode != EDroneCompanionMode::MiniMapFollow);
+	if (bEnteringTopDownMode)
 	{
 		MapTargetLocation = DroneBody ? DroneBody->GetComponentLocation() : GetActorLocation();
 		bMapModeUsesHeightLimits = bNextMapModeUsesEntryLift;
 
-		if (bNextMapModeUsesEntryLift)
+		if (CompanionMode == EDroneCompanionMode::MiniMapFollow)
+		{
+			if (FollowTarget)
+			{
+				MapTargetLocation = FollowTarget->GetActorLocation();
+			}
+			MapTargetLocation.Z += MiniMapHeightAboveTarget;
+		}
+		else if (bNextMapModeUsesEntryLift)
 		{
 			if (FollowTarget)
 			{
@@ -159,9 +174,9 @@ void ADroneCompanion::SetCompanionMode(EDroneCompanionMode NewMode)
 		}
 	}
 
-	const bool bTransitioningIntoMap = CompanionMode == EDroneCompanionMode::MapMode && PreviousMode != EDroneCompanionMode::MapMode;
-	const bool bTransitioningOutOfMap = CompanionMode != EDroneCompanionMode::MapMode && PreviousMode == EDroneCompanionMode::MapMode;
-	if (bTransitioningIntoMap || bTransitioningOutOfMap)
+	const bool bWasTopDownMode = PreviousMode == EDroneCompanionMode::MapMode || PreviousMode == EDroneCompanionMode::MiniMapFollow;
+	const bool bIsTopDownMode = CompanionMode == EDroneCompanionMode::MapMode || CompanionMode == EDroneCompanionMode::MiniMapFollow;
+	if (bWasTopDownMode != bIsTopDownMode)
 	{
 		StartCameraTransition(
 			GetDesiredCameraMountRotationForMode(CompanionMode),
@@ -728,6 +743,48 @@ void ADroneCompanion::UpdateMapFlight(float DeltaSeconds)
 		FMath::Max(SimpleRotationResponse, SimpleYawFollowSpeed));
 }
 
+void ADroneCompanion::UpdateMiniMapFlight(float DeltaSeconds)
+{
+	if (!DroneBody)
+	{
+		return;
+	}
+
+	CurrentHoverCommandInput = 0.0f;
+	CurrentHoverVerticalAcceleration = 0.0f;
+	CurrentHoverBaseAcceleration = 0.0f;
+	CurrentHoverLiftDot = 1.0f;
+
+	FVector DesiredLocation = DroneBody->GetComponentLocation();
+	if (FollowTarget)
+	{
+		DesiredLocation = FollowTarget->GetActorLocation() + FVector(0.0f, 0.0f, MiniMapHeightAboveTarget);
+	}
+
+	const FVector CurrentVelocity = DroneBody->GetPhysicsLinearVelocity();
+	FVector PositionCorrection = ((DesiredLocation - DroneBody->GetComponentLocation()) * MiniMapPositionGain) -
+		(CurrentVelocity * MiniMapVelocityDamping);
+
+	if (UWorld* World = GetWorld())
+	{
+		PositionCorrection.Z += FMath::Abs(World->GetGravityZ());
+	}
+
+	DroneBody->AddForce(PositionCorrection, NAME_None, true);
+
+	const FRotator DesiredRotation(0.0f, ViewReferenceRotation.Yaw, 0.0f);
+	const FRotator DeltaRotation = (DesiredRotation - DroneBody->GetComponentRotation()).GetNormalized();
+	const FVector DesiredLocalAngularVelocity(
+		-DeltaRotation.Roll * SimpleRotationResponse,
+		-DeltaRotation.Pitch * SimpleRotationResponse,
+		DeltaRotation.Yaw * SimpleYawFollowSpeed);
+
+	ApplyDesiredAngularVelocity(
+		DesiredLocalAngularVelocity,
+		DeltaSeconds,
+		FMath::Max(SimpleRotationResponse, SimpleYawFollowSpeed));
+}
+
 void ADroneCompanion::UpdateAutonomousFlight(float DeltaSeconds)
 {
 	if (!DroneBody)
@@ -974,6 +1031,10 @@ void ADroneCompanion::UpdateDebugOutput() const
 	{
 		ModeLabel = TEXT("Map");
 	}
+	else if (CompanionMode == EDroneCompanionMode::MiniMapFollow)
+	{
+		ModeLabel = TEXT("MiniMap");
+	}
 
 	const FVector Velocity = DroneBody->GetPhysicsLinearVelocity();
 	const FVector AngularVelocity = DroneBody->GetPhysicsAngularVelocityInDegrees();
@@ -1133,7 +1194,7 @@ FRotator ADroneCompanion::GetDesiredCameraMountRotationForMode(EDroneCompanionMo
 		return FRotator::ZeroRotator;
 	}
 
-	if (ForMode == EDroneCompanionMode::MapMode)
+	if (ForMode == EDroneCompanionMode::MapMode || ForMode == EDroneCompanionMode::MiniMapFollow)
 	{
 		return FRotator(MapCameraPitchDegrees, 0.0f, 0.0f);
 	}
@@ -1153,7 +1214,7 @@ float ADroneCompanion::GetDesiredCameraFieldOfViewForMode(EDroneCompanionMode Fo
 		return ThirdPersonCameraFieldOfView;
 	}
 
-	if (ForMode == EDroneCompanionMode::MapMode)
+	if (ForMode == EDroneCompanionMode::MapMode || ForMode == EDroneCompanionMode::MiniMapFollow)
 	{
 		return MapCameraFieldOfView;
 	}

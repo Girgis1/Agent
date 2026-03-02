@@ -20,7 +20,8 @@ enum class EDroneCompanionMode : uint8
 	PilotControlled,
 	HoldPosition,
 	BuddyFollow,
-	MapMode
+	MapMode,
+	MiniMapFollow
 };
 
 UCLASS()
@@ -318,6 +319,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Map")
 	float MapMaxHeightAboveTarget = 5000.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Map")
+	float MiniMapHeightAboveTarget = 2600.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Map")
+	float MiniMapPositionGain = 5.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Map")
+	float MiniMapVelocityDamping = 3.5f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Crash")
 	float DroneCrashSpeed = 600.0f;
 
@@ -367,6 +377,7 @@ protected:
 	void UpdateSimpleFlight(float DeltaSeconds);
 	void UpdateFreeFlyFlight(float DeltaSeconds);
 	void UpdateMapFlight(float DeltaSeconds);
+	void UpdateMiniMapFlight(float DeltaSeconds);
 	void UpdateAutonomousFlight(float DeltaSeconds);
 	void UpdateBuddyDrift(float DeltaSeconds);
 	void ClampVelocity() const;

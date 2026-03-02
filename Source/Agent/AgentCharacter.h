@@ -108,6 +108,9 @@ protected:
 	void CycleDronePilotControlMode(int32 Direction);
 	void ToggleDronePilotControlMode();
 	void ToggleMapMode();
+	void EnterMiniMapMode();
+	void ExitMiniMapMode();
+	void UpdateControllerMapButtonHold(float DeltaSeconds);
 	void SetThirdPersonProxyVisible(bool bVisible);
 	void AttachThirdPersonProxyToComponent(USceneComponent* AttachmentParent);
 
@@ -140,6 +143,8 @@ protected:
 	void OnDroneHoverModePressed();
 	void OnDroneStabilizerTogglePressed();
 	void OnMapModePressed();
+	void OnControllerMapButtonPressed();
+	void OnControllerMapButtonReleased();
 
 public:
 	UFUNCTION(BlueprintCallable, Category="Input")
@@ -196,6 +201,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera")
 	float ThirdPersonDroneProxyScale = 0.5f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Map")
+	float ControllerMapButtonHoldTime = 0.35f;
+
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<ADroneCompanion> DroneCompanion = nullptr;
@@ -208,6 +216,9 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
 	bool bMapModeActive = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
+	bool bMiniMapModeActive = false;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
 	EAgentDronePilotControlMode DronePilotControlMode = EAgentDronePilotControlMode::Complex;
@@ -225,8 +236,11 @@ protected:
 	bool bDefaultUseControllerRotationYaw = false;
 	bool bDefaultOrientRotationToMovement = true;
 	bool bThirdPersonTransitionActive = false;
+	bool bControllerMapButtonHeld = false;
+	bool bControllerMapButtonTriggeredMiniMap = false;
 
 	float ThirdPersonTransitionElapsed = 0.0f;
+	float ControllerMapButtonHeldDuration = 0.0f;
 	FVector ThirdPersonTransitionStartLocation = FVector::ZeroVector;
 	FRotator ThirdPersonTransitionStartRotation = FRotator::ZeroRotator;
 

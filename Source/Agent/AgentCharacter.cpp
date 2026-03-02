@@ -104,11 +104,6 @@ void AAgentCharacter::BeginPlay()
 	SetDronePilotControlMode(DronePilotControlMode);
 	CurrentViewMode = bStartInThirdPersonDroneView ? EAgentViewMode::ThirdPerson : EAgentViewMode::FirstPerson;
 
-	if (FirstPersonCamera)
-	{
-		FirstPersonCamera->SetRelativeLocation(FirstPersonCameraOffset);
-	}
-
 	if (CurrentViewMode != EAgentViewMode::ThirdPerson)
 	{
 		SpawnDroneCompanion();
@@ -138,6 +133,8 @@ void AAgentCharacter::BeginPlay()
 void AAgentCharacter::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+
+	UpdateControllerMapButtonHold(DeltaSeconds);
 
 	if (DroneCompanion)
 	{
@@ -192,6 +189,7 @@ void AAgentCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	}
 
 	PlayerInputComponent->BindKey(EKeys::V, IE_Pressed, this, &AAgentCharacter::CycleViewMode);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Top, IE_Pressed, this, &AAgentCharacter::CycleViewMode);
 	PlayerInputComponent->BindKey(EKeys::B, IE_Pressed, this, &AAgentCharacter::OnDroneControlModeTogglePressed);
 	PlayerInputComponent->BindKey(EKeys::M, IE_Pressed, this, &AAgentCharacter::OnMapModePressed);
 	PlayerInputComponent->BindKey(EKeys::W, IE_Pressed, this, &AAgentCharacter::OnDronePitchForwardPressed);
@@ -220,7 +218,8 @@ void AAgentCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	PlayerInputComponent->BindKey(EKeys::Gamepad_DPad_Left, IE_Pressed, this, &AAgentCharacter::OnDroneControlModeTogglePressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_LeftShoulder, IE_Pressed, this, &AAgentCharacter::OnDroneHoverModePressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_RightShoulder, IE_Pressed, this, &AAgentCharacter::OnDroneStabilizerTogglePressed);
-	PlayerInputComponent->BindKey(EKeys::Gamepad_Special_Left, IE_Pressed, this, &AAgentCharacter::OnMapModePressed);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_Special_Left, IE_Pressed, this, &AAgentCharacter::OnControllerMapButtonPressed);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_Special_Left, IE_Released, this, &AAgentCharacter::OnControllerMapButtonReleased);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_DPad_Up, IE_Pressed, this, &AAgentCharacter::OnDroneCameraTiltUpPressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_DPad_Down, IE_Pressed, this, &AAgentCharacter::OnDroneCameraTiltDownPressed);
 }
@@ -244,6 +243,12 @@ void AAgentCharacter::Look(const FInputActionValue& Value)
 
 void AAgentCharacter::CycleViewMode()
 {
+	if (bMiniMapModeActive)
+	{
+		ExitMiniMapMode();
+		return;
+	}
+
 	if (bMapModeActive)
 	{
 		ToggleMapMode();
@@ -829,6 +834,12 @@ void AAgentCharacter::ToggleMapMode()
 {
 	APlayerController* PlayerController = Cast<APlayerController>(GetController());
 
+	if (bMiniMapModeActive)
+	{
+		ExitMiniMapMode();
+		return;
+	}
+
 	if (!bMapModeActive)
 	{
 		if (!DroneCompanion)
@@ -874,6 +885,80 @@ void AAgentCharacter::ToggleMapMode()
 
 	bMapModeActive = false;
 	ApplyViewMode(CurrentViewMode, true);
+}
+
+void AAgentCharacter::EnterMiniMapMode()
+{
+	if (bMiniMapModeActive || bMapModeActive)
+	{
+		return;
+	}
+
+	APlayerController* PlayerController = Cast<APlayerController>(GetController());
+	if (!DroneCompanion)
+	{
+		FVector DroneSpawnLocation = FVector::ZeroVector;
+		FRotator DroneSpawnRotation = FRotator::ZeroRotator;
+		if (CurrentViewMode == EAgentViewMode::ThirdPerson
+			&& ThirdPersonTransitionCamera
+			&& ThirdPersonTransitionCamera->IsActive())
+		{
+			DroneSpawnLocation = ThirdPersonTransitionCamera->GetComponentLocation();
+			DroneSpawnRotation = ThirdPersonTransitionCamera->GetComponentRotation();
+		}
+		else
+		{
+			GetThirdPersonDroneTarget(DroneSpawnLocation, DroneSpawnRotation);
+		}
+		SpawnDroneCompanionAtTransform(DroneSpawnLocation, DroneSpawnRotation, EDroneCompanionMode::MiniMapFollow);
+	}
+
+	if (!DroneCompanion)
+	{
+		return;
+	}
+
+	bMiniMapModeActive = true;
+	SetThirdPersonProxyVisible(false);
+	DroneCompanion->SetFollowTarget(this);
+	DroneCompanion->SetViewReferenceRotation(GetControlRotation());
+	DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
+	DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
+	ApplyDroneAssistState();
+	DroneCompanion->SetCompanionMode(EDroneCompanionMode::MiniMapFollow);
+
+	if (PlayerController)
+	{
+		PlayerController->SetViewTargetWithBlend(DroneCompanion.Get(), ViewBlendTime);
+	}
+}
+
+void AAgentCharacter::ExitMiniMapMode()
+{
+	if (!bMiniMapModeActive)
+	{
+		return;
+	}
+
+	bMiniMapModeActive = false;
+	ApplyViewMode(CurrentViewMode, true);
+}
+
+void AAgentCharacter::UpdateControllerMapButtonHold(float DeltaSeconds)
+{
+	if (!bControllerMapButtonHeld || bControllerMapButtonTriggeredMiniMap)
+	{
+		return;
+	}
+
+	ControllerMapButtonHeldDuration += FMath::Max(0.0f, DeltaSeconds);
+	if (!bMapModeActive
+		&& !bMiniMapModeActive
+		&& ControllerMapButtonHeldDuration >= FMath::Max(0.0f, ControllerMapButtonHoldTime))
+	{
+		bControllerMapButtonTriggeredMiniMap = true;
+		EnterMiniMapMode();
+	}
 }
 
 void AAgentCharacter::DoMove(float Right, float Forward)
@@ -1079,4 +1164,28 @@ void AAgentCharacter::OnDroneStabilizerTogglePressed()
 void AAgentCharacter::OnMapModePressed()
 {
 	ToggleMapMode();
+}
+
+void AAgentCharacter::OnControllerMapButtonPressed()
+{
+	bControllerMapButtonHeld = true;
+	bControllerMapButtonTriggeredMiniMap = false;
+	ControllerMapButtonHeldDuration = 0.0f;
+}
+
+void AAgentCharacter::OnControllerMapButtonReleased()
+{
+	const bool bWasMiniMapHold = bControllerMapButtonTriggeredMiniMap;
+	bControllerMapButtonHeld = false;
+	bControllerMapButtonTriggeredMiniMap = false;
+	ControllerMapButtonHeldDuration = 0.0f;
+
+	if (bWasMiniMapHold)
+	{
+		ExitMiniMapMode();
+	}
+	else
+	{
+		ToggleMapMode();
+	}
 }
