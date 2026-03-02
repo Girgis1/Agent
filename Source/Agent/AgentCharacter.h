@@ -1,0 +1,205 @@
+// Copyright Epic Games, Inc. All Rights Reserved.
+
+#pragma once
+
+#include "CoreMinimal.h"
+#include "GameFramework/Character.h"
+#include "Logging/LogMacros.h"
+#include "AgentCharacter.generated.h"
+
+class ADroneCompanion;
+class UCameraComponent;
+class UInputAction;
+class USpringArmComponent;
+struct FInputActionValue;
+
+DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
+
+UENUM(BlueprintType)
+enum class EAgentViewMode : uint8
+{
+	ThirdPerson,
+	DronePilot,
+	FirstPerson
+};
+
+/**
+ *  Player character that coordinates character movement and the persistent companion drone.
+ */
+UCLASS(abstract)
+class AAgentCharacter : public ACharacter
+{
+	GENERATED_BODY()
+
+	/** Camera boom retained for compatibility with the template and as a fallback camera mount */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	USpringArmComponent* CameraBoom;
+
+	/** Third-person fallback camera on the character */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	UCameraComponent* FollowCamera;
+
+	/** First-person camera on the character */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	UCameraComponent* FirstPersonCamera;
+
+protected:
+	UPROPERTY(EditAnywhere, Category="Input")
+	UInputAction* JumpAction;
+
+	UPROPERTY(EditAnywhere, Category="Input")
+	UInputAction* MoveAction;
+
+	UPROPERTY(EditAnywhere, Category="Input")
+	UInputAction* LookAction;
+
+	UPROPERTY(EditAnywhere, Category="Input")
+	UInputAction* MouseLookAction;
+
+public:
+	AAgentCharacter();
+
+protected:
+	virtual void BeginPlay() override;
+	virtual void Tick(float DeltaSeconds) override;
+	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
+
+	void Move(const FInputActionValue& Value);
+	void StopMove(const FInputActionValue& Value);
+	void Look(const FInputActionValue& Value);
+
+	void CycleViewMode();
+	void ApplyViewMode(EAgentViewMode NewMode, bool bBlend);
+	void SpawnDroneCompanion();
+	void ApplyDroneAssistState();
+	void UpdateDronePilotInputs();
+	bool GetThirdPersonDroneTarget(FVector& OutLocation, FRotator& OutRotation) const;
+	void ResetDroneInputState();
+	bool IsDronePilotMode() const;
+	bool IsDroneInputModeActive() const;
+	void ToggleDronePilotControlMode();
+	void SetDroneStabilizerEnabled(bool bEnable);
+	void ToggleDroneStabilizer();
+	void ToggleDroneHoverMode();
+	void ToggleMapMode();
+
+	void OnDronePitchForwardPressed();
+	void OnDronePitchForwardReleased();
+	void OnDronePitchBackwardPressed();
+	void OnDronePitchBackwardReleased();
+	void OnDroneRollLeftPressed();
+	void OnDroneRollLeftReleased();
+	void OnDroneRollRightPressed();
+	void OnDroneRollRightReleased();
+	void OnDroneYawLeftPressed();
+	void OnDroneYawLeftReleased();
+	void OnDroneYawRightPressed();
+	void OnDroneYawRightReleased();
+	void OnDroneThrottleUpPressed();
+	void OnDroneThrottleUpReleased();
+	void OnDroneThrottleDownPressed();
+	void OnDroneThrottleDownReleased();
+
+	void OnDroneGamepadYawAxis(float Value);
+	void OnDroneGamepadThrottleAxis(float Value);
+	void OnDroneGamepadRollAxis(float Value);
+	void OnDroneGamepadPitchAxis(float Value);
+	void OnDroneGamepadLeftTriggerAxis(float Value);
+	void OnDroneGamepadRightTriggerAxis(float Value);
+	void OnDroneCameraTiltUpPressed();
+	void OnDroneCameraTiltDownPressed();
+	void OnDroneControlModeTogglePressed();
+	void OnDroneHoverModePressed();
+	void OnDroneStabilizerTogglePressed();
+	void OnMapModePressed();
+
+public:
+	UFUNCTION(BlueprintCallable, Category="Input")
+	virtual void DoMove(float Right, float Forward);
+
+	UFUNCTION(BlueprintCallable, Category="Input")
+	virtual void DoLook(float Yaw, float Pitch);
+
+	UFUNCTION(BlueprintCallable, Category="Input")
+	virtual void DoJumpStart();
+
+	UFUNCTION(BlueprintCallable, Category="Input")
+	virtual void DoJumpEnd();
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone")
+	TSubclassOf<ADroneCompanion> DroneCompanionClass;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone")
+	FVector DroneSpawnOffset = FVector(-180.0f, 0.0f, 120.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone")
+	float ViewBlendTime = 0.35f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone")
+	bool bStartInThirdPersonDroneView = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone")
+	bool bLockCharacterMovementDuringDronePilot = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone")
+	bool bStartWithSimpleDroneControls = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone")
+	bool bStartWithDroneStabilizerEnabled = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone")
+	bool bStartWithDroneHoverModeEnabled = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone")
+	float DroneEntryAssistReleaseThreshold = 0.05f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera")
+	FVector FirstPersonCameraOffset = FVector(0.0f, 0.0f, 64.0f);
+
+protected:
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<ADroneCompanion> DroneCompanion = nullptr;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Camera", meta=(AllowPrivateAccess="true"))
+	EAgentViewMode CurrentViewMode = EAgentViewMode::ThirdPerson;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
+	bool bUseSimpleDronePilotControls = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
+	bool bMapModeActive = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
+	bool bDroneStabilizerEnabled = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
+	bool bDroneHoverModeEnabled = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
+	bool bDroneEntryAssistActive = false;
+
+	bool bViewModeInitialized = false;
+	bool bDefaultUseControllerRotationYaw = false;
+	bool bDefaultOrientRotationToMovement = true;
+
+	float DroneGamepadThrottleInput = 0.0f;
+	float DroneGamepadYawInput = 0.0f;
+	float DroneGamepadRollInput = 0.0f;
+	float DroneGamepadPitchInput = 0.0f;
+	float DroneGamepadLeftTriggerInput = 0.0f;
+	float DroneGamepadRightTriggerInput = 0.0f;
+
+	bool bDronePitchForwardHeld = false;
+	bool bDronePitchBackwardHeld = false;
+	bool bDroneRollLeftHeld = false;
+	bool bDroneRollRightHeld = false;
+	bool bDroneYawLeftHeld = false;
+	bool bDroneYawRightHeld = false;
+	bool bDroneThrottleUpHeld = false;
+	bool bDroneThrottleDownHeld = false;
+
+public:
+	FORCEINLINE USpringArmComponent* GetCameraBoom() const { return CameraBoom; }
+	FORCEINLINE UCameraComponent* GetFollowCamera() const { return FollowCamera; }
+	FORCEINLINE UCameraComponent* GetFirstPersonCamera() const { return FirstPersonCamera; }
+};
