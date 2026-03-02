@@ -67,6 +67,9 @@ public:
 	void SetPilotHoverModeEnabled(bool bEnable);
 
 	UFUNCTION(BlueprintCallable, Category="Drone")
+	void SetNextMapModeUsesEntryLift(bool bEnable);
+
+	UFUNCTION(BlueprintCallable, Category="Drone")
 	void AdjustCameraTilt(float DeltaDegrees);
 
 	UFUNCTION(BlueprintPure, Category="Drone")
@@ -150,6 +153,27 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
 	float SimpleYawFollowSpeed = 4.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
+	float SimpleInputExpo = 0.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
+	float SimpleMaxTiltDegrees = 18.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
+	float SimpleBrakingResponse = 8.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
+	float SimpleAltitudeHoldGain = 6.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
+	float SimpleAltitudeVelocityDamping = 4.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
+	float SimpleMaxVerticalCorrection = 1700.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
+	float SimpleMaxDistanceFromTarget = 0.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Autopilot")
 	FVector ThirdPersonOffset = FVector(-340.0f, 0.0f, 140.0f);
 
@@ -232,6 +256,9 @@ public:
 	float MapEntryRiseHeight = 1200.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Map")
+	float MapCameraTransitionDuration = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Map")
 	float MapPanSpeed = 2000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Map")
@@ -306,6 +333,10 @@ protected:
 	FVector GetDesiredForwardDirection() const;
 	void UpdateDebugOutput() const;
 	void ApplyRuntimePhysicalMaterial();
+	void UpdateCameraTransition(float DeltaSeconds);
+	void StartCameraTransition(const FRotator& TargetRotation, float TargetFieldOfView, bool bInstant);
+	FRotator GetDesiredCameraMountRotationForMode(EDroneCompanionMode ForMode) const;
+	float GetDesiredCameraFieldOfViewForMode(EDroneCompanionMode ForMode) const;
 	void RefreshCameraMountRotation();
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
@@ -361,16 +392,27 @@ protected:
 	FVector HoldTargetLocation = FVector::ZeroVector;
 	FRotator HoldTargetRotation = FRotator::ZeroRotator;
 	FVector BuddyLocalOffset = FVector(0.0f, -160.0f, 250.0f);
+	bool bNextMapModeUsesEntryLift = true;
+	bool bMapModeUsesHeightLimits = true;
+	bool bCameraTransitionActive = false;
 	float BuddyDriftTimeRemaining = 0.0f;
 	float ImpactDebugTimeRemaining = 0.0f;
+	float CameraTransitionElapsed = 0.0f;
+	float CameraTransitionTotalDuration = 0.0f;
 	FVector PreviousLinearVelocity = FVector::ZeroVector;
 	float PilotThrottleInput = 0.0f;
 	float AppliedThrottleInput = 0.0f;
 	float PilotYawInput = 0.0f;
 	float PilotRollInput = 0.0f;
 	float PilotPitchInput = 0.0f;
+	float SimpleTargetAltitude = 0.0f;
+	float CameraTransitionStartFieldOfView = 0.0f;
+	float CameraTransitionTargetFieldOfView = 0.0f;
 	float CurrentHoverBaseAcceleration = 0.0f;
 	float CurrentHoverCommandInput = 0.0f;
 	float CurrentHoverVerticalAcceleration = 0.0f;
 	float CurrentHoverLiftDot = 1.0f;
+	bool bSimpleAltitudeTargetInitialized = false;
+	FRotator CameraTransitionStartRotation = FRotator::ZeroRotator;
+	FRotator CameraTransitionTargetRotation = FRotator::ZeroRotator;
 };

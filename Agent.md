@@ -18,24 +18,33 @@
   - `Third Person`: the actual camera is the character's normal `FollowCamera` on the spring arm. The drone sphere visually lerps to that same camera transform so it looks like the drone is becoming the camera while keeping a visible body and shadow.
   - `Drone Pilot`: the view target stays on the drone, and player drone inputs directly fly the drone.
   - `First Person`: the view target switches to the player's first-person camera, and the drone returns to the left-shoulder buddy position beside the player.
-- Press `B` on keyboard or `D-pad Left` on controller to toggle the drone pilot control scheme:
-  - `Complex`: the existing FPV-style acro controls
-  - `Simple`: an easier smooth-flying mode with auto-leveling, planar movement, and trigger-based altitude
-- In `Complex` mode, use the controller bumpers to pick the flight feel:
-  - left bumper: toggle `Hover Assist`: instead of locking altitude, it adds enough tilt-aware baseline thrust to roughly counter gravity, and your throttle input adds or subtracts from that hover baseline like a helicopter collective
-  - right bumper: toggle `Angle / Horizon` self-level assist on and off (`Acro / Rate` when off)
-  - `Simple` and `Map` already auto-level by design, so the main effect is in advanced flight
-  - when entering `Drone Pilot`, a temporary entry assist forces both of those aids on until the player gives real up/down throttle input, so the drone does not immediately drop on camera switch
+- Drone pilot control modes now cycle in this order:
+  - `Complex`
+  - `Horizon`
+  - `Horizon + Hover`
+  - `Simple`
+- `B` on keyboard and `D-pad Left` on controller cycle forward through those four modes.
+- Controller shoulders now cycle the same mode list instead of acting as direct toggles:
+  - right bumper cycles forward
+  - left bumper cycles backward
+- Mode meanings:
+  - `Complex`: full acro / rate with no self-level and no hover assist
+  - `Horizon`: self-level (`Angle / Horizon`) on, hover assist off
+  - `Horizon + Hover`: self-level plus helicopter-style hover assist (neutral throttle sits near hover, but tilt still drives forward flight)
+  - `Simple`: a DJI-style assisted flight mode with always-on self-level, always-on altitude lock, strong braking, limited tilt, and exposed tuning for expo / braking / altitude hold / radius
+- When entering `Drone Pilot`, a temporary entry assist still forces both self-level and hover on until the player gives real up/down throttle input, so the drone does not immediately drop on camera switch.
 - Press `M` on keyboard or the controller back/view button to toggle `Map Mode`:
   - the drone camera becomes a top-down view
-  - the drone rises upward from its current location
+  - entering map mode from `Third Person` or `First Person` still raises the drone upward from its current location
+  - entering map mode while already in `Drone Pilot` does not auto-lift; it keeps the current world position and only animates the camera down into map view
+  - entering or leaving map mode now uses a smooth 2-second internal camera transition for pitch / FOV instead of snapping
   - `WASD` / left stick pan in X/Y
   - `Q` / `E` move altitude down / up
   - `RT` moves altitude down and `LT` moves altitude up
 - The drone is no longer a detached hidden sphere inside the character. Its visible physics body is the authoritative collision body in all modes.
 - The drone body visual scale is exposed on `ADroneCompanion` as `DroneBodyVisualScale`.
 - Drone controls in `Drone Pilot`:
-  - `Complex`:
+  - `Complex`, `Horizon`, and `Horizon + Hover`:
     - Keyboard: `W` / `S` pitch, `A` / `D` roll, `Q` / `E` yaw, `R` / `F` thrust
     - Controller: left stick `X` yaw, left stick `Y` thrust, right stick `X` roll, right stick `Y` pitch
   - `Simple`:
@@ -45,10 +54,11 @@
     - D-pad up / down adjusts drone camera tilt outside of map mode
 - Drone systems currently include:
   - always-simulating rigid-body flight on the drone actor
-  - pilot mode with switchable complex and simple flight models
+  - pilot mode with four presets: `Complex`, `Horizon`, `Horizon + Hover`, and `Simple`
   - optional complex-mode hover-thrust assist that keeps the drone flying like a thrust vehicle while making neutral throttle sit near hover instead of dropping immediately
+  - a DJI-style simple mode with auto-level, auto altitude hold, strong braking, limited tilt, input expo, and an optional follow-target distance cap
   - a faked third-person camera path where the player uses the stock spring-arm `FollowCamera`, while the drone sphere animates to that same transform as a visual proxy
-  - a dedicated top-down map mode with its own movement model
+  - a dedicated top-down map mode with its own movement model and a 2-second camera pitch / FOV transition in and out
   - an autonomous buddy-follow mode so the drone can ride near the player's left shoulder during first person
   - exposed crash detection and timed recovery while the drone remains physics-simulated
   - crash recovery now waits until linear speed is below `CrashSelfRightActivationSpeed` (default `200` uu/s) before forcing self-right correction, even if the player has acro mode selected

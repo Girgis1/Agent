@@ -58,9 +58,23 @@ void AAgentCharacter::BeginPlay()
 
 	bDefaultUseControllerRotationYaw = bUseControllerRotationYaw;
 	bDefaultOrientRotationToMovement = GetCharacterMovement() ? GetCharacterMovement()->bOrientRotationToMovement : true;
-	bUseSimpleDronePilotControls = bStartWithSimpleDroneControls;
-	bDroneStabilizerEnabled = bStartWithDroneStabilizerEnabled;
-	bDroneHoverModeEnabled = bStartWithDroneHoverModeEnabled;
+	DronePilotControlMode = StartDronePilotControlMode;
+	if (DronePilotControlMode == EAgentDronePilotControlMode::Complex)
+	{
+		if (bStartWithSimpleDroneControls)
+		{
+			DronePilotControlMode = EAgentDronePilotControlMode::Simple;
+		}
+		else if (bStartWithDroneStabilizerEnabled && bStartWithDroneHoverModeEnabled)
+		{
+			DronePilotControlMode = EAgentDronePilotControlMode::HorizonHover;
+		}
+		else if (bStartWithDroneStabilizerEnabled)
+		{
+			DronePilotControlMode = EAgentDronePilotControlMode::Horizon;
+		}
+	}
+	SetDronePilotControlMode(DronePilotControlMode);
 	CurrentViewMode = bStartInThirdPersonDroneView ? EAgentViewMode::ThirdPerson : EAgentViewMode::FirstPerson;
 
 	if (FirstPersonCamera)
@@ -466,36 +480,55 @@ bool AAgentCharacter::IsDroneInputModeActive() const
 
 void AAgentCharacter::ToggleDronePilotControlMode()
 {
-	bUseSimpleDronePilotControls = !bUseSimpleDronePilotControls;
+	CycleDronePilotControlMode(1);
+}
+
+void AAgentCharacter::SetDronePilotControlMode(EAgentDronePilotControlMode NewMode)
+{
+	DronePilotControlMode = NewMode;
+
+	switch (DronePilotControlMode)
+	{
+	case EAgentDronePilotControlMode::Simple:
+		bUseSimpleDronePilotControls = true;
+		bDroneStabilizerEnabled = true;
+		bDroneHoverModeEnabled = true;
+		break;
+	case EAgentDronePilotControlMode::HorizonHover:
+		bUseSimpleDronePilotControls = false;
+		bDroneStabilizerEnabled = true;
+		bDroneHoverModeEnabled = true;
+		break;
+	case EAgentDronePilotControlMode::Horizon:
+		bUseSimpleDronePilotControls = false;
+		bDroneStabilizerEnabled = true;
+		bDroneHoverModeEnabled = false;
+		break;
+	case EAgentDronePilotControlMode::Complex:
+	default:
+		bUseSimpleDronePilotControls = false;
+		bDroneStabilizerEnabled = false;
+		bDroneHoverModeEnabled = false;
+		break;
+	}
 
 	if (DroneCompanion)
 	{
 		DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
-	}
-}
-
-void AAgentCharacter::SetDroneStabilizerEnabled(bool bEnable)
-{
-	bDroneStabilizerEnabled = bEnable;
-
-	if (DroneCompanion)
-	{
 		ApplyDroneAssistState();
 	}
 }
 
-void AAgentCharacter::ToggleDroneStabilizer()
+void AAgentCharacter::CycleDronePilotControlMode(int32 Direction)
 {
-	SetDroneStabilizerEnabled(!bDroneStabilizerEnabled);
-}
+	constexpr int32 PilotModeCount = 4;
+	const int32 CurrentIndex = static_cast<int32>(DronePilotControlMode);
+	const int32 WrappedIndex = (CurrentIndex + Direction + PilotModeCount) % PilotModeCount;
+	SetDronePilotControlMode(static_cast<EAgentDronePilotControlMode>(WrappedIndex));
 
-void AAgentCharacter::ToggleDroneHoverMode()
-{
-	bDroneHoverModeEnabled = !bDroneHoverModeEnabled;
-
-	if (DroneCompanion)
+	if (DroneCompanion && DroneCompanion->GetCompanionMode() == EDroneCompanionMode::MapMode)
 	{
-		ApplyDroneAssistState();
+		DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
 	}
 }
 
@@ -515,6 +548,7 @@ void AAgentCharacter::ToggleMapMode()
 		DroneCompanion->SetViewReferenceRotation(GetControlRotation());
 		DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
 		ApplyDroneAssistState();
+		DroneCompanion->SetNextMapModeUsesEntryLift(CurrentViewMode != EAgentViewMode::DronePilot);
 		DroneCompanion->SetCompanionMode(EDroneCompanionMode::MapMode);
 
 		if (PlayerController)
@@ -719,12 +753,12 @@ void AAgentCharacter::OnDroneControlModeTogglePressed()
 
 void AAgentCharacter::OnDroneHoverModePressed()
 {
-	ToggleDroneHoverMode();
+	CycleDronePilotControlMode(-1);
 }
 
 void AAgentCharacter::OnDroneStabilizerTogglePressed()
 {
-	ToggleDroneStabilizer();
+	CycleDronePilotControlMode(1);
 }
 
 void AAgentCharacter::OnMapModePressed()

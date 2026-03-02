@@ -23,6 +23,15 @@ enum class EAgentViewMode : uint8
 	FirstPerson
 };
 
+UENUM(BlueprintType)
+enum class EAgentDronePilotControlMode : uint8
+{
+	Complex,
+	Horizon,
+	HorizonHover,
+	Simple
+};
+
 /**
  *  Player character that coordinates character movement and the persistent companion drone.
  */
@@ -77,10 +86,9 @@ protected:
 	void ResetDroneInputState();
 	bool IsDronePilotMode() const;
 	bool IsDroneInputModeActive() const;
+	void SetDronePilotControlMode(EAgentDronePilotControlMode NewMode);
+	void CycleDronePilotControlMode(int32 Direction);
 	void ToggleDronePilotControlMode();
-	void SetDroneStabilizerEnabled(bool bEnable);
-	void ToggleDroneStabilizer();
-	void ToggleDroneHoverMode();
 	void ToggleMapMode();
 
 	void OnDronePitchForwardPressed();
@@ -151,6 +159,9 @@ public:
 	bool bStartWithDroneHoverModeEnabled = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone")
+	EAgentDronePilotControlMode StartDronePilotControlMode = EAgentDronePilotControlMode::Complex;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone")
 	float DroneEntryAssistReleaseThreshold = 0.05f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera")
@@ -168,6 +179,9 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
 	bool bMapModeActive = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
+	EAgentDronePilotControlMode DronePilotControlMode = EAgentDronePilotControlMode::Complex;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
 	bool bDroneStabilizerEnabled = false;
