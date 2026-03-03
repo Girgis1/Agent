@@ -123,6 +123,10 @@ struct FStateTreeAttackInstanceData
 	/** Character that will perform the attack */
 	UPROPERTY(EditAnywhere, Category = Context)
 	TObjectPtr<ACombatEnemy> Character;
+
+	/** Set by async delegates and consumed by Tick() to finish the task in UE 5.5. */
+	UPROPERTY(Transient)
+	bool bTaskCompleted = false;
 };
 
 /**
@@ -139,6 +143,9 @@ struct FStateTreeComboAttackTask : public FStateTreeTaskCommonBase
 
 	/** Runs when the owning state is entered */
 	virtual EStateTreeRunStatus EnterState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const override;
+
+	/** Polls the async completion flag set by the attack delegate. */
+	virtual EStateTreeRunStatus Tick(FStateTreeExecutionContext& Context, const float DeltaTime) const override;
 
 	/** Runs when the owning state is ended */
 	virtual void ExitState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const override;
@@ -163,6 +170,9 @@ struct FStateTreeChargedAttackTask : public FStateTreeTaskCommonBase
 	/** Runs when the owning state is entered */
 	virtual EStateTreeRunStatus EnterState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const override;
 
+	/** Polls the async completion flag set by the attack delegate. */
+	virtual EStateTreeRunStatus Tick(FStateTreeExecutionContext& Context, const float DeltaTime) const override;
+
 	/** Runs when the owning state is ended */
 	virtual void ExitState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const override;
 
@@ -185,6 +195,9 @@ struct FStateTreeWaitForLandingTask : public FStateTreeTaskCommonBase
 
 	/** Runs when the owning state is entered */
 	virtual EStateTreeRunStatus EnterState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const override;
+
+	/** Polls the async completion flag set by the landing delegate. */
+	virtual EStateTreeRunStatus Tick(FStateTreeExecutionContext& Context, const float DeltaTime) const override;
 
 	/** Runs when the owning state is ended */
 	virtual void ExitState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const override;

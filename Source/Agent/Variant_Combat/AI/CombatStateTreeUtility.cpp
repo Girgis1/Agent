@@ -10,7 +10,6 @@
 #include "AIController.h"
 #include "CombatEnemy.h"
 #include "Kismet/GameplayStatics.h"
-#include "StateTreeAsyncExecutionContext.h"
 
 bool FStateTreeCharacterGroundedCondition::TestCondition(FStateTreeExecutionContext& Context) const
 {
@@ -72,12 +71,17 @@ EStateTreeRunStatus FStateTreeComboAttackTask::EnterState(FStateTreeExecutionCon
 	{
 		// get the instance data
 		FInstanceDataType& InstanceData = Context.GetInstanceData(*this);
+		InstanceData.bTaskCompleted = false;
 
 		// bind to the on attack completed delegate
+		FInstanceDataType* const InstanceDataPtr = &InstanceData;
 		InstanceData.Character->OnAttackCompleted.BindLambda(
-			[WeakContext = Context.MakeWeakExecutionContext()]()
+			[InstanceDataPtr]()
 			{
-				WeakContext.FinishTask(EStateTreeFinishTaskType::Succeeded);
+				if (InstanceDataPtr)
+				{
+					InstanceDataPtr->bTaskCompleted = true;
+				}
 			}
 		);
 
@@ -87,6 +91,12 @@ EStateTreeRunStatus FStateTreeComboAttackTask::EnterState(FStateTreeExecutionCon
 	}
 
 	return EStateTreeRunStatus::Running;
+}
+
+EStateTreeRunStatus FStateTreeComboAttackTask::Tick(FStateTreeExecutionContext& Context, const float DeltaTime) const
+{
+	const FInstanceDataType& InstanceData = Context.GetInstanceData(*this);
+	return InstanceData.bTaskCompleted ? EStateTreeRunStatus::Succeeded : EStateTreeRunStatus::Running;
 }
 
 void FStateTreeComboAttackTask::ExitState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const
@@ -99,6 +109,7 @@ void FStateTreeComboAttackTask::ExitState(FStateTreeExecutionContext& Context, c
 
 		// unbind the on attack completed delegate
 		InstanceData.Character->OnAttackCompleted.Unbind();
+		InstanceData.bTaskCompleted = false;
 	}
 }
 
@@ -118,12 +129,17 @@ EStateTreeRunStatus FStateTreeChargedAttackTask::EnterState(FStateTreeExecutionC
 	{
 		// get the instance data
 		FInstanceDataType& InstanceData = Context.GetInstanceData(*this);
+		InstanceData.bTaskCompleted = false;
 
 		// bind to the on attack completed delegate
+		FInstanceDataType* const InstanceDataPtr = &InstanceData;
 		InstanceData.Character->OnAttackCompleted.BindLambda(
-			[WeakContext = Context.MakeWeakExecutionContext()]()
+			[InstanceDataPtr]()
 			{
-				WeakContext.FinishTask(EStateTreeFinishTaskType::Succeeded);
+				if (InstanceDataPtr)
+				{
+					InstanceDataPtr->bTaskCompleted = true;
+				}
 			}
 		);
 
@@ -132,6 +148,12 @@ EStateTreeRunStatus FStateTreeChargedAttackTask::EnterState(FStateTreeExecutionC
 	}
 
 	return EStateTreeRunStatus::Running;
+}
+
+EStateTreeRunStatus FStateTreeChargedAttackTask::Tick(FStateTreeExecutionContext& Context, const float DeltaTime) const
+{
+	const FInstanceDataType& InstanceData = Context.GetInstanceData(*this);
+	return InstanceData.bTaskCompleted ? EStateTreeRunStatus::Succeeded : EStateTreeRunStatus::Running;
 }
 
 void FStateTreeChargedAttackTask::ExitState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const
@@ -144,6 +166,7 @@ void FStateTreeChargedAttackTask::ExitState(FStateTreeExecutionContext& Context,
 
 		// unbind the on attack completed delegate
 		InstanceData.Character->OnAttackCompleted.Unbind();
+		InstanceData.bTaskCompleted = false;
 	}
 }
 
@@ -163,17 +186,28 @@ EStateTreeRunStatus FStateTreeWaitForLandingTask::EnterState(FStateTreeExecution
 	{
 		// get the instance data
 		FInstanceDataType& InstanceData = Context.GetInstanceData(*this);
+		InstanceData.bTaskCompleted = false;
 
 		// bind to the on enemy landed delegate
+		FInstanceDataType* const InstanceDataPtr = &InstanceData;
 		InstanceData.Character->OnEnemyLanded.BindLambda(
-			[WeakContext = Context.MakeWeakExecutionContext()]()
+			[InstanceDataPtr]()
 			{
-				WeakContext.FinishTask(EStateTreeFinishTaskType::Succeeded);
+				if (InstanceDataPtr)
+				{
+					InstanceDataPtr->bTaskCompleted = true;
+				}
 			}
 		);
 	}
 
 	return EStateTreeRunStatus::Running;
+}
+
+EStateTreeRunStatus FStateTreeWaitForLandingTask::Tick(FStateTreeExecutionContext& Context, const float DeltaTime) const
+{
+	const FInstanceDataType& InstanceData = Context.GetInstanceData(*this);
+	return InstanceData.bTaskCompleted ? EStateTreeRunStatus::Succeeded : EStateTreeRunStatus::Running;
 }
 
 void FStateTreeWaitForLandingTask::ExitState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const
@@ -186,6 +220,7 @@ void FStateTreeWaitForLandingTask::ExitState(FStateTreeExecutionContext& Context
 
 		// unbind the on enemy landed delegate
 		InstanceData.Character->OnEnemyLanded.Unbind();
+		InstanceData.bTaskCompleted = false;
 	}
 }
 

@@ -106,6 +106,10 @@ void ADroneCompanion::Tick(float DeltaSeconds)
 			{
 				UpdateRollFlight(DeltaSeconds);
 			}
+			else if (bUseSpectatorPilotControls)
+			{
+				UpdateSpectatorFlight(DeltaSeconds);
+			}
 			else if (bUseFreeFlyPilotControls)
 			{
 				UpdateFreeFlyFlight(DeltaSeconds);
@@ -158,6 +162,7 @@ void ADroneCompanion::SetCompanionMode(EDroneCompanionMode NewMode)
 	{
 		bCrashed = false;
 		CrashRecoveryTimeRemaining = 0.0f;
+		bPendingCrashRollRecovery = false;
 	}
 
 	if (CompanionMode != EDroneCompanionMode::PilotControlled)
@@ -271,7 +276,9 @@ void ADroneCompanion::ResetPilotInputs()
 
 void ADroneCompanion::SetUseSimplePilotControls(bool bEnable)
 {
-	const bool bNeedsModeChange = bUseSimplePilotControls != bEnable || (bEnable && (bUseFreeFlyPilotControls || bUseRollPilotControls));
+	const bool bWasRollControls = bUseRollPilotControls;
+	const bool bNeedsModeChange = bUseSimplePilotControls != bEnable
+		|| (bEnable && (bUseFreeFlyPilotControls || bUseSpectatorPilotControls || bUseRollPilotControls));
 	if (!bNeedsModeChange)
 	{
 		return;
@@ -281,19 +288,22 @@ void ADroneCompanion::SetUseSimplePilotControls(bool bEnable)
 	if (bEnable)
 	{
 		bUseFreeFlyPilotControls = false;
+		bUseSpectatorPilotControls = false;
 		bUseRollPilotControls = false;
 	}
 	FreeFlyCurrentVelocity = FVector::ZeroVector;
 
 	if (!bSuppressCameraMountRefresh)
 	{
-		RefreshCameraMountRotation();
+		RefreshCameraForPilotControlModeChange(bWasRollControls);
 	}
 }
 
 void ADroneCompanion::SetUseFreeFlyPilotControls(bool bEnable)
 {
-	const bool bNeedsModeChange = bUseFreeFlyPilotControls != bEnable || (bEnable && (bUseSimplePilotControls || bUseRollPilotControls));
+	const bool bWasRollControls = bUseRollPilotControls;
+	const bool bNeedsModeChange = bUseFreeFlyPilotControls != bEnable
+		|| (bEnable && (bUseSimplePilotControls || bUseSpectatorPilotControls || bUseRollPilotControls));
 	if (!bNeedsModeChange)
 	{
 		return;
@@ -303,19 +313,47 @@ void ADroneCompanion::SetUseFreeFlyPilotControls(bool bEnable)
 	if (bEnable)
 	{
 		bUseSimplePilotControls = false;
+		bUseSpectatorPilotControls = false;
 		bUseRollPilotControls = false;
 	}
 	FreeFlyCurrentVelocity = FVector::ZeroVector;
 
 	if (!bSuppressCameraMountRefresh)
 	{
-		RefreshCameraMountRotation();
+		RefreshCameraForPilotControlModeChange(bWasRollControls);
+	}
+}
+
+void ADroneCompanion::SetUseSpectatorPilotControls(bool bEnable)
+{
+	const bool bWasRollControls = bUseRollPilotControls;
+	const bool bNeedsModeChange = bUseSpectatorPilotControls != bEnable
+		|| (bEnable && (bUseSimplePilotControls || bUseFreeFlyPilotControls || bUseRollPilotControls));
+	if (!bNeedsModeChange)
+	{
+		return;
+	}
+
+	bUseSpectatorPilotControls = bEnable;
+	if (bEnable)
+	{
+		bUseSimplePilotControls = false;
+		bUseFreeFlyPilotControls = false;
+		bUseRollPilotControls = false;
+	}
+	FreeFlyCurrentVelocity = FVector::ZeroVector;
+
+	if (!bSuppressCameraMountRefresh)
+	{
+		RefreshCameraForPilotControlModeChange(bWasRollControls);
 	}
 }
 
 void ADroneCompanion::SetUseRollPilotControls(bool bEnable)
 {
-	const bool bNeedsModeChange = bUseRollPilotControls != bEnable || (bEnable && (bUseSimplePilotControls || bUseFreeFlyPilotControls));
+	const bool bWasRollControls = bUseRollPilotControls;
+	const bool bNeedsModeChange = bUseRollPilotControls != bEnable
+		|| (bEnable && (bUseSimplePilotControls || bUseFreeFlyPilotControls || bUseSpectatorPilotControls));
 	if (!bNeedsModeChange)
 	{
 		return;
@@ -327,6 +365,7 @@ void ADroneCompanion::SetUseRollPilotControls(bool bEnable)
 		LogRollModeState(TEXT("EnterRollMode_BeforeReset"), true);
 		bUseSimplePilotControls = false;
 		bUseFreeFlyPilotControls = false;
+		bUseSpectatorPilotControls = false;
 		bCrashed = false;
 		CrashRecoveryTimeRemaining = 0.0f;
 		bImpactDetected = false;
@@ -347,7 +386,7 @@ void ADroneCompanion::SetUseRollPilotControls(bool bEnable)
 
 	if (!bSuppressCameraMountRefresh)
 	{
-		RefreshCameraMountRotation();
+		RefreshCameraForPilotControlModeChange(bWasRollControls);
 	}
 }
 
@@ -389,9 +428,75 @@ void ADroneCompanion::SetPilotHoverModeEnabled(bool bEnable)
 	bPilotHoverAssistTemporarilySuppressed = false;
 }
 
-void ADroneCompanion::TryRollJump()
+bool ADroneCompanion::TryRollJump(float ChargeAlpha)
 {
-	return;
+	if (!DroneBody
+		|| !bUseRollPilotControls
+		|| CompanionMode != EDroneCompanionMode::PilotControlled
+		|| RollJumpCooldownRemaining > 0.0f)
+	{
+		return false;
+	}
+
+	float GroundClearance = -1.0f;
+	if (!QueryRollGroundContact(GroundClearance)
+		|| GroundClearance > FMath::Max(0.0f, RollGroundedMaxClearance))
+	{
+		return false;
+	}
+
+	const float MinJumpVelocity = FMath::Max(0.0f, RollJumpMinLaunchVelocity);
+	const float MaxJumpVelocity = FMath::Max(MinJumpVelocity, RollJumpMaxLaunchVelocity);
+	if (MaxJumpVelocity <= KINDA_SMALL_NUMBER)
+	{
+		return false;
+	}
+
+	const float ClampedChargeAlpha = FMath::Clamp(ChargeAlpha, 0.0f, 1.0f);
+	const float ShapedChargeAlpha = FMath::Pow(
+		ClampedChargeAlpha,
+		FMath::Max(KINDA_SMALL_NUMBER, RollJumpChargeExponent));
+	const float TargetUpwardSpeed = FMath::Lerp(MinJumpVelocity, MaxJumpVelocity, ShapedChargeAlpha);
+	FVector LaunchVelocity = DroneBody->GetPhysicsLinearVelocity();
+	if (LaunchVelocity.Z >= TargetUpwardSpeed - KINDA_SMALL_NUMBER)
+	{
+		return false;
+	}
+
+	LaunchVelocity.Z = TargetUpwardSpeed;
+	DroneBody->SetPhysicsLinearVelocity(LaunchVelocity);
+	RollJumpCooldownRemaining = FMath::Max(0.0f, RollJumpCooldown);
+	return true;
+}
+
+void ADroneCompanion::SetUseCrashRollRecoveryMode(bool bEnable)
+{
+	bUseCrashRollRecoveryMode = bEnable;
+	if (!bUseCrashRollRecoveryMode)
+	{
+		bPendingCrashRollRecovery = false;
+	}
+}
+
+bool ADroneCompanion::ConsumePendingCrashRollRecovery()
+{
+	const bool bWasPending = bPendingCrashRollRecovery;
+	bPendingCrashRollRecovery = false;
+	return bWasPending;
+}
+
+bool ADroneCompanion::IsStableForRollRecovery() const
+{
+	if (!DroneBody || !bUseRollPilotControls || CompanionMode != EDroneCompanionMode::PilotControlled)
+	{
+		return false;
+	}
+
+	float GroundClearance = -1.0f;
+	return QueryRollGroundContact(GroundClearance)
+		&& GroundClearance <= FMath::Max(0.0f, RollGroundedMaxClearance)
+		&& DroneBody->GetPhysicsLinearVelocity().Size() <= FMath::Max(0.0f, DroneCrashSettleLinearSpeed)
+		&& DroneBody->GetPhysicsAngularVelocityInDegrees().Size() <= FMath::Max(0.0f, DroneCrashSettleAngularSpeed);
 }
 
 void ADroneCompanion::SetNextMapModeUsesEntryLift(bool bEnable)
@@ -425,30 +530,6 @@ void ADroneCompanion::AdjustCameraTilt(float DeltaDegrees)
 {
 	CameraTiltDegrees = FMath::Clamp(CameraTiltDegrees + DeltaDegrees, DroneMinCameraTilt, DroneMaxCameraTilt);
 	RefreshCameraMountRotation();
-}
-
-void ADroneCompanion::AdjustCameraFieldOfView(float DeltaDegrees)
-{
-	const float BaseFieldOfView =
-		(CompanionMode == EDroneCompanionMode::ThirdPersonFollow)
-			? ThirdPersonCameraFieldOfView
-			: ((CompanionMode == EDroneCompanionMode::MapMode || CompanionMode == EDroneCompanionMode::MiniMapFollow)
-				? MapCameraFieldOfView
-				: PilotCameraFieldOfView);
-	const float NewFieldOfView = FMath::Clamp(
-		BaseFieldOfView + CameraFieldOfViewOffset + DeltaDegrees,
-		DroneMinCameraFieldOfView,
-		DroneMaxCameraFieldOfView);
-	CameraFieldOfViewOffset = NewFieldOfView - BaseFieldOfView;
-
-	if (bCameraTransitionActive)
-	{
-		CameraTransitionTargetFieldOfView = GetDesiredCameraFieldOfViewForMode(CompanionMode);
-	}
-	else if (DroneCamera)
-	{
-		DroneCamera->SetFieldOfView(GetDesiredCameraFieldOfViewForMode(CompanionMode));
-	}
 }
 
 bool ADroneCompanion::GetDroneCameraTransform(FVector& OutLocation, FRotator& OutRotation) const
@@ -515,6 +596,15 @@ void ADroneCompanion::OnDroneBodyHit(
 
 	if (CompanionMode == EDroneCompanionMode::PilotControlled && bImpactWouldCrash)
 	{
+		if (bUseCrashRollRecoveryMode && !bUseRollPilotControls)
+		{
+			bPendingCrashRollRecovery = true;
+			bCrashed = false;
+			CrashRecoveryTimeRemaining = 0.0f;
+			ResetPilotInputs();
+			return;
+		}
+
 		bCrashed = true;
 		CrashRecoveryTimeRemaining = FMath::Clamp(
 			LastImpactSpeed * DroneCrashRecoveryTimePerSpeed,
@@ -782,7 +872,7 @@ void ADroneCompanion::UpdateFreeFlyFlight(float DeltaSeconds)
 
 	const FVector ForwardDirection = ViewReferenceRotation.Vector();
 	const FVector RightDirection = FRotationMatrix(ViewReferenceRotation).GetUnitAxis(EAxis::Y);
-	const FVector UpDirection = FVector::UpVector;
+	const FVector UpDirection = FRotationMatrix(ViewReferenceRotation).GetUnitAxis(EAxis::Z);
 	const FVector DesiredVelocity = (
 		(ForwardDirection * PilotPitchInput) +
 		(RightDirection * PilotRollInput) +
@@ -798,22 +888,58 @@ void ADroneCompanion::UpdateFreeFlyFlight(float DeltaSeconds)
 		DeltaSeconds,
 		VelocityChangeRate);
 
-	const FVector NewLocation = DroneBody->GetComponentLocation() + (FreeFlyCurrentVelocity * DeltaSeconds);
-	const FRotator NewRotation(ViewReferenceRotation.Pitch, ViewReferenceRotation.Yaw, 0.0f);
+	DroneBody->SetPhysicsLinearVelocity(FreeFlyCurrentVelocity);
 
-	DroneBody->SetWorldLocationAndRotation(
-		NewLocation,
-		NewRotation,
-		false,
-		nullptr,
-		ETeleportType::TeleportPhysics);
-	DroneBody->SetPhysicsLinearVelocity(FVector::ZeroVector);
-	DroneBody->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+	const FRotator DesiredRotation = ViewReferenceRotation.GetNormalized();
+	const FRotator DeltaRotation = (DesiredRotation - DroneBody->GetComponentRotation()).GetNormalized();
+	const float RotationResponse = FMath::Max(0.0f, FreeFlyRotationResponse);
+	const FVector DesiredLocalAngularVelocity(
+		-DeltaRotation.Roll * RotationResponse,
+		-DeltaRotation.Pitch * RotationResponse,
+		DeltaRotation.Yaw * RotationResponse);
+	ApplyDesiredAngularVelocity(DesiredLocalAngularVelocity, DeltaSeconds, RotationResponse);
 	PreviousLinearVelocity = FreeFlyCurrentVelocity;
 
 	CurrentHoverBaseAcceleration = 0.0f;
 	CurrentHoverCommandInput = PilotThrottleInput;
-	CurrentHoverVerticalAcceleration = 0.0f;
+	CurrentHoverVerticalAcceleration = FreeFlyCurrentVelocity.Z;
+	CurrentHoverLiftDot = 1.0f;
+	AppliedThrottleInput = PilotThrottleInput;
+}
+
+void ADroneCompanion::UpdateSpectatorFlight(float /*DeltaSeconds*/)
+{
+	if (!DroneBody)
+	{
+		return;
+	}
+
+	const FVector ForwardDirection = ViewReferenceRotation.Vector();
+	const FVector RightDirection = FRotationMatrix(ViewReferenceRotation).GetUnitAxis(EAxis::Y);
+	const FVector UpDirection = FVector::UpVector;
+	const FVector DesiredVelocity = (
+		(ForwardDirection * PilotPitchInput) +
+		(RightDirection * PilotRollInput) +
+		(UpDirection * PilotThrottleInput)).GetClampedToMaxSize(1.0f) * FreeFlyMaxSpeed;
+
+	FreeFlyCurrentVelocity = DesiredVelocity;
+	DroneBody->SetPhysicsLinearVelocity(FreeFlyCurrentVelocity);
+	DroneBody->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+
+	if (CameraMount)
+	{
+		bCameraTransitionActive = false;
+		CameraMount->SetAbsolute(false, true, false);
+		CameraMount->SetWorldRotation(FRotator(
+			ViewReferenceRotation.Pitch,
+			ViewReferenceRotation.Yaw,
+			0.0f));
+	}
+
+	PreviousLinearVelocity = FreeFlyCurrentVelocity;
+	CurrentHoverBaseAcceleration = 0.0f;
+	CurrentHoverCommandInput = PilotThrottleInput;
+	CurrentHoverVerticalAcceleration = FreeFlyCurrentVelocity.Z;
 	CurrentHoverLiftDot = 1.0f;
 	AppliedThrottleInput = PilotThrottleInput;
 }
@@ -846,12 +972,13 @@ void ADroneCompanion::UpdateRollFlight(float DeltaSeconds)
 	const float MaxRollSpeed = FMath::Max(0.0f, RollMaxSpeed);
 	if (MaxRollSpeed > 0.0f)
 	{
-		FVector CurrentVelocity = DroneBody->GetPhysicsLinearVelocity();
+		const FVector CurrentVelocity = DroneBody->GetPhysicsLinearVelocity();
 		const float VerticalVelocity = CurrentVelocity.Z;
-		CurrentVelocity.Z = 0.0f;
-		if (CurrentVelocity.SizeSquared() > FMath::Square(MaxRollSpeed))
+		FVector HorizontalVelocity = CurrentVelocity;
+		HorizontalVelocity.Z = 0.0f;
+		if (HorizontalVelocity.SizeSquared() > FMath::Square(MaxRollSpeed))
 		{
-			const FVector ClampedHorizontalVelocity = CurrentVelocity.GetClampedToMaxSize(MaxRollSpeed);
+			const FVector ClampedHorizontalVelocity = HorizontalVelocity.GetClampedToMaxSize(MaxRollSpeed);
 			DroneBody->SetPhysicsLinearVelocity(FVector(
 				ClampedHorizontalVelocity.X,
 				ClampedHorizontalVelocity.Y,
@@ -1065,10 +1192,18 @@ void ADroneCompanion::ClampVelocity() const
 		DroneBody->SetPhysicsLinearVelocity(CurrentLinearVelocity.GetClampedToMaxSize(MaxAllowedLinearSpeed));
 	}
 
-	const FVector CurrentAngularVelocity = DroneBody->GetPhysicsAngularVelocityInDegrees();
-	if (CurrentAngularVelocity.SizeSquared() > FMath::Square(DroneMaxAngularSpeed))
+	float MaxAllowedAngularSpeed = DroneMaxAngularSpeed;
+	if (bUseRollPilotControls
+		&& CompanionMode == EDroneCompanionMode::PilotControlled
+		&& RollMaxAngularSpeed > 0.0f)
 	{
-		DroneBody->SetPhysicsAngularVelocityInDegrees(CurrentAngularVelocity.GetClampedToMaxSize(DroneMaxAngularSpeed));
+		MaxAllowedAngularSpeed = FMath::Min(MaxAllowedAngularSpeed, RollMaxAngularSpeed);
+	}
+
+	const FVector CurrentAngularVelocity = DroneBody->GetPhysicsAngularVelocityInDegrees();
+	if (CurrentAngularVelocity.SizeSquared() > FMath::Square(MaxAllowedAngularSpeed))
+	{
+		DroneBody->SetPhysicsAngularVelocityInDegrees(CurrentAngularVelocity.GetClampedToMaxSize(MaxAllowedAngularSpeed));
 	}
 }
 
@@ -1209,6 +1344,36 @@ void ADroneCompanion::UpdateRollCamera(float DeltaSeconds)
 		CurrentRollCameraLean));
 }
 
+bool ADroneCompanion::QueryRollGroundContact(float& OutGroundClearance) const
+{
+	OutGroundClearance = -1.0f;
+	if (!DroneBody || !GetWorld())
+	{
+		return false;
+	}
+
+	const float SphereRadius = FMath::Max(DroneBody->Bounds.SphereRadius, 1.0f);
+	const float TraceDistance = FMath::Max(RollGroundCheckDistance + SphereRadius, SphereRadius);
+	const FVector TraceStart = DroneBody->GetComponentLocation();
+	const FVector TraceEnd = TraceStart - FVector(0.0f, 0.0f, TraceDistance);
+	FCollisionQueryParams QueryParams(FName(TEXT("DroneRollGroundTrace")), false, this);
+	QueryParams.AddIgnoredActor(this);
+
+	FHitResult GroundHit;
+	if (!GetWorld()->LineTraceSingleByChannel(
+		GroundHit,
+		TraceStart,
+		TraceEnd,
+		ECC_Visibility,
+		QueryParams))
+	{
+		return false;
+	}
+
+	OutGroundClearance = TraceStart.Z - GroundHit.ImpactPoint.Z - SphereRadius;
+	return true;
+}
+
 void ADroneCompanion::LogRollModeState(const TCHAR* Context, bool bProbeGround)
 {
 	if (!bLogRollModeDiagnostics || !DroneBody)
@@ -1218,25 +1383,10 @@ void ADroneCompanion::LogRollModeState(const TCHAR* Context, bool bProbeGround)
 
 	bool bGrounded = false;
 	float GroundClearance = -1.0f;
-	if (bProbeGround && GetWorld())
+	if (bProbeGround)
 	{
-		const float SphereRadius = FMath::Max(DroneBody->Bounds.SphereRadius, 1.0f);
-		const float TraceDistance = FMath::Max(RollGroundCheckDistance + SphereRadius, SphereRadius);
-		const FVector TraceStart = DroneBody->GetComponentLocation();
-		const FVector TraceEnd = TraceStart - FVector(0.0f, 0.0f, TraceDistance);
-		FCollisionQueryParams QueryParams(FName(TEXT("DroneRollDiagGroundTrace")), false, this);
-		QueryParams.AddIgnoredActor(this);
-		FHitResult GroundHit;
-		bGrounded = GetWorld()->LineTraceSingleByChannel(
-			GroundHit,
-			TraceStart,
-			TraceEnd,
-			ECC_Visibility,
-			QueryParams);
-		if (bGrounded)
-		{
-			GroundClearance = TraceStart.Z - GroundHit.ImpactPoint.Z - SphereRadius;
-		}
+		bGrounded = QueryRollGroundContact(GroundClearance)
+			&& GroundClearance <= FMath::Max(0.0f, RollGroundedMaxClearance);
 	}
 
 	const FVector LinearVelocity = DroneBody->GetPhysicsLinearVelocity();
@@ -1292,6 +1442,10 @@ void ADroneCompanion::UpdateDebugOutput() const
 		{
 			ModeLabel = TEXT("PilotRoll");
 		}
+		else if (bUseSpectatorPilotControls)
+		{
+			ModeLabel = TEXT("PilotSpectator");
+		}
 		else if (bUseFreeFlyPilotControls)
 		{
 			ModeLabel = TEXT("PilotFreeFly");
@@ -1337,6 +1491,10 @@ void ADroneCompanion::UpdateDebugOutput() const
 	{
 		AssistLabel = TEXT("ROLL");
 	}
+	else if (bUseSpectatorPilotControls)
+	{
+		AssistLabel = TEXT("SPECTATOR");
+	}
 	else if (bUseFreeFlyPilotControls)
 	{
 		AssistLabel = TEXT("FREE FLY");
@@ -1352,7 +1510,7 @@ void ADroneCompanion::UpdateDebugOutput() const
 	const FString AssistDebugText = FString::Printf(
 		TEXT("Flight Assist: %s"),
 		AssistLabel);
-	const FColor AssistDebugColor = (bPilotStabilizerEnabled || bUseSimplePilotControls || bUseFreeFlyPilotControls || bUseRollPilotControls)
+	const FColor AssistDebugColor = (bPilotStabilizerEnabled || bUseSimplePilotControls || bUseFreeFlyPilotControls || bUseSpectatorPilotControls || bUseRollPilotControls)
 		? FColor::Green
 		: FColor::Red;
 	const FString HoverDebugText = FString::Printf(
@@ -1423,6 +1581,22 @@ void ADroneCompanion::ApplyRuntimePhysicalMaterial()
 	RuntimePhysicalMaterial->bOverrideRestitutionCombineMode = true;
 	RuntimePhysicalMaterial->RestitutionCombineMode = EFrictionCombineMode::Min;
 	DroneBody->SetPhysMaterialOverride(RuntimePhysicalMaterial);
+}
+
+void ADroneCompanion::RefreshCameraForPilotControlModeChange(bool bWasRollControls)
+{
+	const bool bLeavingRoll = bWasRollControls && !bUseRollPilotControls;
+	if (bLeavingRoll && CompanionMode == EDroneCompanionMode::PilotControlled && !bUseSpectatorPilotControls)
+	{
+		StartCameraTransition(
+			GetDesiredCameraMountRotationForMode(CompanionMode),
+			GetDesiredCameraFieldOfViewForMode(CompanionMode),
+			false,
+			FMath::Max(1.0f, PilotModeCameraTransitionDuration));
+		return;
+	}
+
+	RefreshCameraMountRotation();
 }
 
 void ADroneCompanion::UpdateCameraTransition(float DeltaSeconds)
@@ -1518,6 +1692,11 @@ FRotator ADroneCompanion::GetDesiredCameraMountRotationForMode(EDroneCompanionMo
 		return FRotator::ZeroRotator;
 	}
 
+	if (ForMode == EDroneCompanionMode::PilotControlled && bUseSpectatorPilotControls)
+	{
+		return FRotator::ZeroRotator;
+	}
+
 	if (ForMode == EDroneCompanionMode::PilotControlled && bUseRollPilotControls)
 	{
 		return FRotator::ZeroRotator;
@@ -1540,7 +1719,7 @@ float ADroneCompanion::GetDesiredCameraFieldOfViewForMode(EDroneCompanionMode Fo
 	}
 
 	return FMath::Clamp(
-		BaseFieldOfView + CameraFieldOfViewOffset,
+		BaseFieldOfView,
 		DroneMinCameraFieldOfView,
 		DroneMaxCameraFieldOfView);
 }
@@ -1553,7 +1732,7 @@ void ADroneCompanion::RefreshCameraMountRotation()
 	}
 
 	bCameraTransitionActive = false;
-	CameraMount->SetAbsolute(false, bUseRollPilotControls, false);
+	CameraMount->SetAbsolute(false, bUseRollPilotControls || bUseSpectatorPilotControls, false);
 	CameraMount->SetRelativeRotation(GetDesiredCameraMountRotationForMode(CompanionMode));
 	if (bUseRollPilotControls)
 	{
@@ -1561,6 +1740,13 @@ void ADroneCompanion::RefreshCameraMountRotation()
 			ViewReferenceRotation.Pitch + CurrentRollCameraPitchOffset,
 			ViewReferenceRotation.Yaw,
 			CurrentRollCameraLean));
+	}
+	else if (bUseSpectatorPilotControls)
+	{
+		CameraMount->SetWorldRotation(FRotator(
+			ViewReferenceRotation.Pitch,
+			ViewReferenceRotation.Yaw,
+			0.0f));
 	}
 
 	if (DroneCamera)
