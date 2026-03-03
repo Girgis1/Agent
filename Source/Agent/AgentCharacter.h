@@ -15,6 +15,7 @@ class UInputAction;
 class USceneComponent;
 class UStaticMeshComponent;
 class USpringArmComponent;
+struct FHitResult;
 struct FInputActionValue;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
@@ -129,6 +130,7 @@ protected:
 	void CancelConveyorPlacement();
 	void RotateConveyorPlacement(int32 Direction);
 	bool EvaluateConveyorPlacement(FVector& OutLocation, FRotator& OutRotation, bool& bOutIsValid) const;
+	bool TryGetConveyorFaceSnapLocation(const FHitResult& AimHit, FVector& OutLocation) const;
 
 	void OnDronePitchForwardPressed();
 	void OnDronePitchForwardReleased();
@@ -244,6 +246,12 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
 	FVector ConveyorPlacementClearanceExtents = FVector(48.0f, 48.0f, 12.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
+	float ConveyorMasterBeltSpeed = 600.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
+	float ConveyorMasterBeltAcceleration = 2200.0f;
 
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))

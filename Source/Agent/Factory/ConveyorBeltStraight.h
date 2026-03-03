@@ -21,6 +21,8 @@ class AConveyorBeltStraight : public AActor
 public:
 	AConveyorBeltStraight();
 
+	static void SetMasterConveyorSettings(float InBeltSpeed, float InBeltAcceleration);
+
 	virtual void Tick(float DeltaSeconds) override;
 
 protected:
@@ -69,11 +71,17 @@ public:
 	float BeltAcceleration = 700.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Conveyor")
+	bool bUseMasterSpeedSettings = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Conveyor")
 	FVector SupportBoxExtent = FVector(50.0f, 50.0f, 10.0f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Conveyor")
 	FVector PayloadDriveExtent = FVector(42.0f, 42.0f, 20.0f);
 
 protected:
+	static float MasterBeltSpeed;
+	static float MasterBeltAcceleration;
+
 	TSet<TWeakObjectPtr<UPrimitiveComponent>> ActivePayloads;
 };

@@ -65,6 +65,13 @@ The straight conveyor uses:
 
 The belt accelerates payloads toward a target belt speed instead of teleporting them.
 
+Shared speed control is now driven by the player character's master settings:
+
+- `ConveyorMasterBeltSpeed`
+- `ConveyorMasterBeltAcceleration`
+
+Placed conveyors read from those shared values by default so tuning one place affects all belts consistently.
+
 ### Placement
 
 Placement mode currently uses:
@@ -74,15 +81,19 @@ Placement mode currently uses:
 - grid snapping for final location
 - overlap validation for blocked placements
 - a preview actor plus debug box / direction arrow for validity feedback
+- manual in-place rotation
+- conveyor face snapping:
+  - if the aim trace hits an existing conveyor, the new conveyor snaps to the hit conveyor's nearest side face
+  - this allows continuing a belt line in mid-air without needing ground under the next tile
 
 ## Planned Next Steps
 
 1. Validate the straight conveyor on the default map with physics cubes.
 2. Tune overlap clearances so floor placement is reliable.
 3. Add a better visual belt mesh / scrolling belt material.
-4. Add placement chaining so consecutive placements feel fast.
-5. Add conveyor adjacency rules for clean line building.
-6. Add corners as the second buildable.
+4. Add conveyor adjacency rules for clean line building.
+5. Add corners as the second buildable.
+6. Improve conveyor-to-conveyor face snapping so corners and future splitters feel intentional.
 
 ## Guardrails
 

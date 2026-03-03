@@ -74,8 +74,15 @@
     - `Right Mouse` / controller `B`: cancel placement mode
     - `R` / controller `Right Bumper`: rotate right by `90`
     - controller `Left Bumper`: rotate left by `90`
+  - conveyor placement is back to manual in-place rotation only; there is no automatic chain-advance after placing
+  - if the player aims at an existing conveyor, placement now snaps off that conveyor's hit face instead of requiring ground below it
+    - this allows extending a belt line out into the air by targeting the end or side face of the last placed conveyor
   - placement uses a camera trace, a downward surface trace, grid snapping, overlap validation, and a visible preview actor plus debug box / arrow
   - conveyor movement uses a blocking base plus a separate top overlap drive volume, then accelerates simulating physics bodies along the belt direction each tick
+  - conveyor speed now has shared master controls on `AAgentCharacter`:
+    - `ConveyorMasterBeltSpeed`
+    - `ConveyorMasterBeltAcceleration`
+    - all conveyors use those shared values by default via `AConveyorBeltStraight::SetMasterConveyorSettings(...)`
   - reserved collision channels:
     - `BuildPlacement` = `ECC_GameTraceChannel1`
     - `FactoryBuildable` = `ECC_GameTraceChannel2`

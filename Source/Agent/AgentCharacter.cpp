@@ -142,6 +142,7 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 
 	UpdateKeyboardMapButtonHold(DeltaSeconds);
 	UpdateControllerMapButtonHold(DeltaSeconds);
+	AConveyorBeltStraight::SetMasterConveyorSettings(ConveyorMasterBeltSpeed, ConveyorMasterBeltAcceleration);
 
 	if (bConveyorPlacementModeActive)
 	{
@@ -952,7 +953,7 @@ bool AAgentCharacter::EvaluateConveyorPlacement(FVector& OutLocation, FRotator& 
 
 	UWorld* World = GetWorld();
 	UCameraComponent* PlacementCamera = GetActivePlacementCamera();
-	if (!World || !PlacementCamera)
+	if (!World)
 	{
 		return false;
 	}
@@ -968,6 +969,13 @@ bool AAgentCharacter::EvaluateConveyorPlacement(FVector& OutLocation, FRotator& 
 	if (ConveyorPlacementPreview)
 	{
 		QueryParams.AddIgnoredActor(ConveyorPlacementPreview);
+	}
+
+	OutRotation = AgentFactory::SnapYawToGrid(static_cast<float>(ConveyorPlacementRotationSteps) * AgentFactory::QuarterTurnDegrees);
+
+	if (!PlacementCamera)
+	{
+		return false;
 	}
 
 	const FVector TraceStart = PlacementCamera->GetComponentLocation();
@@ -992,33 +1000,38 @@ bool AAgentCharacter::EvaluateConveyorPlacement(FVector& OutLocation, FRotator& 
 		return false;
 	}
 
-	const FVector SurfaceTraceStart = AimHit.ImpactPoint + FVector(0.0f, 0.0f, FMath::Max(100.0f, ConveyorPlacementSurfaceTraceHeight));
-	const FVector SurfaceTraceEnd = AimHit.ImpactPoint - FVector(0.0f, 0.0f, FMath::Max(100.0f, ConveyorPlacementSurfaceTraceDepth));
-
-	FHitResult SurfaceHit;
-	bool bHasSurfaceHit = World->LineTraceSingleByChannel(
-		SurfaceHit,
-		SurfaceTraceStart,
-		SurfaceTraceEnd,
-		AgentFactory::BuildPlacementTraceChannel,
-		QueryParams);
-
-	if (!bHasSurfaceHit)
+	const bool bSnappedToConveyorFace = TryGetConveyorFaceSnapLocation(AimHit, OutLocation);
+	if (!bSnappedToConveyorFace)
 	{
-		bHasSurfaceHit = World->LineTraceSingleByChannel(SurfaceHit, SurfaceTraceStart, SurfaceTraceEnd, ECC_Visibility, QueryParams);
-	}
+		const FVector PlacementProbeLocation = AimHit.ImpactPoint;
 
-	if (!bHasSurfaceHit)
-	{
-		return false;
-	}
+		const FVector SurfaceTraceStart = PlacementProbeLocation + FVector(0.0f, 0.0f, FMath::Max(100.0f, ConveyorPlacementSurfaceTraceHeight));
+		const FVector SurfaceTraceEnd = PlacementProbeLocation - FVector(0.0f, 0.0f, FMath::Max(100.0f, ConveyorPlacementSurfaceTraceDepth));
 
-	OutLocation = AgentFactory::SnapLocationToGrid(SurfaceHit.ImpactPoint);
-	OutRotation = AgentFactory::SnapYawToGrid(static_cast<float>(ConveyorPlacementRotationSteps) * AgentFactory::QuarterTurnDegrees);
+		FHitResult SurfaceHit;
+		bool bHasSurfaceHit = World->LineTraceSingleByChannel(
+			SurfaceHit,
+			SurfaceTraceStart,
+			SurfaceTraceEnd,
+			AgentFactory::BuildPlacementTraceChannel,
+			QueryParams);
 
-	if (SurfaceHit.ImpactNormal.Z < 0.85f)
-	{
-		return true;
+		if (!bHasSurfaceHit)
+		{
+			bHasSurfaceHit = World->LineTraceSingleByChannel(SurfaceHit, SurfaceTraceStart, SurfaceTraceEnd, ECC_Visibility, QueryParams);
+		}
+
+		if (!bHasSurfaceHit)
+		{
+			return false;
+		}
+
+		OutLocation = AgentFactory::SnapLocationToGrid(SurfaceHit.ImpactPoint);
+
+		if (SurfaceHit.ImpactNormal.Z < 0.85f)
+		{
+			return true;
+		}
 	}
 
 	FCollisionObjectQueryParams ObjectQueryParams;
@@ -1072,6 +1085,37 @@ bool AAgentCharacter::EvaluateConveyorPlacement(FVector& OutLocation, FRotator& 
 	}
 
 	bOutIsValid = true;
+	return true;
+}
+
+bool AAgentCharacter::TryGetConveyorFaceSnapLocation(const FHitResult& AimHit, FVector& OutLocation) const
+{
+	const AConveyorBeltStraight* HitConveyor = Cast<AConveyorBeltStraight>(AimHit.GetActor());
+	if (!HitConveyor)
+	{
+		return false;
+	}
+
+	const FTransform ConveyorTransform = HitConveyor->GetActorTransform();
+	FVector LocalImpact = ConveyorTransform.InverseTransformPosition(AimHit.ImpactPoint);
+	LocalImpact.Z = 0.0f;
+
+	if (LocalImpact.IsNearlyZero())
+	{
+		LocalImpact.X = AgentFactory::GridSize * 0.5f;
+	}
+
+	FVector SnapDirection = HitConveyor->GetActorForwardVector();
+	if (FMath::Abs(LocalImpact.X) >= FMath::Abs(LocalImpact.Y))
+	{
+		SnapDirection *= (LocalImpact.X >= 0.0f) ? 1.0f : -1.0f;
+	}
+	else
+	{
+		SnapDirection = HitConveyor->GetActorRightVector() * ((LocalImpact.Y >= 0.0f) ? 1.0f : -1.0f);
+	}
+
+	OutLocation = AgentFactory::SnapLocationToGrid(HitConveyor->GetActorLocation() + SnapDirection * AgentFactory::GridSize);
 	return true;
 }
 

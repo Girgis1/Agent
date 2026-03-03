@@ -9,6 +9,9 @@
 #include "Components/StaticMeshComponent.h"
 #include "UObject/ConstructorHelpers.h"
 
+float AConveyorBeltStraight::MasterBeltSpeed = 200.0f;
+float AConveyorBeltStraight::MasterBeltAcceleration = 700.0f;
+
 AConveyorBeltStraight::AConveyorBeltStraight()
 {
 	PrimaryActorTick.bCanEverTick = true;
@@ -64,6 +67,12 @@ AConveyorBeltStraight::AConveyorBeltStraight()
 	{
 		ConveyorMesh->SetStaticMesh(ConveyorMeshAsset.Object);
 	}
+}
+
+void AConveyorBeltStraight::SetMasterConveyorSettings(float InBeltSpeed, float InBeltAcceleration)
+{
+	MasterBeltSpeed = FMath::Max(0.0f, InBeltSpeed);
+	MasterBeltAcceleration = FMath::Max(0.0f, InBeltAcceleration);
 }
 
 void AConveyorBeltStraight::BeginPlay()
@@ -170,7 +179,7 @@ void AConveyorBeltStraight::ApplyBeltDrive(UPrimitiveComponent* PrimitiveCompone
 	const FVector DriveDirection = DirectionArrow ? DirectionArrow->GetForwardVector() : GetActorForwardVector();
 	const FVector CurrentVelocity = PrimitiveComponent->GetPhysicsLinearVelocity();
 	const float CurrentAlongBeltSpeed = FVector::DotProduct(CurrentVelocity, DriveDirection);
-	const float TargetSpeed = FMath::Max(0.0f, BeltSpeed);
+	const float TargetSpeed = bUseMasterSpeedSettings ? MasterBeltSpeed : FMath::Max(0.0f, BeltSpeed);
 	const float MissingSpeed = TargetSpeed - CurrentAlongBeltSpeed;
 
 	if (MissingSpeed <= KINDA_SMALL_NUMBER)
@@ -178,7 +187,8 @@ void AConveyorBeltStraight::ApplyBeltDrive(UPrimitiveComponent* PrimitiveCompone
 		return;
 	}
 
-	const float VelocityStep = FMath::Min(MissingSpeed, FMath::Max(0.0f, BeltAcceleration) * DeltaSeconds);
+	const float AppliedAcceleration = bUseMasterSpeedSettings ? MasterBeltAcceleration : FMath::Max(0.0f, BeltAcceleration);
+	const float VelocityStep = FMath::Min(MissingSpeed, AppliedAcceleration * DeltaSeconds);
 	if (VelocityStep <= KINDA_SMALL_NUMBER)
 	{
 		return;
