@@ -21,6 +21,7 @@
 #include "Engine/World.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Controller.h"
+#include "Camera/PlayerCameraManager.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "PhysicsEngine/PhysicsHandleComponent.h"
@@ -154,6 +155,8 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 	UpdateViewModeButtonHold(DeltaSeconds);
 	UpdateKeyboardMapButtonHold(DeltaSeconds);
 	UpdateControllerMapButtonHold(DeltaSeconds);
+	UpdateRollModeJumpHold(DeltaSeconds);
+	UpdateDronePilotCameraLimits();
 	AConveyorBeltStraight::SetMasterConveyorSettings(ConveyorMasterBeltSpeed);
 
 	if (bConveyorPlacementModeActive)
@@ -185,18 +188,8 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 
 	if (DroneCompanion)
 	{
-		DroneCompanion->SetFollowTarget(this);
-		DroneCompanion->SetViewReferenceRotation(GetControlRotation());
-		DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
-		DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
-		DroneCompanion->SetUseRollPilotControls(IsDronePilotMode() && !bMapModeActive && IsRollDronePilotMode());
-		ApplyDroneAssistState();
-		FVector ThirdPersonTargetLocation = FVector::ZeroVector;
-		FRotator ThirdPersonTargetRotation = FRotator::ZeroRotator;
-		if (GetThirdPersonDroneTarget(ThirdPersonTargetLocation, ThirdPersonTargetRotation))
-		{
-			DroneCompanion->SetThirdPersonCameraTarget(ThirdPersonTargetLocation, ThirdPersonTargetRotation);
-		}
+		SyncDroneCompanionControlState(IsDronePilotMode() && !bMapModeActive);
+		UpdateDroneCompanionThirdPersonTarget();
 
 		if (IsDroneInputModeActive())
 		{
@@ -391,13 +384,18 @@ void AAgentCharacter::ApplyViewMode(EAgentViewMode NewMode, bool bBlend)
 	bMiniMapViewingDroneCamera = false;
 	const EAgentViewMode PreviousViewMode = CurrentViewMode;
 	const bool bWasDronePilot = PreviousViewMode == EAgentViewMode::DronePilot;
+	if (NewMode != EAgentViewMode::DronePilot)
+	{
+		ResetCharacterCameraRoll();
+	}
 	FVector ThirdPersonTargetLocation = GetActorLocation();
 	FRotator ThirdPersonTargetRotation = GetControlRotation();
 	GetThirdPersonDroneTarget(ThirdPersonTargetLocation, ThirdPersonTargetRotation);
 	FVector ThirdPersonSwapStartLocation = ThirdPersonTargetLocation;
 	FRotator ThirdPersonSwapStartRotation = ThirdPersonTargetRotation;
 	const bool bUseFirstToThirdPersonSwap = NewMode == EAgentViewMode::ThirdPerson
-		&& PreviousViewMode == EAgentViewMode::FirstPerson;
+		&& PreviousViewMode == EAgentViewMode::FirstPerson
+		&& !bMiniMapModeActive;
 
 	if (bUseFirstToThirdPersonSwap && DroneCompanion)
 	{
@@ -534,12 +532,7 @@ void AAgentCharacter::ApplyViewMode(EAgentViewMode NewMode, bool bBlend)
 		}
 		else
 		{
-			DroneCompanion->SetFollowTarget(this);
-			DroneCompanion->SetViewReferenceRotation(GetControlRotation());
-			DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
-			DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
-			DroneCompanion->SetUseRollPilotControls(IsDronePilotMode() && !bMapModeActive && IsRollDronePilotMode());
-			ApplyDroneAssistState();
+			SyncDroneCompanionControlState(true);
 			DroneCompanion->SetCompanionMode(EDroneCompanionMode::PilotControlled);
 		}
 
@@ -586,12 +579,7 @@ void AAgentCharacter::ApplyViewMode(EAgentViewMode NewMode, bool bBlend)
 		}
 		else
 		{
-			DroneCompanion->SetFollowTarget(this);
-			DroneCompanion->SetViewReferenceRotation(GetControlRotation());
-			DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
-			DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
-			DroneCompanion->SetUseRollPilotControls(IsDronePilotMode() && !bMapModeActive && IsRollDronePilotMode());
-			ApplyDroneAssistState();
+			SyncDroneCompanionControlState(false);
 			DroneCompanion->SetCompanionMode(EDroneCompanionMode::BuddyFollow);
 		}
 
@@ -607,14 +595,21 @@ void AAgentCharacter::ApplyDroneAssistState()
 		return;
 	}
 
-	if (IsFreeFlyDronePilotMode())
+	if (IsRollDronePilotMode())
 	{
 		DroneCompanion->SetPilotStabilizerEnabled(false);
 		DroneCompanion->SetPilotHoverModeEnabled(false);
 		return;
 	}
 
-	if (IsRollDronePilotMode())
+	if (RollToFlightAssistTimeRemaining > 0.0f)
+	{
+		DroneCompanion->SetPilotStabilizerEnabled(true);
+		DroneCompanion->SetPilotHoverModeEnabled(true);
+		return;
+	}
+
+	if (IsFreeFlyDronePilotMode() || IsSpectatorDronePilotMode())
 	{
 		DroneCompanion->SetPilotStabilizerEnabled(false);
 		DroneCompanion->SetPilotHoverModeEnabled(false);
@@ -623,6 +618,83 @@ void AAgentCharacter::ApplyDroneAssistState()
 
 	DroneCompanion->SetPilotStabilizerEnabled(bDroneEntryAssistActive || bDroneStabilizerEnabled);
 	DroneCompanion->SetPilotHoverModeEnabled(bDroneEntryAssistActive || bDroneHoverModeEnabled);
+}
+
+void AAgentCharacter::EnterRollTransitionMode(bool bTrackHeldReturn, bool bFromCrashRecovery)
+{
+	if (!DroneCompanion || !IsDronePilotMode() || bMapModeActive || bMiniMapModeActive)
+	{
+		return;
+	}
+
+	CrashRollRecoveryStableTime = 0.0f;
+	bRollModeHoldStartedInFlight = bTrackHeldReturn;
+	bCrashRollRecoveryActive = bFromCrashRecovery;
+	RollModeJumpHeldDuration = 0.0f;
+	SetDronePilotControlMode(EAgentDronePilotControlMode::Roll);
+}
+
+void AAgentCharacter::ExitRollTransitionMode(bool bTryJumpLift)
+{
+	if (!DroneCompanion || !IsDronePilotMode())
+	{
+		return;
+	}
+
+	bRollModeJumpHeld = false;
+	bRollModeHoldStartedInFlight = false;
+	bCrashRollRecoveryActive = false;
+	CrashRollRecoveryStableTime = 0.0f;
+	RollModeJumpHeldDuration = 0.0f;
+
+	const EAgentDronePilotControlMode ReturnMode = LastFlightDronePilotControlMode == EAgentDronePilotControlMode::Roll
+		? EAgentDronePilotControlMode::Complex
+		: LastFlightDronePilotControlMode;
+	RollToFlightAssistTimeRemaining = bTryJumpLift ? FMath::Max(0.0f, RollToFlightAssistDuration) : 0.0f;
+	SetDronePilotControlMode(ReturnMode);
+}
+
+void AAgentCharacter::SyncDroneCompanionControlState(bool bAllowRollControls, bool bSuppressCameraMountRefresh)
+{
+	if (!DroneCompanion)
+	{
+		return;
+	}
+
+	DroneCompanion->SetFollowTarget(this);
+	DroneCompanion->SetViewReferenceRotation(GetControlRotation());
+	if (bSuppressCameraMountRefresh)
+	{
+		DroneCompanion->SetSuppressCameraMountRefresh(true);
+	}
+
+	DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
+	DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
+	DroneCompanion->SetUseSpectatorPilotControls(IsSpectatorDronePilotMode());
+	DroneCompanion->SetUseRollPilotControls(bAllowRollControls && IsRollDronePilotMode());
+	DroneCompanion->SetUseCrashRollRecoveryMode(bUseCrashRollRecovery);
+
+	if (bSuppressCameraMountRefresh)
+	{
+		DroneCompanion->SetSuppressCameraMountRefresh(false);
+	}
+
+	ApplyDroneAssistState();
+}
+
+void AAgentCharacter::UpdateDroneCompanionThirdPersonTarget()
+{
+	if (!DroneCompanion)
+	{
+		return;
+	}
+
+	FVector ThirdPersonTargetLocation = FVector::ZeroVector;
+	FRotator ThirdPersonTargetRotation = FRotator::ZeroRotator;
+	if (GetThirdPersonDroneTarget(ThirdPersonTargetLocation, ThirdPersonTargetRotation))
+	{
+		DroneCompanion->SetThirdPersonCameraTarget(ThirdPersonTargetLocation, ThirdPersonTargetRotation);
+	}
 }
 
 bool AAgentCharacter::GetThirdPersonDroneTarget(FVector& OutLocation, FRotator& OutRotation) const
@@ -681,17 +753,8 @@ void AAgentCharacter::SpawnDroneCompanionAtTransform(
 		return;
 	}
 
-	DroneCompanion->SetFollowTarget(this);
-	DroneCompanion->SetViewReferenceRotation(GetControlRotation());
-	DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
-	DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
-	DroneCompanion->SetUseRollPilotControls(IsDronePilotMode() && !bMapModeActive && IsRollDronePilotMode());
-	ApplyDroneAssistState();
-
-	FVector ThirdPersonTargetLocation = FVector::ZeroVector;
-	FRotator ThirdPersonTargetRotation = FRotator::ZeroRotator;
-	GetThirdPersonDroneTarget(ThirdPersonTargetLocation, ThirdPersonTargetRotation);
-	DroneCompanion->SetThirdPersonCameraTarget(ThirdPersonTargetLocation, ThirdPersonTargetRotation);
+	SyncDroneCompanionControlState(CurrentViewMode == EAgentViewMode::DronePilot && !bMapModeActive);
+	UpdateDroneCompanionThirdPersonTarget();
 	DroneCompanion->SetCompanionMode(InitialMode);
 }
 
@@ -1458,6 +1521,10 @@ bool AAgentCharacter::TryBeginPickup()
 	PickupPhysicsHandle->ReleaseComponent();
 
 	HeldPickupComponent = PrimitiveComponent;
+	HeldPickupDistance = FMath::Clamp(
+		FVector::Dist(ViewLocation, PickupCandidateLocation),
+		FMath::Max(0.0f, PickupMinHoldDistance),
+		FMath::Max(PickupMinHoldDistance, PickupMaxHoldDistance));
 	HeldPickupMassKg = FMath::Max(0.0f, PrimitiveComponent->GetMass());
 	HeldPickupTargetRotation = PrimitiveComponent->GetComponentRotation();
 	bPickupRotationModeActive = false;
@@ -1478,6 +1545,7 @@ void AAgentCharacter::EndPickup()
 	}
 
 	HeldPickupComponent.Reset();
+	HeldPickupDistance = 0.0f;
 	HeldPickupMassKg = 0.0f;
 	HeldPickupTargetRotation = FRotator::ZeroRotator;
 	bPickupRotationModeActive = false;
@@ -1509,7 +1577,10 @@ void AAgentCharacter::UpdateHeldPickup()
 	HeldPickupMassKg = FMath::Max(0.0f, HeldComponent->GetMass());
 	SyncPickupHandleSettings();
 
-	const float HoldDistance = FMath::Max(0.0f, PickupHoldDistance);
+	const float HoldDistance = FMath::Clamp(
+		HeldPickupDistance,
+		FMath::Max(0.0f, PickupMinHoldDistance),
+		FMath::Max(PickupMinHoldDistance, PickupMaxHoldDistance));
 	FVector DesiredTargetLocation = ViewLocation + ViewRotation.Vector() * HoldDistance;
 	if (CurrentViewMode == EAgentViewMode::ThirdPerson)
 	{
@@ -1552,6 +1623,7 @@ void AAgentCharacter::UpdateDronePilotInputs(float DeltaSeconds)
 
 	const bool bSimplePilotMode = !bMapModeActive && IsSimpleDronePilotMode();
 	const bool bFreeFlyPilotMode = !bMapModeActive && IsFreeFlyDronePilotMode();
+	const bool bSpectatorPilotMode = !bMapModeActive && IsSpectatorDronePilotMode();
 	const bool bRollPilotMode = !bMapModeActive && IsRollDronePilotMode();
 	const float KeyboardForwardInput = (bDronePitchForwardHeld ? 1.0f : 0.0f) - (bDronePitchBackwardHeld ? 1.0f : 0.0f);
 	float KeyboardRightInput = (bDroneRollRightHeld ? 1.0f : 0.0f) - (bDroneRollLeftHeld ? 1.0f : 0.0f);
@@ -1569,7 +1641,7 @@ void AAgentCharacter::UpdateDronePilotInputs(float DeltaSeconds)
 		KeyboardYawInput = (bDroneYawRightHeld ? 1.0f : 0.0f) - (bDroneYawLeftHeld ? 1.0f : 0.0f);
 		KeyboardVerticalInput = (bDroneThrottleUpHeld ? 1.0f : 0.0f) - (bDroneThrottleDownHeld ? 1.0f : 0.0f);
 	}
-	else if (bFreeFlyPilotMode)
+	else if (bFreeFlyPilotMode || bSpectatorPilotMode)
 	{
 		const float KeyboardUpInput = (bDroneYawRightHeld ? 1.0f : 0.0f) + (bDroneThrottleUpHeld ? 1.0f : 0.0f);
 		const float KeyboardDownInput = (bDroneYawLeftHeld ? 1.0f : 0.0f) + (bDroneThrottleDownHeld ? 1.0f : 0.0f);
@@ -1610,7 +1682,7 @@ void AAgentCharacter::UpdateDronePilotInputs(float DeltaSeconds)
 			DroneCompanion->AdjustCameraTilt(DroneGamepadPitchInput * DroneCompanion->SimpleCameraTiltAxisSpeed * DeltaSeconds);
 		}
 	}
-	else if (bFreeFlyPilotMode)
+	else if (bFreeFlyPilotMode || bSpectatorPilotMode)
 	{
 		GamepadVerticalInput = DroneGamepadRightTriggerInput - DroneGamepadLeftTriggerInput;
 		GamepadYawInput = 0.0f;
@@ -1633,6 +1705,7 @@ void AAgentCharacter::UpdateDronePilotInputs(float DeltaSeconds)
 	if (bDroneEntryAssistActive
 		&& IsDronePilotMode()
 		&& !bFreeFlyPilotMode
+		&& !bSpectatorPilotMode
 		&& !bRollPilotMode
 		&& FMath::Abs(VerticalInput) > FMath::Max(0.0f, DroneEntryAssistReleaseThreshold))
 	{
@@ -1659,11 +1732,154 @@ void AAgentCharacter::ResetDroneInputState()
 	bDroneYawRightHeld = false;
 	bDroneThrottleUpHeld = false;
 	bDroneThrottleDownHeld = false;
+	bRollModeHoldStartedInFlight = false;
+	bPendingRollReleaseToFlight = false;
+	bCrashRollRecoveryActive = false;
+	bRollModeJumpHeld = false;
+	CrashRollRecoveryStableTime = 0.0f;
+	RollToFlightAssistTimeRemaining = 0.0f;
+	RollModeJumpHeldDuration = 0.0f;
+	StoredRollJumpChargeAlpha = 0.0f;
 
 	if (DroneCompanion)
 	{
 		DroneCompanion->ResetPilotInputs();
 	}
+}
+
+void AAgentCharacter::ResetCharacterCameraRoll()
+{
+	if (AController* LocalController = GetController())
+	{
+		FRotator ResetRotation = LocalController->GetControlRotation();
+		ResetRotation.Pitch = 0.0f;
+		ResetRotation.Roll = 0.0f;
+		LocalController->SetControlRotation(ResetRotation);
+	}
+
+	if (CameraBoom)
+	{
+		FRotator BoomRotation = CameraBoom->GetRelativeRotation();
+		BoomRotation.Pitch = 0.0f;
+		BoomRotation.Roll = 0.0f;
+		CameraBoom->SetRelativeRotation(BoomRotation);
+	}
+
+	if (FirstPersonCamera)
+	{
+		FRotator CameraRotation = FirstPersonCamera->GetRelativeRotation();
+		CameraRotation.Pitch = 0.0f;
+		CameraRotation.Roll = 0.0f;
+		FirstPersonCamera->SetRelativeRotation(CameraRotation);
+	}
+
+	if (ThirdPersonTransitionCamera)
+	{
+		FRotator CameraRotation = ThirdPersonTransitionCamera->GetRelativeRotation();
+		CameraRotation.Pitch = 0.0f;
+		CameraRotation.Roll = 0.0f;
+		ThirdPersonTransitionCamera->SetRelativeRotation(CameraRotation);
+	}
+}
+
+void AAgentCharacter::UpdateDronePilotCameraLimits()
+{
+	APlayerController* const PlayerController = Cast<APlayerController>(GetController());
+	if (!PlayerController || !PlayerController->PlayerCameraManager)
+	{
+		return;
+	}
+
+	APlayerCameraManager* const CameraManager = PlayerController->PlayerCameraManager;
+	if (!bHasStoredDefaultViewPitchLimits)
+	{
+		DefaultViewPitchMin = CameraManager->ViewPitchMin;
+		DefaultViewPitchMax = CameraManager->ViewPitchMax;
+		bHasStoredDefaultViewPitchLimits = true;
+	}
+
+	const float FreeFlyPitchLimit = FMath::Clamp(FreeFlyUnlockedPitchLimit, 90.0f, 179.0f);
+	const float CurrentPitch = FRotator::NormalizeAxis(GetControlRotation().Pitch);
+	const float MinPitch = FMath::Min(DefaultViewPitchMin, DefaultViewPitchMax);
+	const float MaxPitch = FMath::Max(DefaultViewPitchMin, DefaultViewPitchMax);
+	const bool bNeedPitchUnwind = CurrentPitch < MinPitch || CurrentPitch > MaxPitch;
+	const bool bUseUnlockedPitch = IsDronePilotMode()
+		&& !bMapModeActive
+		&& !bMiniMapModeActive
+		&& (IsFreeFlyDronePilotMode() || bNeedPitchUnwind);
+
+	CameraManager->ViewPitchMin = bUseUnlockedPitch ? -FreeFlyPitchLimit : DefaultViewPitchMin;
+	CameraManager->ViewPitchMax = bUseUnlockedPitch ? FreeFlyPitchLimit : DefaultViewPitchMax;
+}
+
+void AAgentCharacter::UpdateRollModeJumpHold(float DeltaSeconds)
+{
+	RollToFlightAssistTimeRemaining = FMath::Max(0.0f, RollToFlightAssistTimeRemaining - DeltaSeconds);
+
+	if (DroneCompanion
+		&& bUseCrashRollRecovery
+		&& IsDronePilotMode()
+		&& !bMapModeActive
+		&& !bMiniMapModeActive
+		&& DroneCompanion->ConsumePendingCrashRollRecovery())
+	{
+		EnterRollTransitionMode(false, true);
+	}
+
+	if (bCrashRollRecoveryActive)
+	{
+		if (!DroneCompanion || !IsDronePilotMode() || !IsRollDronePilotMode())
+		{
+			bCrashRollRecoveryActive = false;
+			CrashRollRecoveryStableTime = 0.0f;
+		}
+		else if (DroneCompanion->IsStableForRollRecovery())
+		{
+			CrashRollRecoveryStableTime += FMath::Max(0.0f, DeltaSeconds);
+			if (CrashRollRecoveryStableTime >= FMath::Max(0.0f, CrashRollRecoveryStableDelay))
+			{
+				ExitRollTransitionMode(true);
+				return;
+			}
+		}
+		else
+		{
+			CrashRollRecoveryStableTime = 0.0f;
+		}
+	}
+
+	if (!bRollModeJumpHeld)
+	{
+		return;
+	}
+
+	if (!IsDronePilotMode() || !IsRollDronePilotMode() || !DroneCompanion)
+	{
+		bRollModeJumpHeld = false;
+		CrashRollRecoveryStableTime = 0.0f;
+		RollModeJumpHeldDuration = 0.0f;
+		return;
+	}
+
+	RollModeJumpHeldDuration += FMath::Max(0.0f, DeltaSeconds);
+}
+
+void AAgentCharacter::SyncControllerRotationToDroneCamera()
+{
+	if (!DroneCompanion || !GetController())
+	{
+		return;
+	}
+
+	FVector DroneCameraLocation = FVector::ZeroVector;
+	FRotator DroneCameraRotation = FRotator::ZeroRotator;
+	if (!DroneCompanion->GetDroneCameraTransform(DroneCameraLocation, DroneCameraRotation))
+	{
+		return;
+	}
+
+	GetController()->SetControlRotation(DroneCameraRotation);
+	DroneCompanion->SetViewReferenceRotation(DroneCameraRotation);
 }
 
 bool AAgentCharacter::IsDronePilotMode() const
@@ -1686,6 +1902,11 @@ bool AAgentCharacter::IsFreeFlyDronePilotMode() const
 	return DronePilotControlMode == EAgentDronePilotControlMode::FreeFly;
 }
 
+bool AAgentCharacter::IsSpectatorDronePilotMode() const
+{
+	return DronePilotControlMode == EAgentDronePilotControlMode::SpectatorCam;
+}
+
 bool AAgentCharacter::IsRollDronePilotMode() const
 {
 	return DronePilotControlMode == EAgentDronePilotControlMode::Roll;
@@ -1698,6 +1919,23 @@ void AAgentCharacter::ToggleDronePilotControlMode()
 
 void AAgentCharacter::SetDronePilotControlMode(EAgentDronePilotControlMode NewMode)
 {
+	if (DroneCompanion && IsDroneInputModeActive())
+	{
+		SyncControllerRotationToDroneCamera();
+	}
+
+	if (NewMode != EAgentDronePilotControlMode::Roll)
+	{
+		bRollModeHoldStartedInFlight = false;
+		bPendingRollReleaseToFlight = false;
+		bRollModeJumpHeld = false;
+		RollModeJumpHeldDuration = 0.0f;
+		bCrashRollRecoveryActive = false;
+		CrashRollRecoveryStableTime = 0.0f;
+		StoredRollJumpChargeAlpha = 0.0f;
+		LastFlightDronePilotControlMode = NewMode;
+	}
+
 	DronePilotControlMode = NewMode;
 
 	switch (DronePilotControlMode)
@@ -1708,6 +1946,7 @@ void AAgentCharacter::SetDronePilotControlMode(EAgentDronePilotControlMode NewMo
 		bDroneHoverModeEnabled = false;
 		break;
 	case EAgentDronePilotControlMode::FreeFly:
+	case EAgentDronePilotControlMode::SpectatorCam:
 		bUseSimpleDronePilotControls = false;
 		bDroneStabilizerEnabled = false;
 		bDroneHoverModeEnabled = false;
@@ -1737,16 +1976,13 @@ void AAgentCharacter::SetDronePilotControlMode(EAgentDronePilotControlMode NewMo
 
 	if (DroneCompanion)
 	{
-		DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
-		DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
-		DroneCompanion->SetUseRollPilotControls(IsDronePilotMode() && !bMapModeActive && IsRollDronePilotMode());
-		ApplyDroneAssistState();
+		SyncDroneCompanionControlState(IsDronePilotMode() && !bMapModeActive);
 	}
 }
 
 void AAgentCharacter::CycleDronePilotControlMode(int32 Direction)
 {
-	constexpr int32 PilotModeCount = 6;
+	constexpr int32 PilotModeCount = 7;
 	const int32 CurrentIndex = static_cast<int32>(DronePilotControlMode);
 	const int32 WrappedIndex = (CurrentIndex + Direction + PilotModeCount) % PilotModeCount;
 	SetDronePilotControlMode(static_cast<EAgentDronePilotControlMode>(WrappedIndex));
@@ -1755,9 +1991,7 @@ void AAgentCharacter::CycleDronePilotControlMode(int32 Direction)
 		&& (DroneCompanion->GetCompanionMode() == EDroneCompanionMode::MapMode
 			|| DroneCompanion->GetCompanionMode() == EDroneCompanionMode::MiniMapFollow))
 	{
-		DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
-		DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
-		DroneCompanion->SetUseRollPilotControls(false);
+		SyncDroneCompanionControlState(false, true);
 	}
 }
 
@@ -1773,6 +2007,8 @@ void AAgentCharacter::ToggleMapMode()
 
 	if (!bMapModeActive)
 	{
+		SyncControllerRotationToDroneCamera();
+
 		if (bConveyorPlacementModeActive)
 		{
 			ExitConveyorPlacementMode();
@@ -1803,14 +2039,7 @@ void AAgentCharacter::ToggleMapMode()
 
 		SetThirdPersonProxyVisible(false);
 		bMapModeActive = true;
-		DroneCompanion->SetFollowTarget(this);
-		DroneCompanion->SetViewReferenceRotation(GetControlRotation());
-		DroneCompanion->SetSuppressCameraMountRefresh(true);
-		DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
-		DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
-		DroneCompanion->SetUseRollPilotControls(false);
-		DroneCompanion->SetSuppressCameraMountRefresh(false);
-		ApplyDroneAssistState();
+		SyncDroneCompanionControlState(false, true);
 		DroneCompanion->SetNextMapModeUsesEntryLift(CurrentViewMode != EAgentViewMode::DronePilot);
 		DroneCompanion->SetCompanionMode(EDroneCompanionMode::MapMode);
 
@@ -1838,6 +2067,8 @@ void AAgentCharacter::EnterMiniMapMode()
 		ExitConveyorPlacementMode();
 	}
 
+	SyncControllerRotationToDroneCamera();
+	MiniMapReturnViewMode = CurrentViewMode;
 	ApplyViewMode(EAgentViewMode::FirstPerson, true);
 
 	if (!DroneCompanion)
@@ -1848,14 +2079,7 @@ void AAgentCharacter::EnterMiniMapMode()
 	bMiniMapModeActive = true;
 	bMiniMapViewingDroneCamera = false;
 	SetThirdPersonProxyVisible(false);
-	DroneCompanion->SetFollowTarget(this);
-	DroneCompanion->SetViewReferenceRotation(GetControlRotation());
-	DroneCompanion->SetSuppressCameraMountRefresh(true);
-	DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
-	DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
-	DroneCompanion->SetUseRollPilotControls(false);
-	DroneCompanion->SetSuppressCameraMountRefresh(false);
-	ApplyDroneAssistState();
+	SyncDroneCompanionControlState(false, true);
 	DroneCompanion->SetCompanionMode(EDroneCompanionMode::MiniMapFollow);
 }
 
@@ -1866,7 +2090,7 @@ void AAgentCharacter::ExitMiniMapMode()
 		return;
 	}
 
-	ApplyViewMode(EAgentViewMode::FirstPerson, true);
+	ApplyViewMode(MiniMapReturnViewMode, true);
 }
 
 void AAgentCharacter::FocusMiniMapDroneCamera()
@@ -1945,7 +2169,7 @@ void AAgentCharacter::DoLook(float Yaw, float Pitch)
 {
 	if (IsDroneInputModeActive()
 		&& bLockCharacterMovementDuringDronePilot
-		&& !(IsDronePilotMode() && (IsFreeFlyDronePilotMode() || IsRollDronePilotMode())))
+		&& !(IsDronePilotMode() && (IsFreeFlyDronePilotMode() || IsSpectatorDronePilotMode() || IsRollDronePilotMode())))
 	{
 		return;
 	}
@@ -1961,9 +2185,18 @@ void AAgentCharacter::DoLook(float Yaw, float Pitch)
 
 void AAgentCharacter::DoJumpStart()
 {
-	if (IsDronePilotMode() && IsRollDronePilotMode() && DroneCompanion)
+	if (IsDronePilotMode() && DroneCompanion && !bMapModeActive && !bMiniMapModeActive)
 	{
-		DroneCompanion->TryRollJump();
+		if (!IsRollDronePilotMode())
+		{
+			EnterRollTransitionMode(true, false);
+		}
+
+		if (!bRollModeJumpHeld)
+		{
+			bRollModeJumpHeld = true;
+			RollModeJumpHeldDuration = 0.0f;
+		}
 		return;
 	}
 
@@ -1977,6 +2210,34 @@ void AAgentCharacter::DoJumpStart()
 
 void AAgentCharacter::DoJumpEnd()
 {
+	if (bRollModeJumpHeld)
+	{
+		const float HeldDuration = RollModeJumpHeldDuration;
+		const float ChargeAlpha = RollModeJumpHoldTime > KINDA_SMALL_NUMBER
+			? FMath::Clamp(HeldDuration / RollModeJumpHoldTime, 0.0f, 1.0f)
+			: 1.0f;
+		bRollModeJumpHeld = false;
+		RollModeJumpHeldDuration = 0.0f;
+
+		if (IsDronePilotMode() && IsRollDronePilotMode() && DroneCompanion)
+		{
+			if (bRollModeHoldStartedInFlight)
+			{
+				bRollModeHoldStartedInFlight = false;
+				StoredRollJumpChargeAlpha = FMath::Max(StoredRollJumpChargeAlpha, ChargeAlpha);
+				return;
+			}
+
+			const float EffectiveChargeAlpha = FMath::Max(StoredRollJumpChargeAlpha, ChargeAlpha);
+			StoredRollJumpChargeAlpha = 0.0f;
+			if (!DroneCompanion->TryRollJump(EffectiveChargeAlpha))
+			{
+				ExitRollTransitionMode(true);
+			}
+		}
+		return;
+	}
+
 	if (IsDronePilotMode() && IsRollDronePilotMode())
 	{
 		return;
@@ -2143,7 +2404,7 @@ void AAgentCharacter::OnDroneCameraTiltUpPressed()
 {
 	if (DroneCompanion)
 	{
-		DroneCompanion->AdjustCameraFieldOfView(DroneCompanion->DroneCameraFieldOfViewStep);
+		DroneCompanion->AdjustCameraTilt(DroneCompanion->DroneCameraTiltStep);
 	}
 }
 
@@ -2151,7 +2412,7 @@ void AAgentCharacter::OnDroneCameraTiltDownPressed()
 {
 	if (DroneCompanion)
 	{
-		DroneCompanion->AdjustCameraFieldOfView(-DroneCompanion->DroneCameraFieldOfViewStep);
+		DroneCompanion->AdjustCameraTilt(-DroneCompanion->DroneCameraTiltStep);
 	}
 }
 

@@ -43,7 +43,8 @@ enum class EAgentDronePilotControlMode : uint8
 	HorizonHover,
 	Simple,
 	FreeFly,
-	Roll
+	Roll,
+	SpectatorCam
 };
 
 UENUM(BlueprintType)
@@ -114,20 +115,29 @@ protected:
 	void OnViewModeButtonPressed();
 	void OnViewModeButtonReleased();
 	void UpdateViewModeButtonHold(float DeltaSeconds);
+	void UpdateRollModeJumpHold(float DeltaSeconds);
 	void CycleViewMode();
 	void ApplyViewMode(EAgentViewMode NewMode, bool bBlend);
 	void SpawnDroneCompanion();
 	void SpawnDroneCompanionAtTransform(const FVector& SpawnLocation, const FRotator& SpawnRotation, EDroneCompanionMode InitialMode);
 	void DespawnDroneCompanion();
 	void ApplyDroneAssistState();
+	void EnterRollTransitionMode(bool bTrackHeldReturn, bool bFromCrashRecovery);
+	void ExitRollTransitionMode(bool bTryJumpLift);
+	void SyncDroneCompanionControlState(bool bAllowRollControls, bool bSuppressCameraMountRefresh = false);
+	void UpdateDroneCompanionThirdPersonTarget();
 	void UpdateDronePilotInputs(float DeltaSeconds);
 	void UpdateThirdPersonTransition(float DeltaSeconds);
 	bool GetThirdPersonDroneTarget(FVector& OutLocation, FRotator& OutRotation) const;
 	void ResetDroneInputState();
+	void ResetCharacterCameraRoll();
+	void UpdateDronePilotCameraLimits();
+	void SyncControllerRotationToDroneCamera();
 	bool IsDronePilotMode() const;
 	bool IsDroneInputModeActive() const;
 	bool IsSimpleDronePilotMode() const;
 	bool IsFreeFlyDronePilotMode() const;
+	bool IsSpectatorDronePilotMode() const;
 	bool IsRollDronePilotMode() const;
 	void SetDronePilotControlMode(EAgentDronePilotControlMode NewMode);
 	void CycleDronePilotControlMode(int32 Direction);
@@ -253,6 +263,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone")
 	float DroneEntryAssistReleaseThreshold = 0.05f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Crash")
+	bool bUseCrashRollRecovery = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Crash")
+	float CrashRollRecoveryStableDelay = 0.35f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera")
 	FVector FirstPersonCameraOffset = FVector(0.0f, 0.0f, 64.0f);
 
@@ -267,6 +283,15 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera")
 	float DroneViewHoldTime = 0.25f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
+	float RollModeJumpHoldTime = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
+	float RollToFlightAssistDuration = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
+	float FreeFlyUnlockedPitchLimit = 179.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Map")
 	float ControllerMapButtonHoldTime = 0.35f;
@@ -308,7 +333,10 @@ public:
 	float PickupTraceRadius = 5.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
-	float PickupHoldDistance = 600.0f;
+	float PickupMinHoldDistance = 125.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	float PickupMaxHoldDistance = 650.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
 	FVector ThirdPersonPickupHoldOffset = FVector(7.5f, 0.0f, 0.0f);
@@ -369,7 +397,13 @@ protected:
 	bool bMiniMapViewingDroneCamera = false;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
+	EAgentViewMode MiniMapReturnViewMode = EAgentViewMode::FirstPerson;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
 	EAgentDronePilotControlMode DronePilotControlMode = EAgentDronePilotControlMode::Complex;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
+	EAgentDronePilotControlMode LastFlightDronePilotControlMode = EAgentDronePilotControlMode::Complex;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
 	bool bDroneStabilizerEnabled = false;
@@ -395,16 +429,28 @@ protected:
 	bool bThirdPersonTransitionActive = false;
 	bool bViewModeButtonHeld = false;
 	bool bViewModeHoldTriggered = false;
+	bool bHasStoredDefaultViewPitchLimits = false;
 	bool bKeyboardMapButtonHeld = false;
 	bool bKeyboardMapButtonTriggeredMiniMap = false;
 	bool bControllerMapButtonHeld = false;
 	bool bControllerMapButtonTriggeredMiniMap = false;
+	bool bRollModeHoldStartedInFlight = false;
+	bool bPendingRollReleaseToFlight = false;
+	bool bCrashRollRecoveryActive = false;
+	bool bRollModeJumpHeld = false;
 	bool bPickupRotationModeActive = false;
 
 	float ThirdPersonTransitionElapsed = 0.0f;
 	float ViewModeButtonHeldDuration = 0.0f;
 	float KeyboardMapButtonHeldDuration = 0.0f;
 	float ControllerMapButtonHeldDuration = 0.0f;
+	float DefaultViewPitchMin = -89.9f;
+	float DefaultViewPitchMax = 89.9f;
+	float CrashRollRecoveryStableTime = 0.0f;
+	float RollToFlightAssistTimeRemaining = 0.0f;
+	float RollModeJumpHeldDuration = 0.0f;
+	float StoredRollJumpChargeAlpha = 0.0f;
+	float HeldPickupDistance = 0.0f;
 	float HeldPickupMassKg = 0.0f;
 	FVector ThirdPersonTransitionStartLocation = FVector::ZeroVector;
 	FRotator ThirdPersonTransitionStartRotation = FRotator::ZeroRotator;
