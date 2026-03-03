@@ -22,8 +22,8 @@
 - Controller `Y` (`Gamepad_FaceButton_Top`) now mirrors `V` for the hold-aware camera behavior.
 - Physics grab interaction is now a shared active-camera system in the main gameplay views:
   - hold `E` on keyboard or hold controller `RT` to grab and drag simulating physics objects
-  - it now only works in `Third Person` and `First Person`
-  - it is disabled in `Drone Pilot`, `Map Mode`, `MiniMap`, and factory placement mode
+  - it now works in `Third Person`, `First Person`, and `Drone Pilot`
+  - it is disabled in `Map Mode`, `MiniMap`, and factory placement mode
   - the system uses a sphere trace with a visible debug sphere to show the pickup influence area
   - objects are grabbed at the trace hit point (pinch point), not their center, so long props can pivot naturally when dragged from one end
   - while held, the system now matches the older `SandBox_01` style again: it uses a real `PhysicsHandleComponent` with a fixed hold point in front of the active camera instead of the abandoned rope/tether system
@@ -51,9 +51,10 @@
   - `Simple`
   - `Free Fly`
   - `Roll`
-- `B` on keyboard still cycles forward through those six modes.
-- Controller `D-pad Left` now cycles backward through the six drone modes.
-- Controller `D-pad Right` now cycles forward through the six drone modes.
+  - `Spectator Cam`
+- `B` on keyboard still cycles forward through those seven modes.
+- Controller `D-pad Left` now cycles backward through the seven drone modes.
+- Controller `D-pad Right` now cycles forward through the seven drone modes.
 - Controller bumpers are no longer used for drone mode cycling; they are now reserved for conveyor placement rotation.
 - Mode meanings:
   - `Complex`: full acro / rate with no self-level and no hover assist
@@ -144,27 +145,34 @@
     - `BuildPlacement` = `ECC_GameTraceChannel1`
     - `FactoryBuildable` = `ECC_GameTraceChannel2`
   - `Plan.md` now tracks the conveyor MVP architecture and next steps
-- Drone controls in `Drone Pilot`:
+- Drone controls in `Drone Pilot` (authoritative summary from `SetupPlayerInputComponent()` and `UpdateDronePilotInputs()`):
+  - Shared:
+    - `B` cycles drone pilot mode forward
+    - controller `D-pad Left` / `D-pad Right` cycle drone pilot mode backward / forward
+    - controller `D-pad Up` / `D-pad Down` tilt the drone camera in `5` degree steps
+    - `Space` / controller `A` enters `Roll` from any non-map flight mode and starts charging the next roll jump
+    - while already in `Roll`, hold `Space` / `A` to charge and release to jump if grounded; releasing airborne exits smoothly back toward the last flight mode
   - `Complex`, `Horizon`, and `Horizon + Hover`:
     - Keyboard: `W` / `S` pitch, `A` / `D` roll, `Q` / `E` yaw, `R` / `F` thrust
     - Controller: left stick `X` yaw, left stick `Y` thrust, right stick `X` roll, right stick `Y` pitch
   - `Simple`:
     - Keyboard: `W` / `S` tilt forward / back, `A` / `D` tilt left / right, `Q` / `E` yaw, `R` / `F` collective up / down
-    - Controller: left stick tilts the drone, right stick `X` yaws, right stick `Y` tilts the camera, `RT` adds thrust, `LT` adds reverse thrust
+    - Controller: left stick moves the drone, right stick `X` yaws, right stick `Y` tilts the camera, `RT` rises, `LT` drops
   - `Free Fly`:
-    - Keyboard: `WASD` move, `Q` / `E` and `R` / `F` move vertically, mouse / look controls where the camera faces
+    - Keyboard: `WASD` move relative to the current view, `E` / `R` move up, `Q` / `F` move down, mouse / look controls orientation
     - Controller: left stick moves, right stick looks, `RT` rises, `LT` drops
   - `Roll`:
-    - Keyboard: `WASD` roll the ball along the ground relative to camera yaw, `Space` jumps
-    - Controller: left stick rolls the ball along the ground relative to camera yaw, right stick looks, `A` jumps
-  - Shared:
-    - D-pad up / down adjusts drone camera FOV in `+5` / `-5` steps
+    - Keyboard: `WASD` drives relative to the current camera, `Space` charges / jumps
+    - Controller: left stick drives, right stick looks, `A` charges / jumps
+  - `Spectator Cam`:
+    - Keyboard: `WASD` move, `E` / `R` move up, `Q` / `F` move down, mouse / look controls orientation
+    - Controller: left stick moves, right stick looks, `RT` rises, `LT` drops
 - Drone systems currently include:
   - always-simulating rigid-body flight on the drone actor
-  - pilot mode with six presets: `Complex`, `Horizon`, `Horizon + Hover`, `Simple`, `Free Fly`, and `Roll`
+  - pilot mode with seven presets: `Complex`, `Horizon`, `Horizon + Hover`, `Simple`, `Free Fly`, `Roll`, and `Spectator Cam`
   - optional complex-mode hover-thrust assist that keeps the drone flying like a thrust vehicle while making neutral throttle sit near hover instead of dropping immediately
   - a rebuilt simple mode that now uses DJI-like assisted horizontal velocity control, vertical hover compensation, stronger braking, faster default tilt, camera tilt on the right stick, and an optional follow-target distance cap
-  - a dedicated spectator-style free-fly mode that now teleports smoothly like a utility camera and does not inherit the physics "snap" / elastic response from the main drone modes
+  - a dedicated `Free Fly` mode for camera-relative 6DoF movement, plus a separate `Spectator Cam` mode for a simpler Unreal-style dev fly camera
   - a fully faked third-person camera path where the player uses the stock spring-arm `FollowCamera`, the real drone is despawned in third person, and a hidden-shadow proxy mesh is attached to the character camera path purely for visual continuity
   - a dedicated top-down map mode with its own movement model and a 2-second camera pitch / FOV transition in and out
   - a temporary held `MiniMap` top-down follow mode that tracks the player from a fixed overhead height
@@ -182,7 +190,7 @@
 ## Current Direction
 - The drone is now being treated as a persistent companion vehicle instead of an effect inside the character camera rig.
 - The main camera fantasy is a three-mode loop: normal third-person camera with a drone proxy animation, direct drone piloting, and first-person character view with the drone as a left-shoulder companion.
-- Physics changes should continue pushing the main drone modes toward a believable flying rigid body that can be knocked around; `Free Fly` is the intentional exception as a utility spectator-style mode.
+- Physics changes should continue pushing the main drone modes toward a believable flying rigid body that can be knocked around; `Free Fly` and `Spectator Cam` are the intentional utility-style exceptions.
 - Guardrail for future edits: in any drone mode where character look input is locked (`Complex`, `Horizon`, `Horizon + Hover`, and `Simple`), never drive planar movement from `GetControlRotation()` / `ViewReferenceRotation`. That frame freezes when look is locked and makes the drone feel world-locked. Use the drone body's yaw (or the live drone camera yaw if camera yaw is ever decoupled) as the movement frame instead. `Free Fly` and `Map` are the exceptions because they intentionally use view-driven movement.
 - Speed rule for the main piloted modes: keep the user-facing max speed aligned at `2600` uu/s unless they explicitly ask for a different cap. That currently applies to the rigid-body clamp, `Simple`, `Free Fly`, and map translation speeds. `BuddyFollow` is intentionally exempt because it has its own slower return cap.
 
@@ -199,8 +207,56 @@
   - better collision response, surface scraping, and obstacle avoidance in autonomous modes
   - optional sim features like battery sag, propwash, or camera tilt
 
+## Current Controls Reference
+- Use this section as the current source of truth for player-facing controls. It mirrors the live bindings in `Source/Agent/AgentCharacter.cpp`.
+- Core locomotion:
+  - character movement, look, and the base on-foot jump still come from the project's Enhanced Input actions (`MoveAction`, `LookAction`, `JumpAction`)
+  - the default template mappings are still expected: `WASD`, mouse look, `Space`, and left stick / right stick / controller `A`
+- Camera and view:
+  - tap `V` on keyboard or controller `Y` to toggle `First Person` / `Third Person`
+  - hold `V` or `Y` for `0.25s` (`DroneViewHoldTime`) to enter `Drone Pilot`
+  - tap `M` on keyboard or controller `View/Back` to toggle `Map Mode`
+  - hold `M` or `View/Back` for `0.35s` (`ControllerMapButtonHoldTime`) to enter `MiniMap`
+  - tapping `M` / `View/Back` again while already in `MiniMap` focuses the drone camera instead of exiting
+- Drone pilot:
+  - keyboard `B` cycles drone pilot mode forward
+  - controller `D-pad Left` / `D-pad Right` cycle drone pilot mode backward / forward
+  - controller `D-pad Up` / `D-pad Down` tilt the drone camera in `5` degree steps
+  - keyboard `Space` / controller `A` are the shared roll controls:
+    - from non-map drone flight, pressing them enters `Roll` and begins charging the next roll jump
+    - in `Roll`, releasing while grounded performs the charged jump
+    - in `Roll`, releasing while airborne exits smoothly toward the last flight mode
+  - `Complex`, `Horizon`, `Horizon + Hover`:
+    - keyboard `W/S` pitch, `A/D` roll, `Q/E` yaw, `R/F` thrust
+    - controller left stick `X` yaw, left stick `Y` thrust, right stick `X` roll, right stick `Y` pitch
+  - `Simple`:
+    - keyboard `W/S` forward / back tilt, `A/D` left / right tilt, `Q/E` yaw, `R/F` vertical
+    - controller left stick moves the drone, right stick `X` yaws, right stick `Y` tilts the camera, `RT/LT` move vertically
+  - `Free Fly`:
+    - keyboard `WASD` move relative to view, `E/R` up, `Q/F` down
+    - controller left stick moves, right stick looks, `RT` up, `LT` down
+  - `Roll`:
+    - keyboard `WASD` drives relative to camera, `Space` charges / jumps
+    - controller left stick drives, right stick looks, `A` charges / jumps
+  - `Spectator Cam`:
+    - keyboard `WASD` move, `E/R` up, `Q/F` down
+    - controller left stick moves, right stick looks, `RT` up, `LT` down
+- Pickup and interaction:
+  - hold keyboard `E` or controller `RT` to grab and hold physics objects at the pinch point
+  - pickup works in `Third Person`, `First Person`, and `Drone Pilot`
+  - pickup is disabled in `Map Mode`, `MiniMap`, and factory placement mode
+  - while holding an object on controller, hold `LT` to enter loose rotation assist and use the right stick to guide the held object relative to the active camera
+  - keyboard `[` / `]` adjust player pickup strength by `-0.1` / `+0.1` and resync drone pickup strength to `10%` of the player value
+  - keyboard `E` remains context-sensitive: if no pickup starts, it falls back to the drone's right-side input
+- Factory placement:
+  - keyboard `1` / `2` / `3` toggle conveyor / storage bin / resource spawner placement
+  - controller `X` toggles the current factory placement mode
+  - left mouse / controller `RT` place the current buildable
+  - right mouse / controller `B` cancel placement
+  - controller `LB` / `RB` rotate the placement preview
+
 ## Build Status
-- Last confirmed successful build on 2026-03-03:
+- Last confirmed successful build on 2026-03-04:
   - `AgentEditor Win64 Development` using `D:\UnrealEngine\UE_5.7\Engine\Build\BatchFiles\Build.bat`
 - For this project's current engine install (`UE 5.7`), keep both `Source/Agent.Target.cs` and `Source/AgentEditor.Target.cs` on:
   - `DefaultBuildSettings = BuildSettingsVersion.V6;`

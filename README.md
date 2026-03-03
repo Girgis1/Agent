@@ -7,7 +7,7 @@ The project currently supports:
 - A direct drone pilot mode
 - A first-person character mode
 - A top-down map mode
-- Multiple drone control presets, from FPV-style flight to a spectator-style free fly camera
+- Multiple drone control presets, from FPV-style flight to a separate spectator-style dev camera
 
 ## Engine
 
@@ -18,7 +18,7 @@ The project currently supports:
 
 ### Camera Modes
 
-Press `V` to cycle through:
+Tap `V` (or controller `Y`) to toggle the character cameras. Hold it to enter `Drone Pilot`:
 
 1. `Third Person`
 Uses the standard third-person spring-arm camera. The drone is faked here with a shadow proxy mesh for visual continuity.
@@ -31,7 +31,7 @@ Switches view to the character's first-person camera while the drone runs as a c
 
 ### Map Mode
 
-Press `M` (or the controller back/view button) to toggle `Map Mode`.
+Tap `M` (or the controller back/view button) to toggle `Map Mode`. Hold it to enter `MiniMap`.
 
 In map mode:
 - The drone camera points downward
@@ -41,7 +41,7 @@ In map mode:
 
 ## Drone Control Modes
 
-Press `B` on keyboard or `D-pad Left` on controller to cycle:
+Use `B` on keyboard to cycle forward, or `Gamepad D-pad Left / Right` to cycle backward / forward:
 
 1. `Complex`
 Full acro / rate style flight.
@@ -56,72 +56,78 @@ Self-level plus hover-style thrust assist.
 Beginner-friendly assisted drone mode inspired by consumer DJI-style flight.
 
 5. `Free Fly`
-A smooth Unreal spectator-style free camera mode.
+Camera-relative 6DoF flight that can freely pitch through vertical and roll upside down.
 
-## Default Controls
+6. `Roll`
+Grounded / trick mode that preserves momentum and uses the roll-jump charge system.
 
-### Shared
+7. `Spectator Cam`
+A plain Unreal-style dev fly camera with simple first-person fly controls.
 
-- `V`: cycle camera mode
-- `M`: toggle map mode
-- `B`: cycle drone control mode
-- `Gamepad D-pad Left`: cycle drone control mode
-- `Gamepad Back/View`: toggle map mode
-- `Gamepad D-pad Up/Down`: tilt drone camera up/down
+## Controls
 
-### Drone Pilot
+### On Foot
 
-#### Complex / Horizon / Horizon + Hover
+- Character locomotion still uses the project's Enhanced Input mappings (default template bindings are `WASD`, mouse look, and `Space`, plus left stick / right stick / `Gamepad A`).
+- `E`: hold a physics object from the exact pinch point if one is in range; otherwise it falls back to the drone's context-sensitive right-side input.
+- `[` / `]`: decrease / increase player pickup strength by `0.1` (drone pickup strength stays synced to `10%` of the player value).
+- `Gamepad RT`: hold to pick up a physics object, or place a buildable while factory placement mode is active.
+- `Gamepad LT` while holding an object: enable loose pickup rotation; right stick guides the held object relative to the active camera.
 
-Keyboard:
-- `W/S`: pitch
-- `A/D`: roll
-- `Q/E`: yaw
-- `R/F`: thrust up/down
+### Camera And View
 
-Controller:
-- Left stick `X`: yaw
-- Left stick `Y`: thrust
-- Right stick `X`: roll
-- Right stick `Y`: pitch
+- `V` / `Gamepad Y`: tap toggles between `First Person` and `Third Person`. Hold for about `0.25s` to enter `Drone Pilot`.
+- `M` / `Gamepad View/Back`: tap toggles `Map Mode`. Hold for about `0.35s` to enter `MiniMap`. Tapping again while already in `MiniMap` focuses the drone camera.
+- `Gamepad D-pad Up / Down`: tilt the drone camera up / down in `5` degree steps.
 
-#### Simple
+### Drone Pilot Shared
 
-Keyboard:
-- `W/S`: tilt forward/back
-- `A/D`: tilt left/right
-- `Q/E`: yaw
-- `R/F`: thrust up/down
+- `B`: cycle drone control mode forward.
+- `Gamepad D-pad Left / Right`: cycle drone control mode backward / forward.
+- `Space` / `Gamepad A`: context-sensitive roll action.
+- From any non-map drone flight mode, pressing it enters `Roll` and starts charging the next roll jump.
+- While already in `Roll`, hold to charge and release to jump if grounded.
+- Releasing while airborne in `Roll` smoothly lifts the drone back toward the last flight mode.
 
-Controller:
-- Left stick: tilt / directional movement
-- Right stick `X`: yaw
-- Right stick `Y`: camera tilt
-- `RT`: thrust
-- `LT`: reverse thrust
+### Drone Pilot: Complex / Horizon / Horizon + Hover
 
-#### Free Fly
+- Keyboard: `W/S` pitch, `A/D` roll, `Q/E` yaw, `R/F` vertical thrust.
+- Controller: left stick `X` yaw, left stick `Y` thrust, right stick `X` roll, right stick `Y` pitch.
 
-Keyboard:
-- `WASD`: move
-- `Q/E` and `R/F`: move vertically
-- Mouse: look
+### Drone Pilot: Simple
 
-Controller:
-- Left stick: move
-- Right stick: look
-- `RT`: rise
-- `LT`: descend
+- Keyboard: `W/S` forward / back tilt, `A/D` left / right tilt, `Q/E` yaw, `R/F` vertical thrust.
+- Controller: left stick moves the drone, right stick `X` yaws, right stick `Y` tilts the camera, `RT/LT` move vertically.
+
+### Drone Pilot: Free Fly
+
+- Keyboard: `WASD` move relative to the current view, `E/R` move up, `Q/F` move down, mouse look controls orientation.
+- Controller: left stick moves, right stick looks, `RT` rises, `LT` descends.
+
+### Drone Pilot: Roll
+
+- Keyboard: `W/S` drive forward / back, `A/D` drive left / right relative to the camera, mouse look controls aim, `Space` charges / jumps.
+- Controller: left stick drives, right stick looks, `Gamepad A` charges / jumps.
+
+### Drone Pilot: Spectator Cam
+
+- Keyboard: `WASD` move, `E/R` move up, `Q/F` move down, mouse look.
+- Controller: left stick moves, right stick looks, `RT` rises, `LT` descends.
 
 ### Map Mode
 
-Keyboard:
-- `WASD`: pan
-- `Q/E`: move down/up
+- Keyboard: `WASD` pan, `E/R` move up, `Q/F` move down.
+- Controller: left stick pans, `RT` moves up, `LT` moves down.
 
-Controller:
-- Left stick: pan
-- `LT/RT`: move up/down
+### Factory Placement
+
+- `1`: toggle conveyor placement.
+- `2`: toggle storage bin placement.
+- `3`: toggle resource spawner placement.
+- `Gamepad X`: toggle the current factory placement mode.
+- `Left Mouse Button` / `Gamepad RT`: place the current buildable.
+- `Right Mouse Button` / `Gamepad B`: cancel placement.
+- `Gamepad LB / RB`: rotate the placement preview.
 
 ## Key Source Files
 
@@ -144,4 +150,3 @@ Internal running notes used to preserve design intent and implementation rules b
 ## Building
 
 Open `Agent.uproject` in Unreal Engine 5.7 and build through the editor or Visual Studio as a normal Unreal C++ project.
-
