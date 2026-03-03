@@ -4,7 +4,10 @@
 #include "DroneCompanion.h"
 #include "Factory/ConveyorBeltStraight.h"
 #include "Factory/ConveyorPlacementPreview.h"
+#include "Factory/FactoryPayloadActor.h"
 #include "Factory/FactoryPlacementHelpers.h"
+#include "Factory/ResourceSpawnerMachine.h"
+#include "Factory/StorageBin.h"
 #include "Camera/CameraComponent.h"
 #include "CollisionShape.h"
 #include "Components/CapsuleComponent.h"
@@ -142,7 +145,7 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 
 	UpdateKeyboardMapButtonHold(DeltaSeconds);
 	UpdateControllerMapButtonHold(DeltaSeconds);
-	AConveyorBeltStraight::SetMasterConveyorSettings(ConveyorMasterBeltSpeed, ConveyorMasterBeltAcceleration);
+	AConveyorBeltStraight::SetMasterConveyorSettings(ConveyorMasterBeltSpeed);
 
 	if (bConveyorPlacementModeActive)
 	{
@@ -212,7 +215,9 @@ void AAgentCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	PlayerInputComponent->BindKey(EKeys::V, IE_Pressed, this, &AAgentCharacter::CycleViewMode);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Top, IE_Pressed, this, &AAgentCharacter::CycleViewMode);
 	PlayerInputComponent->BindKey(EKeys::One, IE_Pressed, this, &AAgentCharacter::OnConveyorPlacementModePressed);
-	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Left, IE_Pressed, this, &AAgentCharacter::OnConveyorPlacementModePressed);
+	PlayerInputComponent->BindKey(EKeys::Two, IE_Pressed, this, &AAgentCharacter::OnStorageBinPlacementModePressed);
+	PlayerInputComponent->BindKey(EKeys::Three, IE_Pressed, this, &AAgentCharacter::OnResourceSpawnerPlacementModePressed);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Left, IE_Pressed, this, &AAgentCharacter::OnFactoryPlacementTogglePressed);
 	PlayerInputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &AAgentCharacter::OnConveyorPlacePressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_RightTrigger, IE_Pressed, this, &AAgentCharacter::OnConveyorPlacePressed);
 	PlayerInputComponent->BindKey(EKeys::RightMouseButton, IE_Pressed, this, &AAgentCharacter::OnConveyorCancelPressed);
@@ -723,7 +728,7 @@ void AAgentCharacter::EnterConveyorPlacementMode()
 				static_cast<uint64>(GetUniqueID()) + 18000ULL,
 				1.5f,
 				FColor::Yellow,
-				TEXT("Conveyor placement only works in first and third person."));
+				TEXT("Factory placement only works in first and third person."));
 		}
 		return;
 	}
@@ -885,7 +890,7 @@ void AAgentCharacter::TryPlaceConveyor()
 				static_cast<uint64>(GetUniqueID()) + 18001ULL,
 				1.0f,
 				FColor::Red,
-				TEXT("Invalid conveyor placement."));
+				TEXT("Invalid factory placement."));
 		}
 		return;
 	}
@@ -896,10 +901,24 @@ void AAgentCharacter::TryPlaceConveyor()
 		return;
 	}
 
-	UClass* ConveyorClass = ConveyorBeltClass.Get();
-	if (!ConveyorClass)
+	UClass* BuildableClass = nullptr;
+	switch (CurrentFactoryPlacementType)
 	{
-		ConveyorClass = AConveyorBeltStraight::StaticClass();
+	case EAgentFactoryPlacementType::StorageBin:
+		BuildableClass = StorageBinClass.Get() ? StorageBinClass.Get() : AStorageBin::StaticClass();
+		break;
+	case EAgentFactoryPlacementType::ResourceSpawner:
+		BuildableClass = ResourceSpawnerMachineClass.Get() ? ResourceSpawnerMachineClass.Get() : AResourceSpawnerMachine::StaticClass();
+		break;
+	case EAgentFactoryPlacementType::Conveyor:
+	default:
+		BuildableClass = ConveyorBeltClass.Get() ? ConveyorBeltClass.Get() : AConveyorBeltStraight::StaticClass();
+		break;
+	}
+
+	if (!BuildableClass)
+	{
+		return;
 	}
 
 	FActorSpawnParameters SpawnParameters{};
@@ -907,11 +926,13 @@ void AAgentCharacter::TryPlaceConveyor()
 	SpawnParameters.Instigator = this;
 	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
-	World->SpawnActor<AConveyorBeltStraight>(
-		ConveyorClass,
+	AActor* SpawnedActor = World->SpawnActor<AActor>(
+		BuildableClass,
 		SpawnLocation,
 		SpawnRotation,
 		SpawnParameters);
+
+	ApplyFactoryBuildableDefaults(SpawnedActor);
 
 	UpdateConveyorPlacementPreview();
 }
@@ -1000,7 +1021,7 @@ bool AAgentCharacter::EvaluateConveyorPlacement(FVector& OutLocation, FRotator& 
 		return false;
 	}
 
-	const bool bSnappedToConveyorFace = TryGetConveyorFaceSnapLocation(AimHit, OutLocation);
+	const bool bSnappedToConveyorFace = TryGetFactoryBuildableFaceSnapLocation(AimHit, OutLocation);
 	if (!bSnappedToConveyorFace)
 	{
 		const FVector PlacementProbeLocation = AimHit.ImpactPoint;
@@ -1088,16 +1109,24 @@ bool AAgentCharacter::EvaluateConveyorPlacement(FVector& OutLocation, FRotator& 
 	return true;
 }
 
-bool AAgentCharacter::TryGetConveyorFaceSnapLocation(const FHitResult& AimHit, FVector& OutLocation) const
+bool AAgentCharacter::TryGetFactoryBuildableFaceSnapLocation(const FHitResult& AimHit, FVector& OutLocation) const
 {
-	const AConveyorBeltStraight* HitConveyor = Cast<AConveyorBeltStraight>(AimHit.GetActor());
-	if (!HitConveyor)
+	AActor* HitActor = AimHit.GetActor();
+	if (!HitActor)
 	{
 		return false;
 	}
 
-	const FTransform ConveyorTransform = HitConveyor->GetActorTransform();
-	FVector LocalImpact = ConveyorTransform.InverseTransformPosition(AimHit.ImpactPoint);
+	const bool bIsSupportedBuildable = HitActor->IsA<AConveyorBeltStraight>()
+		|| HitActor->IsA<AStorageBin>()
+		|| HitActor->IsA<AResourceSpawnerMachine>();
+	if (!bIsSupportedBuildable)
+	{
+		return false;
+	}
+
+	const FTransform BuildableTransform = HitActor->GetActorTransform();
+	FVector LocalImpact = BuildableTransform.InverseTransformPosition(AimHit.ImpactPoint);
 	LocalImpact.Z = 0.0f;
 
 	if (LocalImpact.IsNearlyZero())
@@ -1105,18 +1134,61 @@ bool AAgentCharacter::TryGetConveyorFaceSnapLocation(const FHitResult& AimHit, F
 		LocalImpact.X = AgentFactory::GridSize * 0.5f;
 	}
 
-	FVector SnapDirection = HitConveyor->GetActorForwardVector();
+	FVector SnapDirection = HitActor->GetActorForwardVector();
 	if (FMath::Abs(LocalImpact.X) >= FMath::Abs(LocalImpact.Y))
 	{
 		SnapDirection *= (LocalImpact.X >= 0.0f) ? 1.0f : -1.0f;
 	}
 	else
 	{
-		SnapDirection = HitConveyor->GetActorRightVector() * ((LocalImpact.Y >= 0.0f) ? 1.0f : -1.0f);
+		SnapDirection = HitActor->GetActorRightVector() * ((LocalImpact.Y >= 0.0f) ? 1.0f : -1.0f);
 	}
 
-	OutLocation = AgentFactory::SnapLocationToGrid(HitConveyor->GetActorLocation() + SnapDirection * AgentFactory::GridSize);
+	OutLocation = AgentFactory::SnapLocationToGrid(HitActor->GetActorLocation() + SnapDirection * AgentFactory::GridSize);
 	return true;
+}
+
+void AAgentCharacter::SelectFactoryPlacementType(EAgentFactoryPlacementType NewType, bool bToggleIfAlreadySelected)
+{
+	const bool bWasActive = bConveyorPlacementModeActive;
+	const bool bWasSameType = CurrentFactoryPlacementType == NewType;
+	CurrentFactoryPlacementType = NewType;
+
+	if (!bWasActive)
+	{
+		EnterConveyorPlacementMode();
+		return;
+	}
+
+	if (bToggleIfAlreadySelected && bWasSameType)
+	{
+		ExitConveyorPlacementMode();
+		return;
+	}
+
+	UpdateConveyorPlacementPreview();
+}
+
+void AAgentCharacter::ApplyFactoryBuildableDefaults(AActor* SpawnedActor) const
+{
+	if (!SpawnedActor)
+	{
+		return;
+	}
+
+	if (AConveyorBeltStraight* Conveyor = Cast<AConveyorBeltStraight>(SpawnedActor))
+	{
+		Conveyor->SetMasterConveyorSettings(ConveyorMasterBeltSpeed);
+		return;
+	}
+
+	if (AResourceSpawnerMachine* ResourceSpawner = Cast<AResourceSpawnerMachine>(SpawnedActor))
+	{
+		if (DefaultFactoryPayloadClass.Get())
+		{
+			ResourceSpawner->PayloadActorClass = DefaultFactoryPayloadClass;
+		}
+	}
 }
 
 void AAgentCharacter::UpdateDronePilotInputs(float DeltaSeconds)
@@ -1797,6 +1869,21 @@ void AAgentCharacter::OnControllerMapButtonReleased()
 }
 
 void AAgentCharacter::OnConveyorPlacementModePressed()
+{
+	SelectFactoryPlacementType(EAgentFactoryPlacementType::Conveyor, true);
+}
+
+void AAgentCharacter::OnStorageBinPlacementModePressed()
+{
+	SelectFactoryPlacementType(EAgentFactoryPlacementType::StorageBin, true);
+}
+
+void AAgentCharacter::OnResourceSpawnerPlacementModePressed()
+{
+	SelectFactoryPlacementType(EAgentFactoryPlacementType::ResourceSpawner, true);
+}
+
+void AAgentCharacter::OnFactoryPlacementTogglePressed()
 {
 	ToggleConveyorPlacementMode();
 }

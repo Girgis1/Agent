@@ -17,7 +17,7 @@ This is the foundation for later factory systems such as corners, splitters, lif
 - one straight conveyor tile only
 - flat placement only
 - 90-degree rotation only
-- physics cubes / generic simulating bodies as payloads
+- dedicated payload actor plus generic simulating bodies still work on conveyors
 - no networking
 - no save system
 - no corner belts, stackers, or splitters yet
@@ -27,7 +27,11 @@ This is the foundation for later factory systems such as corners, splitters, lif
 ### Conveyor Placement
 
 - `1` / controller `X`: enter or exit conveyor placement mode
-- `Left Mouse` / controller `RT`: place conveyor
+- keyboard `1`: select `Conveyor`
+- keyboard `2`: select `Storage Bin`
+- keyboard `3`: select `Resource Spawner`
+- controller `X`: toggle placement for the currently selected buildable
+- `Left Mouse` / controller `RT`: place the currently selected factory buildable
 - `Right Mouse` / controller `B`: cancel placement mode
 - `R` / controller `Right Bumper`: rotate right by `90`
 - controller `Left Bumper`: rotate left by `90`
@@ -72,6 +76,23 @@ Shared speed control is now driven by the player character's master settings:
 
 Placed conveyors read from those shared values by default so tuning one place affects all belts consistently.
 
+### First Factory Loop Actors
+
+- `AFactoryPayloadActor`
+  - dedicated physics payload actor
+  - carries a `PayloadType` name for future recipes
+
+- `AStorageBin`
+  - intake on the back face
+  - destroys incoming payload actors
+  - stores counts by `PayloadType`
+  - no hidden actor storage
+
+- `AResourceSpawnerMachine`
+  - outputs from the front face
+  - periodically spawns payload actors
+  - skips spawning if the output is physically blocked
+
 ### Placement
 
 Placement mode currently uses:
@@ -83,17 +104,18 @@ Placement mode currently uses:
 - a preview actor plus debug box / direction arrow for validity feedback
 - manual in-place rotation
 - conveyor face snapping:
-  - if the aim trace hits an existing conveyor, the new conveyor snaps to the hit conveyor's nearest side face
-  - this allows continuing a belt line in mid-air without needing ground under the next tile
+  - if the aim trace hits an existing factory buildable, the new buildable snaps to the hit actor's nearest side face
+  - this allows continuing belt lines in mid-air without needing ground under the next tile
+  - this currently supports conveyors, storage bins, and resource spawners
 
 ## Planned Next Steps
 
 1. Validate the straight conveyor on the default map with physics cubes.
 2. Tune overlap clearances so floor placement is reliable.
 3. Add a better visual belt mesh / scrolling belt material.
-4. Add conveyor adjacency rules for clean line building.
-5. Add corners as the second buildable.
-6. Improve conveyor-to-conveyor face snapping so corners and future splitters feel intentional.
+4. Make the placement preview visually distinguish conveyor vs bin vs spawner.
+5. Add conveyor adjacency rules for clean line building.
+6. Add corners as the second transport buildable.
 
 ## Guardrails
 

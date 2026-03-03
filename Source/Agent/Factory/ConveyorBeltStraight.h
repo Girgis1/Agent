@@ -9,6 +9,7 @@
 
 class UArrowComponent;
 class UBoxComponent;
+class UPhysicalMaterial;
 class UPrimitiveComponent;
 class UStaticMeshComponent;
 class USceneComponent;
@@ -21,7 +22,7 @@ class AConveyorBeltStraight : public AActor
 public:
 	AConveyorBeltStraight();
 
-	static void SetMasterConveyorSettings(float InBeltSpeed, float InBeltAcceleration);
+	static void SetMasterConveyorSettings(float InBeltSpeed);
 
 	virtual void Tick(float DeltaSeconds) override;
 
@@ -45,6 +46,7 @@ protected:
 		int32 OtherBodyIndex);
 
 	void UpdateTickState();
+	void UpdateSupportPhysicalMaterial();
 	bool IsPayloadValid(const UPrimitiveComponent* PrimitiveComponent) const;
 	void ApplyBeltDrive(UPrimitiveComponent* PrimitiveComponent, float DeltaSeconds) const;
 
@@ -65,13 +67,16 @@ public:
 	TObjectPtr<UArrowComponent> DirectionArrow = nullptr;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Conveyor")
-	float BeltSpeed = 200.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Conveyor")
-	float BeltAcceleration = 700.0f;
+	float BeltSpeed = 50.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Conveyor")
 	bool bUseMasterSpeedSettings = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Conveyor|Feel")
+	float BeltSurfaceFriction = 0.03f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Conveyor|Feel")
+	float BeltSurfaceRestitution = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Conveyor")
 	FVector SupportBoxExtent = FVector(50.0f, 50.0f, 10.0f);
@@ -81,7 +86,9 @@ public:
 
 protected:
 	static float MasterBeltSpeed;
-	static float MasterBeltAcceleration;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UPhysicalMaterial> RuntimeSupportPhysicalMaterial = nullptr;
 
 	TSet<TWeakObjectPtr<UPrimitiveComponent>> ActivePayloads;
 };

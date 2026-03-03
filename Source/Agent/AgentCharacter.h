@@ -10,6 +10,9 @@
 class ADroneCompanion;
 class AConveyorBeltStraight;
 class AConveyorPlacementPreview;
+class AFactoryPayloadActor;
+class AResourceSpawnerMachine;
+class AStorageBin;
 class UCameraComponent;
 class UInputAction;
 class USceneComponent;
@@ -39,6 +42,14 @@ enum class EAgentDronePilotControlMode : uint8
 	Simple,
 	FreeFly,
 	Roll
+};
+
+UENUM(BlueprintType)
+enum class EAgentFactoryPlacementType : uint8
+{
+	Conveyor,
+	StorageBin,
+	ResourceSpawner
 };
 
 /**
@@ -130,7 +141,9 @@ protected:
 	void CancelConveyorPlacement();
 	void RotateConveyorPlacement(int32 Direction);
 	bool EvaluateConveyorPlacement(FVector& OutLocation, FRotator& OutRotation, bool& bOutIsValid) const;
-	bool TryGetConveyorFaceSnapLocation(const FHitResult& AimHit, FVector& OutLocation) const;
+	bool TryGetFactoryBuildableFaceSnapLocation(const FHitResult& AimHit, FVector& OutLocation) const;
+	void SelectFactoryPlacementType(EAgentFactoryPlacementType NewType, bool bToggleIfAlreadySelected);
+	void ApplyFactoryBuildableDefaults(AActor* SpawnedActor) const;
 
 	void OnDronePitchForwardPressed();
 	void OnDronePitchForwardReleased();
@@ -166,6 +179,9 @@ protected:
 	void OnControllerMapButtonPressed();
 	void OnControllerMapButtonReleased();
 	void OnConveyorPlacementModePressed();
+	void OnStorageBinPlacementModePressed();
+	void OnResourceSpawnerPlacementModePressed();
+	void OnFactoryPlacementTogglePressed();
 	void OnConveyorPlacePressed();
 	void OnConveyorCancelPressed();
 	void OnConveyorRotateLeftPressed();
@@ -236,6 +252,12 @@ public:
 	TSubclassOf<AConveyorPlacementPreview> ConveyorPlacementPreviewClass;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
+	TSubclassOf<AStorageBin> StorageBinClass;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
+	TSubclassOf<AResourceSpawnerMachine> ResourceSpawnerMachineClass;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
 	float ConveyorPlacementTraceDistance = 2000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
@@ -251,7 +273,7 @@ public:
 	float ConveyorMasterBeltSpeed = 600.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
-	float ConveyorMasterBeltAcceleration = 2200.0f;
+	TSubclassOf<AFactoryPayloadActor> DefaultFactoryPayloadClass;
 
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
@@ -292,6 +314,9 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Placement", meta=(AllowPrivateAccess="true"))
 	bool bConveyorPlacementValid = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Placement", meta=(AllowPrivateAccess="true"))
+	EAgentFactoryPlacementType CurrentFactoryPlacementType = EAgentFactoryPlacementType::Conveyor;
 
 	bool bViewModeInitialized = false;
 	bool bDefaultUseControllerRotationYaw = false;

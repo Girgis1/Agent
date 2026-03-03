@@ -70,7 +70,11 @@
   - placement currently only works in `Third Person` and `First Person`
   - placement controls:
     - `1` / controller `X`: enter or exit conveyor placement mode
-    - `Left Mouse` / controller `RT`: place conveyor
+      - keyboard `1` also selects `Conveyor`
+      - keyboard `2` selects `Storage Bin`
+      - keyboard `3` selects `Resource Spawner`
+      - controller `X` toggles placement using whichever factory buildable type is currently selected
+    - `Left Mouse` / controller `RT`: place the currently selected factory buildable
     - `Right Mouse` / controller `B`: cancel placement mode
     - `R` / controller `Right Bumper`: rotate right by `90`
     - controller `Left Bumper`: rotate left by `90`
@@ -79,10 +83,30 @@
     - this allows extending a belt line out into the air by targeting the end or side face of the last placed conveyor
   - placement uses a camera trace, a downward surface trace, grid snapping, overlap validation, and a visible preview actor plus debug box / arrow
   - conveyor movement uses a blocking base plus a separate top overlap drive volume, then accelerates simulating physics bodies along the belt direction each tick
-  - conveyor speed now has shared master controls on `AAgentCharacter`:
+  - the placement preview actor is a pure ghost and must never have world collision; it should not block the player, payloads, or placement traces
+  - conveyor speed now has a single shared master control on `AAgentCharacter`:
     - `ConveyorMasterBeltSpeed`
-    - `ConveyorMasterBeltAcceleration`
-    - all conveyors use those shared values by default via `AConveyorBeltStraight::SetMasterConveyorSettings(...)`
+    - all conveyors use that shared value by default via `AConveyorBeltStraight::SetMasterConveyorSettings(...)`
+  - conveyors no longer use force-based drive, acceleration ramps, or weight-sensitive transport
+  - while a payload is in the conveyor drive volume, the belt now directly overwrites only the payload's along-belt velocity component to the fixed `BeltSpeed`
+    - mass does not change belt travel speed
+    - angular velocity is untouched
+    - sideways drift and vertical motion are untouched
+    - Chaos still owns tumbling, rolling, jams, pileups, and objects being knocked off the side
+  - low-friction runtime physical material still applies to the conveyor support surface so payloads glide cleanly while the belt only owns the forward transport axis
+  - spawned `AFactoryPayloadActor` ore cubes are still heavier and more damped by default so they feel less floaty when they land or collide
+  - payload cubes now spawn with a small random uniform scale variance (`PayloadMinScale` / `PayloadMaxScale`), and their mass scales from size using volume (`scale^3`) relative to `PayloadReferenceScale` and `PayloadReferenceMassKg`
+  - first non-conveyor factory actors are now added:
+    - `AFactoryPayloadActor`: a dedicated simulating payload actor with a `PayloadType` name
+    - `AStorageBin`: a counting storage endpoint that destroys incoming payload actors and stores counts by `PayloadType`
+    - `AResourceSpawnerMachine`: a feeder machine that periodically spawns `AFactoryPayloadActor` instances and ejects them from its output face
+  - storage follows the intended performance rule: payloads are destroyed on intake and converted into counts instead of being hidden / physically stored inside bins
+  - `AFactoryPayloadActor` payload meshes must keep overlap events enabled so conveyors can detect and drive them through the belt overlap volume; if payloads sit still on a belt, check overlap generation before tuning speed
+  - buildable face snapping now works for:
+    - conveyors
+    - storage bins
+    - resource spawner machines
+    - all current factory buildables are treated as `1x1` face-snappable tiles for placement
   - reserved collision channels:
     - `BuildPlacement` = `ECC_GameTraceChannel1`
     - `FactoryBuildable` = `ECC_GameTraceChannel2`

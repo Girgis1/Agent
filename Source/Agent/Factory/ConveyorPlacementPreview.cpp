@@ -9,6 +9,7 @@
 AConveyorPlacementPreview::AConveyorPlacementPreview()
 {
 	PrimaryActorTick.bCanEverTick = false;
+	SetActorEnableCollision(false);
 
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);

@@ -7,10 +7,10 @@
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "PhysicalMaterials/PhysicalMaterial.h"
 #include "UObject/ConstructorHelpers.h"
 
 float AConveyorBeltStraight::MasterBeltSpeed = 200.0f;
-float AConveyorBeltStraight::MasterBeltAcceleration = 700.0f;
 
 AConveyorBeltStraight::AConveyorBeltStraight()
 {
@@ -69,10 +69,9 @@ AConveyorBeltStraight::AConveyorBeltStraight()
 	}
 }
 
-void AConveyorBeltStraight::SetMasterConveyorSettings(float InBeltSpeed, float InBeltAcceleration)
+void AConveyorBeltStraight::SetMasterConveyorSettings(float InBeltSpeed)
 {
 	MasterBeltSpeed = FMath::Max(0.0f, InBeltSpeed);
-	MasterBeltAcceleration = FMath::Max(0.0f, InBeltAcceleration);
 }
 
 void AConveyorBeltStraight::BeginPlay()
@@ -91,6 +90,7 @@ void AConveyorBeltStraight::BeginPlay()
 		PayloadDriveVolume->SetRelativeLocation(FVector(0.0f, 0.0f, SupportBoxExtent.Z * 2.0f + PayloadDriveExtent.Z * 0.5f));
 	}
 
+	UpdateSupportPhysicalMaterial();
 	UpdateTickState();
 }
 
@@ -162,6 +162,34 @@ void AConveyorBeltStraight::UpdateTickState()
 	SetActorTickEnabled(ActivePayloads.Num() > 0);
 }
 
+void AConveyorBeltStraight::UpdateSupportPhysicalMaterial()
+{
+	if (!SupportCollision)
+	{
+		return;
+	}
+
+	if (!RuntimeSupportPhysicalMaterial)
+	{
+		RuntimeSupportPhysicalMaterial = NewObject<UPhysicalMaterial>(this, TEXT("RuntimeSupportPhysicalMaterial"));
+	}
+
+	if (!RuntimeSupportPhysicalMaterial)
+	{
+		return;
+	}
+
+	RuntimeSupportPhysicalMaterial->Friction = FMath::Max(0.0f, BeltSurfaceFriction);
+	RuntimeSupportPhysicalMaterial->StaticFriction = FMath::Max(0.0f, BeltSurfaceFriction);
+	RuntimeSupportPhysicalMaterial->Restitution = FMath::Clamp(BeltSurfaceRestitution, 0.0f, 1.0f);
+	RuntimeSupportPhysicalMaterial->bOverrideFrictionCombineMode = true;
+	RuntimeSupportPhysicalMaterial->FrictionCombineMode = EFrictionCombineMode::Min;
+	RuntimeSupportPhysicalMaterial->bOverrideRestitutionCombineMode = true;
+	RuntimeSupportPhysicalMaterial->RestitutionCombineMode = EFrictionCombineMode::Min;
+
+	SupportCollision->SetPhysMaterialOverride(RuntimeSupportPhysicalMaterial);
+}
+
 bool AConveyorBeltStraight::IsPayloadValid(const UPrimitiveComponent* PrimitiveComponent) const
 {
 	return IsValid(PrimitiveComponent)
@@ -171,6 +199,8 @@ bool AConveyorBeltStraight::IsPayloadValid(const UPrimitiveComponent* PrimitiveC
 
 void AConveyorBeltStraight::ApplyBeltDrive(UPrimitiveComponent* PrimitiveComponent, float DeltaSeconds) const
 {
+	(void)DeltaSeconds;
+
 	if (!PrimitiveComponent || DeltaSeconds <= 0.0f)
 	{
 		return;
@@ -180,19 +210,7 @@ void AConveyorBeltStraight::ApplyBeltDrive(UPrimitiveComponent* PrimitiveCompone
 	const FVector CurrentVelocity = PrimitiveComponent->GetPhysicsLinearVelocity();
 	const float CurrentAlongBeltSpeed = FVector::DotProduct(CurrentVelocity, DriveDirection);
 	const float TargetSpeed = bUseMasterSpeedSettings ? MasterBeltSpeed : FMath::Max(0.0f, BeltSpeed);
-	const float MissingSpeed = TargetSpeed - CurrentAlongBeltSpeed;
-
-	if (MissingSpeed <= KINDA_SMALL_NUMBER)
-	{
-		return;
-	}
-
-	const float AppliedAcceleration = bUseMasterSpeedSettings ? MasterBeltAcceleration : FMath::Max(0.0f, BeltAcceleration);
-	const float VelocityStep = FMath::Min(MissingSpeed, AppliedAcceleration * DeltaSeconds);
-	if (VelocityStep <= KINDA_SMALL_NUMBER)
-	{
-		return;
-	}
-
-	PrimitiveComponent->AddImpulse(DriveDirection * VelocityStep, NAME_None, true);
+	const FVector NonConveyorVelocity = CurrentVelocity - (DriveDirection * CurrentAlongBeltSpeed);
+	const FVector DesiredVelocity = NonConveyorVelocity + (DriveDirection * TargetSpeed);
+	PrimitiveComponent->SetPhysicsLinearVelocity(DesiredVelocity, false);
 }
