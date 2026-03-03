@@ -8,6 +8,8 @@
 #include "AgentCharacter.generated.h"
 
 class ADroneCompanion;
+class AConveyorBeltStraight;
+class AConveyorPlacementPreview;
 class UCameraComponent;
 class UInputAction;
 class USceneComponent;
@@ -117,6 +119,16 @@ protected:
 	void UpdateControllerMapButtonHold(float DeltaSeconds);
 	void SetThirdPersonProxyVisible(bool bVisible);
 	void AttachThirdPersonProxyToComponent(USceneComponent* AttachmentParent);
+	bool CanUseConveyorPlacementMode() const;
+	void ToggleConveyorPlacementMode();
+	void EnterConveyorPlacementMode();
+	void ExitConveyorPlacementMode();
+	void UpdateConveyorPlacementPreview();
+	UCameraComponent* GetActivePlacementCamera() const;
+	void TryPlaceConveyor();
+	void CancelConveyorPlacement();
+	void RotateConveyorPlacement(int32 Direction);
+	bool EvaluateConveyorPlacement(FVector& OutLocation, FRotator& OutRotation, bool& bOutIsValid) const;
 
 	void OnDronePitchForwardPressed();
 	void OnDronePitchForwardReleased();
@@ -151,6 +163,11 @@ protected:
 	void OnKeyboardMapButtonReleased();
 	void OnControllerMapButtonPressed();
 	void OnControllerMapButtonReleased();
+	void OnConveyorPlacementModePressed();
+	void OnConveyorPlacePressed();
+	void OnConveyorCancelPressed();
+	void OnConveyorRotateLeftPressed();
+	void OnConveyorRotateRightPressed();
 
 public:
 	UFUNCTION(BlueprintCallable, Category="Input")
@@ -210,9 +227,30 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Map")
 	float ControllerMapButtonHoldTime = 0.35f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
+	TSubclassOf<AConveyorBeltStraight> ConveyorBeltClass;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
+	TSubclassOf<AConveyorPlacementPreview> ConveyorPlacementPreviewClass;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
+	float ConveyorPlacementTraceDistance = 2000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
+	float ConveyorPlacementSurfaceTraceHeight = 500.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
+	float ConveyorPlacementSurfaceTraceDepth = 1200.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
+	FVector ConveyorPlacementClearanceExtents = FVector(48.0f, 48.0f, 12.0f);
+
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<ADroneCompanion> DroneCompanion = nullptr;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Placement", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<AConveyorPlacementPreview> ConveyorPlacementPreview = nullptr;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Camera", meta=(AllowPrivateAccess="true"))
 	EAgentViewMode CurrentViewMode = EAgentViewMode::ThirdPerson;
@@ -241,6 +279,12 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
 	bool bDroneEntryAssistActive = false;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Placement", meta=(AllowPrivateAccess="true"))
+	bool bConveyorPlacementModeActive = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Placement", meta=(AllowPrivateAccess="true"))
+	bool bConveyorPlacementValid = false;
+
 	bool bViewModeInitialized = false;
 	bool bDefaultUseControllerRotationYaw = false;
 	bool bDefaultOrientRotationToMovement = true;
@@ -255,6 +299,9 @@ protected:
 	float ControllerMapButtonHeldDuration = 0.0f;
 	FVector ThirdPersonTransitionStartLocation = FVector::ZeroVector;
 	FRotator ThirdPersonTransitionStartRotation = FRotator::ZeroRotator;
+	FVector PendingConveyorPlacementLocation = FVector::ZeroVector;
+	FRotator PendingConveyorPlacementRotation = FRotator::ZeroRotator;
+	int32 ConveyorPlacementRotationSteps = 0;
 
 	float DroneGamepadThrottleInput = 0.0f;
 	float DroneGamepadYawInput = 0.0f;

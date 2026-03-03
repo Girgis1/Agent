@@ -221,7 +221,7 @@ public:
 	float FreeFlyRotationResponse = 4.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
-	float RollTorqueAcceleration = 42500.0f;
+	float RollDriveAcceleration = 3200.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
 	float RollBrakingAcceleration = 1800.0f;
@@ -234,6 +234,15 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
 	float RollGroundCheckDistance = 70.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
+	float RollGroundedMaxClearance = 4.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
+	float RollMaxSpeed = 1200.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
+	float RollMaxAngularSpeed = 360.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Autopilot")
 	FVector ThirdPersonOffset = FVector(-340.0f, 0.0f, 140.0f);
@@ -368,7 +377,7 @@ public:
 	float MiniMapVelocityDamping = 3.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Crash")
-	float DroneCrashSpeed = 600.0f;
+	float DroneCrashSpeed = 500.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Crash")
 	float DroneCrashMinRecoveryTime = 0.1f;

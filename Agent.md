@@ -27,17 +27,17 @@
   - `Simple`
   - `Free Fly`
   - `Roll`
-- `B` on keyboard and `D-pad Left` on controller cycle forward through those six modes.
-- Controller shoulders now cycle the same mode list instead of acting as direct toggles:
-  - right bumper cycles forward
-  - left bumper cycles backward
+- `B` on keyboard still cycles forward through those six modes.
+- Controller `D-pad Left` now cycles backward through the six drone modes.
+- Controller `D-pad Right` now cycles forward through the six drone modes.
+- Controller bumpers are no longer used for drone mode cycling; they are now reserved for conveyor placement rotation.
 - Mode meanings:
   - `Complex`: full acro / rate with no self-level and no hover assist
   - `Horizon`: self-level (`Angle / Horizon`) on, hover assist off
   - `Horizon + Hover`: self-level plus helicopter-style hover assist (neutral throttle sits near hover, but tilt still drives forward flight)
   - `Simple`: a first-time-user DJI-style assisted mode tuned closer to consumer `Normal` mode than a hard beginner lock. It auto-levels, uses gradual velocity-style horizontal assist with smoother acceleration/deceleration, keeps vertical hover compensation active, and lets the camera tilt independently. Simple-mode left/right input is now standard again on both keyboard and controller: left goes left, right goes right.
   - `Free Fly`: a spectator-style look-to-fly mode that intentionally ignores the rigid-body drone feel. It now moves kinematically like a smooth Unreal spectator camera instead of using the elastic physics response from the main drone modes.
-  - `Roll`: a grounded first-person ball mode. The camera stays visually upright while the drone body rolls underneath it, movement is torque-based on the ground, and `Space` / controller `A` trigger a roll jump. Roll mode bypasses the drone crash / recovery system entirely, resets inherited flight momentum on entry, snaps to an upright yaw-only pose above the floor if it's near the ground, and only applies roll drive while grounded so it behaves like its own ball controller instead of inheriting flight-state reactions.
+  - `Roll`: a grounded first-person ball mode. The camera stays visually upright while the drone body rolls underneath it, movement is now force-driven instead of torque-driven, and `Space` / controller `A` trigger a roll jump. Roll mode bypasses the drone crash / recovery system entirely, resets inherited flight momentum on entry, snaps to an upright yaw-only pose above the floor if it's near the ground, only applies drive when the ball is truly close to the ground (`RollGroundedMaxClearance`), and clamps roll-specific linear / angular speed so it behaves like its own ball controller instead of inheriting flight-state reactions.
   - Roll mode's upright camera override should only run during active `PilotControlled` roll play; it must not override scripted camera transitions such as pilot entry or map/minimap camera transitions.
   - Roll mode can apply a small visual camera lean while steering left/right. This is only a camera effect; it should not feed back into physics or self-righting.
 - When entering `Drone Pilot`, a temporary entry assist still forces both self-level and hover on until the player gives real up/down throttle input, so the drone does not immediately drop on camera switch.
@@ -63,6 +63,23 @@
 - The third-person proxy mesh is only for the faked third-person camera path. When leaving third person, it must stop casting hidden shadow immediately; hiding it is not enough because `bCastHiddenShadow` will otherwise keep the shadow alive.
 - `BuddyFollow` now has its own exposed max speed (`BuddyMaxLinearSpeed`) so the companion can drift back over visibly instead of rocketing to the player.
 - The first-person camera transform should be tuned directly on the inherited `FirstPersonCamera` component in the character Blueprint. Do not reapply `FirstPersonCameraOffset` at runtime, or it will override the Blueprint placement.
+- Factory / conveyor MVP is now started:
+  - new factory code lives under `Source/Agent/Factory/`
+  - `AConveyorBeltStraight` is the first buildable and represents a single `1m x 1m` (`100 uu x 100 uu`) straight conveyor tile
+  - `AConveyorPlacementPreview` is the placement ghost actor
+  - placement currently only works in `Third Person` and `First Person`
+  - placement controls:
+    - `1` / controller `X`: enter or exit conveyor placement mode
+    - `Left Mouse` / controller `RT`: place conveyor
+    - `Right Mouse` / controller `B`: cancel placement mode
+    - `R` / controller `Right Bumper`: rotate right by `90`
+    - controller `Left Bumper`: rotate left by `90`
+  - placement uses a camera trace, a downward surface trace, grid snapping, overlap validation, and a visible preview actor plus debug box / arrow
+  - conveyor movement uses a blocking base plus a separate top overlap drive volume, then accelerates simulating physics bodies along the belt direction each tick
+  - reserved collision channels:
+    - `BuildPlacement` = `ECC_GameTraceChannel1`
+    - `FactoryBuildable` = `ECC_GameTraceChannel2`
+  - `Plan.md` now tracks the conveyor MVP architecture and next steps
 - Drone controls in `Drone Pilot`:
   - `Complex`, `Horizon`, and `Horizon + Hover`:
     - Keyboard: `W` / `S` pitch, `A` / `D` roll, `Q` / `E` yaw, `R` / `F` thrust

@@ -2,13 +2,19 @@
 
 #include "AgentCharacter.h"
 #include "DroneCompanion.h"
+#include "Factory/ConveyorBeltStraight.h"
+#include "Factory/ConveyorPlacementPreview.h"
+#include "Factory/FactoryPlacementHelpers.h"
 #include "Camera/CameraComponent.h"
+#include "CollisionShape.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "DrawDebugHelpers.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "Engine/Engine.h"
 #include "Engine/LocalPlayer.h"
+#include "Engine/OverlapResult.h"
 #include "Engine/World.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Controller.h"
@@ -137,6 +143,18 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 	UpdateKeyboardMapButtonHold(DeltaSeconds);
 	UpdateControllerMapButtonHold(DeltaSeconds);
 
+	if (bConveyorPlacementModeActive)
+	{
+		if (!CanUseConveyorPlacementMode())
+		{
+			ExitConveyorPlacementMode();
+		}
+		else
+		{
+			UpdateConveyorPlacementPreview();
+		}
+	}
+
 	if (DroneCompanion)
 	{
 		DroneCompanion->SetFollowTarget(this);
@@ -192,6 +210,14 @@ void AAgentCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 
 	PlayerInputComponent->BindKey(EKeys::V, IE_Pressed, this, &AAgentCharacter::CycleViewMode);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Top, IE_Pressed, this, &AAgentCharacter::CycleViewMode);
+	PlayerInputComponent->BindKey(EKeys::One, IE_Pressed, this, &AAgentCharacter::OnConveyorPlacementModePressed);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Left, IE_Pressed, this, &AAgentCharacter::OnConveyorPlacementModePressed);
+	PlayerInputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &AAgentCharacter::OnConveyorPlacePressed);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_RightTrigger, IE_Pressed, this, &AAgentCharacter::OnConveyorPlacePressed);
+	PlayerInputComponent->BindKey(EKeys::RightMouseButton, IE_Pressed, this, &AAgentCharacter::OnConveyorCancelPressed);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Right, IE_Pressed, this, &AAgentCharacter::OnConveyorCancelPressed);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_LeftShoulder, IE_Pressed, this, &AAgentCharacter::OnConveyorRotateLeftPressed);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_RightShoulder, IE_Pressed, this, &AAgentCharacter::OnConveyorRotateRightPressed);
 	PlayerInputComponent->BindKey(EKeys::SpaceBar, IE_Pressed, this, &AAgentCharacter::DoJumpStart);
 	PlayerInputComponent->BindKey(EKeys::SpaceBar, IE_Released, this, &AAgentCharacter::DoJumpEnd);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Bottom, IE_Pressed, this, &AAgentCharacter::DoJumpStart);
@@ -222,9 +248,8 @@ void AAgentCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	PlayerInputComponent->BindAxisKey(EKeys::Gamepad_RightY, this, &AAgentCharacter::OnDroneGamepadPitchAxis);
 	PlayerInputComponent->BindAxisKey(EKeys::Gamepad_LeftTriggerAxis, this, &AAgentCharacter::OnDroneGamepadLeftTriggerAxis);
 	PlayerInputComponent->BindAxisKey(EKeys::Gamepad_RightTriggerAxis, this, &AAgentCharacter::OnDroneGamepadRightTriggerAxis);
-	PlayerInputComponent->BindKey(EKeys::Gamepad_DPad_Left, IE_Pressed, this, &AAgentCharacter::OnDroneControlModeTogglePressed);
-	PlayerInputComponent->BindKey(EKeys::Gamepad_LeftShoulder, IE_Pressed, this, &AAgentCharacter::OnDroneHoverModePressed);
-	PlayerInputComponent->BindKey(EKeys::Gamepad_RightShoulder, IE_Pressed, this, &AAgentCharacter::OnDroneStabilizerTogglePressed);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_DPad_Left, IE_Pressed, this, &AAgentCharacter::OnDroneHoverModePressed);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_DPad_Right, IE_Pressed, this, &AAgentCharacter::OnDroneStabilizerTogglePressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_Special_Left, IE_Pressed, this, &AAgentCharacter::OnControllerMapButtonPressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_Special_Left, IE_Released, this, &AAgentCharacter::OnControllerMapButtonReleased);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_DPad_Up, IE_Pressed, this, &AAgentCharacter::OnDroneCameraTiltUpPressed);
@@ -283,6 +308,11 @@ void AAgentCharacter::CycleViewMode()
 
 void AAgentCharacter::ApplyViewMode(EAgentViewMode NewMode, bool bBlend)
 {
+	if (bConveyorPlacementModeActive && NewMode != CurrentViewMode)
+	{
+		ExitConveyorPlacementMode();
+	}
+
 	bMapModeActive = false;
 	bMiniMapModeActive = false;
 	bMiniMapViewingDroneCamera = false;
@@ -659,6 +689,392 @@ void AAgentCharacter::AttachThirdPersonProxyToComponent(USceneComponent* Attachm
 	ThirdPersonDroneProxyMesh->SetRelativeRotation(FRotator::ZeroRotator);
 }
 
+bool AAgentCharacter::CanUseConveyorPlacementMode() const
+{
+	return !bMapModeActive
+		&& !bMiniMapModeActive
+		&& (CurrentViewMode == EAgentViewMode::ThirdPerson || CurrentViewMode == EAgentViewMode::FirstPerson);
+}
+
+void AAgentCharacter::ToggleConveyorPlacementMode()
+{
+	if (bConveyorPlacementModeActive)
+	{
+		ExitConveyorPlacementMode();
+		return;
+	}
+
+	EnterConveyorPlacementMode();
+}
+
+void AAgentCharacter::EnterConveyorPlacementMode()
+{
+	if (bConveyorPlacementModeActive)
+	{
+		return;
+	}
+
+	if (!CanUseConveyorPlacementMode())
+	{
+		if (GEngine)
+		{
+			GEngine->AddOnScreenDebugMessage(
+				static_cast<uint64>(GetUniqueID()) + 18000ULL,
+				1.5f,
+				FColor::Yellow,
+				TEXT("Conveyor placement only works in first and third person."));
+		}
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	UClass* PreviewClass = ConveyorPlacementPreviewClass.Get();
+	if (!PreviewClass)
+	{
+		PreviewClass = AConveyorPlacementPreview::StaticClass();
+	}
+
+	FActorSpawnParameters SpawnParameters{};
+	SpawnParameters.Owner = this;
+	SpawnParameters.Instigator = this;
+	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	ConveyorPlacementPreview = World->SpawnActor<AConveyorPlacementPreview>(
+		PreviewClass,
+		FVector::ZeroVector,
+		FRotator::ZeroRotator,
+		SpawnParameters);
+
+	bConveyorPlacementModeActive = ConveyorPlacementPreview != nullptr;
+	bConveyorPlacementValid = false;
+	ConveyorPlacementRotationSteps = 0;
+	PendingConveyorPlacementLocation = FVector::ZeroVector;
+	PendingConveyorPlacementRotation = FRotator::ZeroRotator;
+
+	if (ConveyorPlacementPreview)
+	{
+		ConveyorPlacementPreview->SetActorHiddenInGame(true);
+	}
+
+	UpdateConveyorPlacementPreview();
+}
+
+void AAgentCharacter::ExitConveyorPlacementMode()
+{
+	bConveyorPlacementModeActive = false;
+	bConveyorPlacementValid = false;
+	PendingConveyorPlacementLocation = FVector::ZeroVector;
+	PendingConveyorPlacementRotation = FRotator::ZeroRotator;
+
+	if (ConveyorPlacementPreview)
+	{
+		ConveyorPlacementPreview->Destroy();
+		ConveyorPlacementPreview = nullptr;
+	}
+}
+
+void AAgentCharacter::UpdateConveyorPlacementPreview()
+{
+	if (!bConveyorPlacementModeActive || !ConveyorPlacementPreview)
+	{
+		return;
+	}
+
+	FVector PreviewLocation = PendingConveyorPlacementLocation;
+	FRotator PreviewRotation = PendingConveyorPlacementRotation;
+	bool bPlacementIsValid = false;
+	const bool bHasPreviewLocation = EvaluateConveyorPlacement(PreviewLocation, PreviewRotation, bPlacementIsValid);
+
+	bConveyorPlacementValid = bHasPreviewLocation && bPlacementIsValid;
+
+	if (!bHasPreviewLocation)
+	{
+		ConveyorPlacementPreview->SetActorHiddenInGame(true);
+		return;
+	}
+
+	PendingConveyorPlacementLocation = PreviewLocation;
+	PendingConveyorPlacementRotation = PreviewRotation;
+
+	ConveyorPlacementPreview->SetActorHiddenInGame(false);
+	ConveyorPlacementPreview->SetActorLocationAndRotation(PendingConveyorPlacementLocation, PendingConveyorPlacementRotation);
+	ConveyorPlacementPreview->SetPlacementState(bConveyorPlacementValid);
+
+	if (UWorld* World = GetWorld())
+	{
+		const FColor DebugColor = bConveyorPlacementValid ? FColor::Green : FColor::Red;
+		const FVector BoxCenter = PendingConveyorPlacementLocation + FVector(0.0f, 0.0f, 20.0f + ConveyorPlacementClearanceExtents.Z);
+		DrawDebugBox(
+			World,
+			BoxCenter,
+			ConveyorPlacementClearanceExtents,
+			PendingConveyorPlacementRotation.Quaternion(),
+			DebugColor,
+			false,
+			0.0f,
+			0,
+			1.5f);
+
+		const FVector ArrowStart = PendingConveyorPlacementLocation + FVector(0.0f, 0.0f, 50.0f);
+		const FVector ArrowEnd = ArrowStart + PendingConveyorPlacementRotation.Vector() * 70.0f;
+		DrawDebugDirectionalArrow(
+			World,
+			ArrowStart,
+			ArrowEnd,
+			25.0f,
+			DebugColor,
+			false,
+			0.0f,
+			0,
+			2.0f);
+	}
+}
+
+UCameraComponent* AAgentCharacter::GetActivePlacementCamera() const
+{
+	if (CurrentViewMode == EAgentViewMode::FirstPerson && FirstPersonCamera)
+	{
+		return FirstPersonCamera;
+	}
+
+	if (CurrentViewMode == EAgentViewMode::ThirdPerson)
+	{
+		if (ThirdPersonTransitionCamera && ThirdPersonTransitionCamera->IsActive())
+		{
+			return ThirdPersonTransitionCamera;
+		}
+
+		if (FollowCamera)
+		{
+			return FollowCamera;
+		}
+	}
+
+	return nullptr;
+}
+
+void AAgentCharacter::TryPlaceConveyor()
+{
+	if (!bConveyorPlacementModeActive)
+	{
+		return;
+	}
+
+	FVector SpawnLocation = FVector::ZeroVector;
+	FRotator SpawnRotation = FRotator::ZeroRotator;
+	bool bPlacementIsValid = false;
+	const bool bHasPreviewLocation = EvaluateConveyorPlacement(SpawnLocation, SpawnRotation, bPlacementIsValid);
+
+	if (!bHasPreviewLocation || !bPlacementIsValid)
+	{
+		bConveyorPlacementValid = false;
+		if (ConveyorPlacementPreview)
+		{
+			ConveyorPlacementPreview->SetPlacementState(false);
+		}
+
+		if (GEngine)
+		{
+			GEngine->AddOnScreenDebugMessage(
+				static_cast<uint64>(GetUniqueID()) + 18001ULL,
+				1.0f,
+				FColor::Red,
+				TEXT("Invalid conveyor placement."));
+		}
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	UClass* ConveyorClass = ConveyorBeltClass.Get();
+	if (!ConveyorClass)
+	{
+		ConveyorClass = AConveyorBeltStraight::StaticClass();
+	}
+
+	FActorSpawnParameters SpawnParameters{};
+	SpawnParameters.Owner = this;
+	SpawnParameters.Instigator = this;
+	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	World->SpawnActor<AConveyorBeltStraight>(
+		ConveyorClass,
+		SpawnLocation,
+		SpawnRotation,
+		SpawnParameters);
+
+	UpdateConveyorPlacementPreview();
+}
+
+void AAgentCharacter::CancelConveyorPlacement()
+{
+	if (bConveyorPlacementModeActive)
+	{
+		ExitConveyorPlacementMode();
+	}
+}
+
+void AAgentCharacter::RotateConveyorPlacement(int32 Direction)
+{
+	if (!bConveyorPlacementModeActive)
+	{
+		return;
+	}
+
+	ConveyorPlacementRotationSteps = (ConveyorPlacementRotationSteps + Direction) % 4;
+	if (ConveyorPlacementRotationSteps < 0)
+	{
+		ConveyorPlacementRotationSteps += 4;
+	}
+
+	UpdateConveyorPlacementPreview();
+}
+
+bool AAgentCharacter::EvaluateConveyorPlacement(FVector& OutLocation, FRotator& OutRotation, bool& bOutIsValid) const
+{
+	OutLocation = FVector::ZeroVector;
+	OutRotation = FRotator::ZeroRotator;
+	bOutIsValid = false;
+
+	if (!CanUseConveyorPlacementMode())
+	{
+		return false;
+	}
+
+	UWorld* World = GetWorld();
+	UCameraComponent* PlacementCamera = GetActivePlacementCamera();
+	if (!World || !PlacementCamera)
+	{
+		return false;
+	}
+
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(ConveyorPlacementTrace), false, this);
+	QueryParams.AddIgnoredActor(this);
+
+	if (DroneCompanion)
+	{
+		QueryParams.AddIgnoredActor(DroneCompanion);
+	}
+
+	if (ConveyorPlacementPreview)
+	{
+		QueryParams.AddIgnoredActor(ConveyorPlacementPreview);
+	}
+
+	const FVector TraceStart = PlacementCamera->GetComponentLocation();
+	const FVector TraceDirection = PlacementCamera->GetForwardVector();
+	const FVector TraceEnd = TraceStart + TraceDirection * FMath::Max(100.0f, ConveyorPlacementTraceDistance);
+
+	FHitResult AimHit;
+	bool bHasAimHit = World->LineTraceSingleByChannel(
+		AimHit,
+		TraceStart,
+		TraceEnd,
+		AgentFactory::BuildPlacementTraceChannel,
+		QueryParams);
+
+	if (!bHasAimHit)
+	{
+		bHasAimHit = World->LineTraceSingleByChannel(AimHit, TraceStart, TraceEnd, ECC_Visibility, QueryParams);
+	}
+
+	if (!bHasAimHit)
+	{
+		return false;
+	}
+
+	const FVector SurfaceTraceStart = AimHit.ImpactPoint + FVector(0.0f, 0.0f, FMath::Max(100.0f, ConveyorPlacementSurfaceTraceHeight));
+	const FVector SurfaceTraceEnd = AimHit.ImpactPoint - FVector(0.0f, 0.0f, FMath::Max(100.0f, ConveyorPlacementSurfaceTraceDepth));
+
+	FHitResult SurfaceHit;
+	bool bHasSurfaceHit = World->LineTraceSingleByChannel(
+		SurfaceHit,
+		SurfaceTraceStart,
+		SurfaceTraceEnd,
+		AgentFactory::BuildPlacementTraceChannel,
+		QueryParams);
+
+	if (!bHasSurfaceHit)
+	{
+		bHasSurfaceHit = World->LineTraceSingleByChannel(SurfaceHit, SurfaceTraceStart, SurfaceTraceEnd, ECC_Visibility, QueryParams);
+	}
+
+	if (!bHasSurfaceHit)
+	{
+		return false;
+	}
+
+	OutLocation = AgentFactory::SnapLocationToGrid(SurfaceHit.ImpactPoint);
+	OutRotation = AgentFactory::SnapYawToGrid(static_cast<float>(ConveyorPlacementRotationSteps) * AgentFactory::QuarterTurnDegrees);
+
+	if (SurfaceHit.ImpactNormal.Z < 0.85f)
+	{
+		return true;
+	}
+
+	FCollisionObjectQueryParams ObjectQueryParams;
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_WorldStatic);
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_WorldDynamic);
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_PhysicsBody);
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_Pawn);
+	ObjectQueryParams.AddObjectTypesToQuery(AgentFactory::FactoryBuildableChannel);
+
+	FCollisionQueryParams OverlapParams(SCENE_QUERY_STAT(ConveyorPlacementOverlap), false, this);
+	OverlapParams.AddIgnoredActor(this);
+
+	if (DroneCompanion)
+	{
+		OverlapParams.AddIgnoredActor(DroneCompanion);
+	}
+
+	if (ConveyorPlacementPreview)
+	{
+		OverlapParams.AddIgnoredActor(ConveyorPlacementPreview);
+	}
+
+	TArray<FOverlapResult> OverlapResults;
+	const FVector OverlapCenter = OutLocation + FVector(0.0f, 0.0f, 20.0f + ConveyorPlacementClearanceExtents.Z);
+	const bool bHasOverlap = World->OverlapMultiByObjectType(
+		OverlapResults,
+		OverlapCenter,
+		OutRotation.Quaternion(),
+		ObjectQueryParams,
+		FCollisionShape::MakeBox(ConveyorPlacementClearanceExtents),
+		OverlapParams);
+
+	if (bHasOverlap)
+	{
+		for (const FOverlapResult& OverlapResult : OverlapResults)
+		{
+			if (OverlapResult.GetActor() == nullptr)
+			{
+				continue;
+			}
+
+			if (OverlapResult.GetActor() == this
+				|| OverlapResult.GetActor() == DroneCompanion.Get()
+				|| OverlapResult.GetActor() == ConveyorPlacementPreview.Get())
+			{
+				continue;
+			}
+
+			return true;
+		}
+	}
+
+	bOutIsValid = true;
+	return true;
+}
+
 void AAgentCharacter::UpdateDronePilotInputs(float DeltaSeconds)
 {
 	if (!DroneCompanion || !IsDroneInputModeActive())
@@ -889,6 +1305,11 @@ void AAgentCharacter::ToggleMapMode()
 
 	if (!bMapModeActive)
 	{
+		if (bConveyorPlacementModeActive)
+		{
+			ExitConveyorPlacementMode();
+		}
+
 		if (!DroneCompanion)
 		{
 			FVector DroneSpawnLocation = FVector::ZeroVector;
@@ -940,6 +1361,11 @@ void AAgentCharacter::EnterMiniMapMode()
 	if (bMiniMapModeActive || bMapModeActive)
 	{
 		return;
+	}
+
+	if (bConveyorPlacementModeActive)
+	{
+		ExitConveyorPlacementMode();
 	}
 
 	ApplyViewMode(EAgentViewMode::FirstPerson, true);
@@ -1154,11 +1580,22 @@ void AAgentCharacter::OnDroneYawRightReleased()
 
 void AAgentCharacter::OnDroneThrottleUpPressed()
 {
+	if (bConveyorPlacementModeActive)
+	{
+		RotateConveyorPlacement(1);
+		return;
+	}
+
 	bDroneThrottleUpHeld = true;
 }
 
 void AAgentCharacter::OnDroneThrottleUpReleased()
 {
+	if (bConveyorPlacementModeActive)
+	{
+		return;
+	}
+
 	bDroneThrottleUpHeld = false;
 }
 
@@ -1220,16 +1657,31 @@ void AAgentCharacter::OnDroneCameraTiltDownPressed()
 
 void AAgentCharacter::OnDroneControlModeTogglePressed()
 {
+	if (bConveyorPlacementModeActive)
+	{
+		return;
+	}
+
 	ToggleDronePilotControlMode();
 }
 
 void AAgentCharacter::OnDroneHoverModePressed()
 {
+	if (bConveyorPlacementModeActive)
+	{
+		return;
+	}
+
 	CycleDronePilotControlMode(-1);
 }
 
 void AAgentCharacter::OnDroneStabilizerTogglePressed()
 {
+	if (bConveyorPlacementModeActive)
+	{
+		return;
+	}
+
 	CycleDronePilotControlMode(1);
 }
 
@@ -1298,4 +1750,29 @@ void AAgentCharacter::OnControllerMapButtonReleased()
 	}
 
 	ToggleMapMode();
+}
+
+void AAgentCharacter::OnConveyorPlacementModePressed()
+{
+	ToggleConveyorPlacementMode();
+}
+
+void AAgentCharacter::OnConveyorPlacePressed()
+{
+	TryPlaceConveyor();
+}
+
+void AAgentCharacter::OnConveyorCancelPressed()
+{
+	CancelConveyorPlacement();
+}
+
+void AAgentCharacter::OnConveyorRotateLeftPressed()
+{
+	RotateConveyorPlacement(-1);
+}
+
+void AAgentCharacter::OnConveyorRotateRightPressed()
+{
+	RotateConveyorPlacement(1);
 }

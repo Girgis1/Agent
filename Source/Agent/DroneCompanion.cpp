@@ -422,13 +422,18 @@ void ADroneCompanion::TryRollJump()
 	}
 
 	const FVector Start = DroneBody->GetComponentLocation();
+	const float SphereRadius = FMath::Max(DroneBody->Bounds.SphereRadius, 1.0f);
 	const float TraceDistance = FMath::Max(0.0f, RollGroundCheckDistance);
 	const FVector End = Start - FVector(0.0f, 0.0f, TraceDistance);
 	FCollisionQueryParams QueryParams(FName(TEXT("DroneRollJumpGroundTrace")), false, this);
 	QueryParams.AddIgnoredActor(this);
 
 	FHitResult Hit;
-	const bool bGrounded = GetWorld() && GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, QueryParams);
+	const bool bHasGroundHit = GetWorld() && GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, QueryParams);
+	const float GroundClearance = bHasGroundHit
+		? Start.Z - Hit.ImpactPoint.Z - SphereRadius
+		: TNumericLimits<float>::Max();
+	const bool bGrounded = bHasGroundHit && GroundClearance <= FMath::Max(0.0f, RollGroundedMaxClearance);
 	if (!bGrounded)
 	{
 		return;
@@ -876,22 +881,29 @@ void ADroneCompanion::UpdateRollFlight(float DeltaSeconds)
 	const FVector MoveDirection = (
 		(ForwardDirection * PilotPitchInput) +
 		(RightDirection * PilotRollInput)).GetClampedToMaxSize(1.0f);
+	const float SphereRadius = FMath::Max(DroneBody->Bounds.SphereRadius, 1.0f);
 	const FVector TraceStart = DroneBody->GetComponentLocation();
 	const FVector TraceEnd = TraceStart - FVector(0.0f, 0.0f, FMath::Max(0.0f, RollGroundCheckDistance));
 	FCollisionQueryParams QueryParams(FName(TEXT("DroneRollMoveGroundTrace")), false, this);
 	QueryParams.AddIgnoredActor(this);
 	FHitResult GroundHit;
-	const bool bGrounded = GetWorld() && GetWorld()->LineTraceSingleByChannel(
+	const bool bHasGroundHit = GetWorld() && GetWorld()->LineTraceSingleByChannel(
 		GroundHit,
 		TraceStart,
 		TraceEnd,
 		ECC_Visibility,
 		QueryParams);
+	const float GroundClearance = bHasGroundHit
+		? TraceStart.Z - GroundHit.ImpactPoint.Z - SphereRadius
+		: TNumericLimits<float>::Max();
+	const bool bGrounded = bHasGroundHit && GroundClearance <= FMath::Max(0.0f, RollGroundedMaxClearance);
 
 	if (bGrounded && !MoveDirection.IsNearlyZero())
 	{
-		const FVector TorqueAxis = FVector::CrossProduct(FVector::UpVector, MoveDirection).GetSafeNormal();
-		DroneBody->AddTorqueInDegrees(TorqueAxis * RollTorqueAcceleration, NAME_None, true);
+		DroneBody->AddForce(
+			MoveDirection * FMath::Max(0.0f, RollDriveAcceleration),
+			NAME_None,
+			true);
 	}
 	else if (bGrounded)
 	{
@@ -901,6 +913,29 @@ void ADroneCompanion::UpdateRollFlight(float DeltaSeconds)
 			-HorizontalVelocity * RollBrakingAcceleration,
 			NAME_None,
 			true);
+	}
+
+	FVector HorizontalVelocity = DroneBody->GetPhysicsLinearVelocity();
+	const float VerticalVelocity = HorizontalVelocity.Z;
+	HorizontalVelocity.Z = 0.0f;
+	const float MaxRollSpeed = FMath::Max(0.0f, RollMaxSpeed);
+	if (MaxRollSpeed > 0.0f && HorizontalVelocity.SizeSquared() > FMath::Square(MaxRollSpeed))
+	{
+		const FVector ClampedHorizontalVelocity = HorizontalVelocity.GetClampedToMaxSize(MaxRollSpeed);
+		DroneBody->SetPhysicsLinearVelocity(FVector(
+			ClampedHorizontalVelocity.X,
+			ClampedHorizontalVelocity.Y,
+			VerticalVelocity));
+	}
+
+	const float MaxRollAngularSpeed = FMath::Max(0.0f, RollMaxAngularSpeed);
+	if (MaxRollAngularSpeed > 0.0f)
+	{
+		const FVector CurrentAngularVelocity = DroneBody->GetPhysicsAngularVelocityInDegrees();
+		if (CurrentAngularVelocity.SizeSquared() > FMath::Square(MaxRollAngularSpeed))
+		{
+			DroneBody->SetPhysicsAngularVelocityInDegrees(CurrentAngularVelocity.GetClampedToMaxSize(MaxRollAngularSpeed));
+		}
 	}
 
 	if (bLogRollModeDiagnostics && RollModeLogTimeRemaining <= 0.0f)
