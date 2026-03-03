@@ -227,7 +227,7 @@ public:
 	float FreeFlyAcceleration = 1200.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
-	float FreeFlyDeceleration = 12000.0f;
+	float FreeFlyDeceleration = 4000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
 	float FreeFlyRotationResponse = 4.0f;
