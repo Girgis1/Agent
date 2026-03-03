@@ -80,6 +80,9 @@ public:
 	void SetNextMapModeUsesEntryLift(bool bEnable);
 
 	UFUNCTION(BlueprintCallable, Category="Drone")
+	void SetSuppressCameraMountRefresh(bool bSuppress);
+
+	UFUNCTION(BlueprintCallable, Category="Drone")
 	void StartPilotCameraTransitionFromThirdPerson();
 
 	UFUNCTION(BlueprintCallable, Category="Drone")
@@ -338,6 +341,12 @@ public:
 	float RollCameraLeanResponse = 8.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Camera")
+	float RollCameraPitchInfluenceDegrees = 6.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Camera")
+	float RollCameraInfluenceVelocity = 900.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Camera")
 	float MapCameraPitchDegrees = -90.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Camera")
@@ -440,6 +449,7 @@ protected:
 	FVector BuildUprightAssistAngularVelocity(float AssistStrength, float MaxCorrectionRate) const;
 	FVector GetDesiredLocation() const;
 	FVector GetDesiredForwardDirection() const;
+	void UpdateRollCamera(float DeltaSeconds);
 	void LogRollModeState(const TCHAR* Context, bool bProbeGround);
 	void UpdateDebugOutput() const;
 	void ApplyRuntimePhysicalMaterial();
@@ -518,6 +528,7 @@ protected:
 	bool bNextMapModeUsesEntryLift = true;
 	bool bMapModeUsesHeightLimits = true;
 	bool bCameraTransitionActive = false;
+	bool bSuppressCameraMountRefresh = false;
 	float BuddyDriftTimeRemaining = 0.0f;
 	float ImpactDebugTimeRemaining = 0.0f;
 	float CameraTransitionElapsed = 0.0f;
@@ -537,6 +548,7 @@ protected:
 	float CurrentHoverVerticalAcceleration = 0.0f;
 	float CurrentHoverLiftDot = 1.0f;
 	float CameraFieldOfViewOffset = 0.0f;
+	float CurrentRollCameraPitchOffset = 0.0f;
 	float CurrentRollCameraLean = 0.0f;
 	FVector FreeFlyCurrentVelocity = FVector::ZeroVector;
 	FRotator CameraTransitionStartRotation = FRotator::ZeroRotator;

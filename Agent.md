@@ -19,7 +19,31 @@
   - `Third Person`: the actual camera is always the character's normal `FollowCamera` on the spring arm, but the handoff is now faked. From `First Person`, the view instantly jumps to the drone camera's last transform (only if the drone is within `800` uu / 8 meters of the spring target), the real drone is despawned, and then a temporary character-owned transition camera lerps into the normal spring-arm camera position. A hidden-shadow-only proxy mesh rides with that camera path for aesthetics.
   - `Drone Pilot`: entering from `Third Person` now respawns the real drone exactly at the current third-person camera transform and instantly switches to it, then the drone camera itself performs a short internal camera mount / FOV transition into the pilot view so the handoff feels more like the map-mode camera transition instead of a hard snap.
   - `First Person`: leaving `Drone Pilot` is now an instant swap back to the player's first-person camera, with no camera lerp.
-- Controller `Y` (`Gamepad_FaceButton_Top`) now mirrors `V` and cycles camera modes the same way.
+- Controller `Y` (`Gamepad_FaceButton_Top`) now mirrors `V` for the hold-aware camera behavior.
+- Physics grab interaction is now a shared active-camera system in the main gameplay views:
+  - hold `E` on keyboard or hold controller `RT` to grab and drag simulating physics objects
+  - it now only works in `Third Person` and `First Person`
+  - it is disabled in `Drone Pilot`, `Map Mode`, `MiniMap`, and factory placement mode
+  - the system uses a sphere trace with a visible debug sphere to show the pickup influence area
+  - objects are grabbed at the trace hit point (pinch point), not their center, so long props can pivot naturally when dragged from one end
+  - while held, the system now matches the older `SandBox_01` style again: it uses a real `PhysicsHandleComponent` with a fixed hold point in front of the active camera instead of the abandoned rope/tether system
+  - the handle grabs at the real trace hit point and updates with `SetTargetLocationAndRotation(...)`, so the object stays physically reactive but follows a stable held point
+  - the hold point is now a fixed `600 uu` in front of the active pickup camera instead of using the initial grab distance
+  - in `Third Person`, that fixed hold point also applies a small camera-local forward offset (`ThirdPersonPickupHoldOffset`, default `X = 7.5`) so the held object is not centered as aggressively on the camera line
+  - mass affects handle responsiveness through the old interpolation rule: `Mass * CharacterPickupStrengthMultiplier`, clamped into a `Lerp(PickupLightInterpolationSpeed, PickupHeavyInterpolationSpeed, Alpha)`
+  - the main feel knobs are now `CharacterPickupStrengthMultiplier`, `PickupLightInterpolationSpeed`, and `PickupHeavyInterpolationSpeed`
+  - on controller, while an object is held, holding `LT` enters pickup rotation mode:
+    - right stick `X` rotates the held object around yaw
+    - right stick `Y` rotates the held object around pitch
+    - camera look is suppressed while that rotation mode is active
+    - because the handle is attached at the trace hit point, off-center grabs now pivot much more naturally when rotated
+  - controller `RT` still places factory buildables while placement mode is active
+  - keyboard `E` still falls back to the old drone yaw-right behavior if there is no valid pickup target, so drone control is preserved when not actively grabbing
+  - the player character uses `PushForceFactor = 200000.0` (matching the older project), while `InitialPushForceFactor`, `TouchForceFactor`, and `RepulsionForce` remain zeroed
+  - the drone does not have a `CharacterMovement` push-force equivalent because it is a fully simulated rigid body; if drone collisions need to feel softer, tune its collision response / mass / material separately instead of trying to mirror `PushForceFactor`
+- The view-mode button flow is now intentional:
+  - tap `V` on keyboard or `Y` on controller toggles between `Third Person` and `First Person`
+  - hold `V` on keyboard or `Y` on controller enters `Drone Pilot`
 - Drone pilot control modes now cycle in this order:
   - `Complex`
   - `Horizon`
@@ -37,9 +61,9 @@
   - `Horizon + Hover`: self-level plus helicopter-style hover assist (neutral throttle sits near hover, but tilt still drives forward flight)
   - `Simple`: a first-time-user DJI-style assisted mode tuned closer to consumer `Normal` mode than a hard beginner lock. It auto-levels, uses gradual velocity-style horizontal assist with smoother acceleration/deceleration, keeps vertical hover compensation active, and lets the camera tilt independently. Simple-mode left/right input is now standard again on both keyboard and controller: left goes left, right goes right.
   - `Free Fly`: a spectator-style look-to-fly mode that intentionally ignores the rigid-body drone feel. It now moves kinematically like a smooth Unreal spectator camera instead of using the elastic physics response from the main drone modes.
-  - `Roll`: a grounded first-person ball mode. The camera stays visually upright while the drone body rolls underneath it, movement is now force-driven instead of torque-driven, and `Space` / controller `A` trigger a roll jump. Roll mode bypasses the drone crash / recovery system entirely, resets inherited flight momentum on entry, snaps to an upright yaw-only pose above the floor if it's near the ground, only applies drive when the ball is truly close to the ground (`RollGroundedMaxClearance`), and clamps roll-specific linear / angular speed so it behaves like its own ball controller instead of inheriting flight-state reactions.
-  - Roll mode's upright camera override should only run during active `PilotControlled` roll play; it must not override scripted camera transitions such as pilot entry or map/minimap camera transitions.
-  - Roll mode can apply a small visual camera lean while steering left/right. This is only a camera effect; it should not feed back into physics or self-righting.
+  - `Roll`: this is now a constrained version of advanced flight with no vertical lift. The sphere stays fully Chaos-driven, uses the same angular-control feel as advanced flight, does not teleport/upright/reset on entry, does not participate in crash/self-right recovery, and no longer uses roll jump. The camera stays horizontally readable like a first-person camera, but adds a small momentum-based pitch/roll influence that settles back toward the aimed view over time.
+- Roll mode can apply a small visual camera lean while steering left/right. This is only a camera effect; it should not feed back into physics or self-righting.
+- Guardrail for roll mode: it must not be driven by a separate “ball pawn” controller. Treat it as the same drone body with zero lift and camera-relative planar drive force, while the sphere’s rotation comes from Chaos physics and the camera is the only special-case behavior.
 - When entering `Drone Pilot`, a temporary entry assist still forces both self-level and hover on until the player gives real up/down throttle input, so the drone does not immediately drop on camera switch.
 - Press `M` on keyboard or the controller back/view button for map controls:
 - Keyboard `M` and controller back/view now both have split behavior:
@@ -50,6 +74,7 @@
   - entering map mode from `Third Person` or `First Person` still raises the drone upward from its current location
   - entering map mode while already in `Drone Pilot` does not auto-lift; it keeps the current world position and only animates the camera down into map view
   - entering or leaving map mode now uses a smooth 2-second internal camera transition for pitch / FOV instead of snapping
+  - entering top-down map modes should preserve the drone's current actual camera direction as the transition start, then pitch down from there; do not refresh or recenter the camera mount from player/control rotation right before the transition
   - `WASD` / left stick pan in X/Y
   - `Q` / `E` move altitude down / up
   - `RT` moves altitude down and `LT` moves altitude up
@@ -82,13 +107,21 @@
   - if the player aims at an existing conveyor, placement now snaps off that conveyor's hit face instead of requiring ground below it
     - this allows extending a belt line out into the air by targeting the end or side face of the last placed conveyor
   - placement uses a camera trace, a downward surface trace, grid snapping, overlap validation, and a visible preview actor plus debug box / arrow
-  - conveyor movement uses a blocking base plus a separate top overlap drive volume, then accelerates simulating physics bodies along the belt direction each tick
   - the placement preview actor is a pure ghost and must never have world collision; it should not block the player, payloads, or placement traces
   - conveyor speed now has a single shared master control on `AAgentCharacter`:
     - `ConveyorMasterBeltSpeed`
     - all conveyors use that shared value by default via `AConveyorBeltStraight::SetMasterConveyorSettings(...)`
+  - default shared conveyor speed is now a slow crawl (`150 uu/s`) instead of the older fast test value
+  - conveyor ticks now run in `TG_PrePhysics` so belt velocity is applied before the Chaos solve each frame
   - conveyors no longer use force-based drive, acceleration ramps, or weight-sensitive transport
-  - while a payload is in the conveyor drive volume, the belt now directly overwrites only the payload's along-belt velocity component to the fixed `BeltSpeed`
+  - the belt now affects all supported dynamic occupants in the drive volume, not just factory payloads:
+    - simulating physics components use the physics path
+    - `ACharacter` occupants (player and future NPCs) use the character-movement path
+  - conveyor influence only applies when the occupant is actually supported by the belt surface
+    - the thin top drive volume says "candidate for conveyor movement"
+    - a direct support check against the belt top surface says "actually on this belt"
+    - objects stacked on top of other objects in the drive volume are not directly belt-driven
+  - while a supported occupant is in the conveyor drive volume, the belt directly overwrites only that occupant's along-belt velocity component to the fixed `BeltSpeed`
     - mass does not change belt travel speed
     - angular velocity is untouched
     - sideways drift and vertical motion are untouched
