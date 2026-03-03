@@ -9,6 +9,7 @@
 
 class UArrowComponent;
 class UBoxComponent;
+class ACharacter;
 class UPhysicalMaterial;
 class UPrimitiveComponent;
 class UStaticMeshComponent;
@@ -47,8 +48,11 @@ protected:
 
 	void UpdateTickState();
 	void UpdateSupportPhysicalMaterial();
+	bool IsWorldPointSupportedByBelt(const FVector& WorldPoint) const;
 	bool IsPayloadValid(const UPrimitiveComponent* PrimitiveComponent) const;
+	bool IsCharacterOccupantValid(const ACharacter* Character) const;
 	void ApplyBeltDrive(UPrimitiveComponent* PrimitiveComponent, float DeltaSeconds) const;
+	void ApplyBeltDriveToCharacter(ACharacter* Character) const;
 
 public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Conveyor")
@@ -67,13 +71,13 @@ public:
 	TObjectPtr<UArrowComponent> DirectionArrow = nullptr;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Conveyor")
-	float BeltSpeed = 50.0f;
+	float BeltSpeed = 100.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Conveyor")
 	bool bUseMasterSpeedSettings = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Conveyor|Feel")
-	float BeltSurfaceFriction = 0.03f;
+	float BeltSurfaceFriction = 1.03f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Conveyor|Feel")
 	float BeltSurfaceRestitution = 0.0f;
@@ -91,4 +95,5 @@ protected:
 	TObjectPtr<UPhysicalMaterial> RuntimeSupportPhysicalMaterial = nullptr;
 
 	TSet<TWeakObjectPtr<UPrimitiveComponent>> ActivePayloads;
+	TSet<TWeakObjectPtr<ACharacter>> ActiveCharacters;
 };

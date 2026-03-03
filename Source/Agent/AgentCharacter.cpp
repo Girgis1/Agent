@@ -23,6 +23,7 @@
 #include "GameFramework/Controller.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/SpringArmComponent.h"
+#include "PhysicsEngine/PhysicsHandleComponent.h"
 #include "InputActionValue.h"
 #include "InputCoreTypes.h"
 #include "UObject/ConstructorHelpers.h"
@@ -46,6 +47,10 @@ AAgentCharacter::AAgentCharacter()
 	GetCharacterMovement()->MinAnalogWalkSpeed = 20.f;
 	GetCharacterMovement()->BrakingDecelerationWalking = 2000.f;
 	GetCharacterMovement()->BrakingDecelerationFalling = 1500.0f;
+	GetCharacterMovement()->InitialPushForceFactor = 0.0f;
+	GetCharacterMovement()->PushForceFactor = 200000.0f;
+	GetCharacterMovement()->TouchForceFactor = 0.0f;
+	GetCharacterMovement()->RepulsionForce = 0.0f;
 
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
 	CameraBoom->SetupAttachment(RootComponent);
@@ -68,6 +73,8 @@ AAgentCharacter::AAgentCharacter()
 	ThirdPersonTransitionCamera->bUsePawnControlRotation = false;
 	ThirdPersonTransitionCamera->SetActive(false);
 
+	PickupPhysicsHandle = CreateDefaultSubobject<UPhysicsHandleComponent>(TEXT("PickupPhysicsHandle"));
+
 	ThirdPersonDroneProxyMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ThirdPersonDroneProxyMesh"));
 	ThirdPersonDroneProxyMesh->SetupAttachment(FollowCamera);
 	ThirdPersonDroneProxyMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
@@ -86,6 +93,7 @@ AAgentCharacter::AAgentCharacter()
 	{
 		ThirdPersonDroneProxyMesh->SetStaticMesh(DroneProxyMesh.Object);
 	}
+
 }
 
 void AAgentCharacter::BeginPlay()
@@ -143,6 +151,7 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
+	UpdateViewModeButtonHold(DeltaSeconds);
 	UpdateKeyboardMapButtonHold(DeltaSeconds);
 	UpdateControllerMapButtonHold(DeltaSeconds);
 	AConveyorBeltStraight::SetMasterConveyorSettings(ConveyorMasterBeltSpeed);
@@ -157,6 +166,21 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 		{
 			UpdateConveyorPlacementPreview();
 		}
+	}
+
+	if (CanUsePickupInteraction())
+	{
+		UpdatePickupInteraction();
+	}
+	else
+	{
+		if (HeldPickupComponent.IsValid())
+		{
+			EndPickup();
+		}
+
+		bPickupCandidateValid = false;
+		PickupCandidateComponent.Reset();
 	}
 
 	if (DroneCompanion)
@@ -212,14 +236,17 @@ void AAgentCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 		UE_LOG(LogAgent, Error, TEXT("'%s' Failed to find an Enhanced Input component!"), *GetNameSafe(this));
 	}
 
-	PlayerInputComponent->BindKey(EKeys::V, IE_Pressed, this, &AAgentCharacter::CycleViewMode);
-	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Top, IE_Pressed, this, &AAgentCharacter::CycleViewMode);
+	PlayerInputComponent->BindKey(EKeys::V, IE_Pressed, this, &AAgentCharacter::OnViewModeButtonPressed);
+	PlayerInputComponent->BindKey(EKeys::V, IE_Released, this, &AAgentCharacter::OnViewModeButtonReleased);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Top, IE_Pressed, this, &AAgentCharacter::OnViewModeButtonPressed);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Top, IE_Released, this, &AAgentCharacter::OnViewModeButtonReleased);
 	PlayerInputComponent->BindKey(EKeys::One, IE_Pressed, this, &AAgentCharacter::OnConveyorPlacementModePressed);
 	PlayerInputComponent->BindKey(EKeys::Two, IE_Pressed, this, &AAgentCharacter::OnStorageBinPlacementModePressed);
 	PlayerInputComponent->BindKey(EKeys::Three, IE_Pressed, this, &AAgentCharacter::OnResourceSpawnerPlacementModePressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Left, IE_Pressed, this, &AAgentCharacter::OnFactoryPlacementTogglePressed);
 	PlayerInputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &AAgentCharacter::OnConveyorPlacePressed);
-	PlayerInputComponent->BindKey(EKeys::Gamepad_RightTrigger, IE_Pressed, this, &AAgentCharacter::OnConveyorPlacePressed);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_RightTrigger, IE_Pressed, this, &AAgentCharacter::OnPickupOrPlacePressed);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_RightTrigger, IE_Released, this, &AAgentCharacter::OnPickupOrPlaceReleased);
 	PlayerInputComponent->BindKey(EKeys::RightMouseButton, IE_Pressed, this, &AAgentCharacter::OnConveyorCancelPressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Right, IE_Pressed, this, &AAgentCharacter::OnConveyorCancelPressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_LeftShoulder, IE_Pressed, this, &AAgentCharacter::OnConveyorRotateLeftPressed);
@@ -241,8 +268,8 @@ void AAgentCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	PlayerInputComponent->BindKey(EKeys::D, IE_Released, this, &AAgentCharacter::OnDroneRollRightReleased);
 	PlayerInputComponent->BindKey(EKeys::Q, IE_Pressed, this, &AAgentCharacter::OnDroneYawLeftPressed);
 	PlayerInputComponent->BindKey(EKeys::Q, IE_Released, this, &AAgentCharacter::OnDroneYawLeftReleased);
-	PlayerInputComponent->BindKey(EKeys::E, IE_Pressed, this, &AAgentCharacter::OnDroneYawRightPressed);
-	PlayerInputComponent->BindKey(EKeys::E, IE_Released, this, &AAgentCharacter::OnDroneYawRightReleased);
+	PlayerInputComponent->BindKey(EKeys::E, IE_Pressed, this, &AAgentCharacter::OnPickupOrDroneYawRightPressed);
+	PlayerInputComponent->BindKey(EKeys::E, IE_Released, this, &AAgentCharacter::OnPickupOrDroneYawRightReleased);
 	PlayerInputComponent->BindKey(EKeys::R, IE_Pressed, this, &AAgentCharacter::OnDroneThrottleUpPressed);
 	PlayerInputComponent->BindKey(EKeys::R, IE_Released, this, &AAgentCharacter::OnDroneThrottleUpReleased);
 	PlayerInputComponent->BindKey(EKeys::F, IE_Pressed, this, &AAgentCharacter::OnDroneThrottleDownPressed);
@@ -279,6 +306,51 @@ void AAgentCharacter::Look(const FInputActionValue& Value)
 	DoLook(LookAxisVector.X, LookAxisVector.Y);
 }
 
+void AAgentCharacter::OnViewModeButtonPressed()
+{
+	bViewModeButtonHeld = true;
+	bViewModeHoldTriggered = false;
+	ViewModeButtonHeldDuration = 0.0f;
+}
+
+void AAgentCharacter::OnViewModeButtonReleased()
+{
+	if (!bViewModeButtonHeld)
+	{
+		return;
+	}
+
+	const bool bWasHoldTriggered = bViewModeHoldTriggered;
+	bViewModeButtonHeld = false;
+	bViewModeHoldTriggered = false;
+	ViewModeButtonHeldDuration = 0.0f;
+
+	if (!bWasHoldTriggered)
+	{
+		CycleViewMode();
+	}
+}
+
+void AAgentCharacter::UpdateViewModeButtonHold(float DeltaSeconds)
+{
+	if (!bViewModeButtonHeld || bViewModeHoldTriggered)
+	{
+		return;
+	}
+
+	ViewModeButtonHeldDuration += FMath::Max(0.0f, DeltaSeconds);
+	if (ViewModeButtonHeldDuration < FMath::Max(0.0f, DroneViewHoldTime))
+	{
+		return;
+	}
+
+	bViewModeHoldTriggered = true;
+	if (CurrentViewMode != EAgentViewMode::DronePilot)
+	{
+		ApplyViewMode(EAgentViewMode::DronePilot, true);
+	}
+}
+
 void AAgentCharacter::CycleViewMode()
 {
 	if (bMiniMapModeActive)
@@ -293,20 +365,10 @@ void AAgentCharacter::CycleViewMode()
 		return;
 	}
 
-	EAgentViewMode NextMode = EAgentViewMode::ThirdPerson;
-
-	switch (CurrentViewMode)
+	EAgentViewMode NextMode = EAgentViewMode::FirstPerson;
+	if (CurrentViewMode == EAgentViewMode::FirstPerson)
 	{
-	case EAgentViewMode::ThirdPerson:
-		NextMode = EAgentViewMode::DronePilot;
-		break;
-	case EAgentViewMode::DronePilot:
-		NextMode = EAgentViewMode::FirstPerson;
-		break;
-	case EAgentViewMode::FirstPerson:
-	default:
 		NextMode = EAgentViewMode::ThirdPerson;
-		break;
 	}
 
 	ApplyViewMode(NextMode, true);
@@ -1191,6 +1253,292 @@ void AAgentCharacter::ApplyFactoryBuildableDefaults(AActor* SpawnedActor) const
 	}
 }
 
+bool AAgentCharacter::CanUsePickupInteraction() const
+{
+	if (bMiniMapModeActive || bConveyorPlacementModeActive || bMapModeActive)
+	{
+		return false;
+	}
+
+	return CurrentViewMode == EAgentViewMode::ThirdPerson
+		|| CurrentViewMode == EAgentViewMode::FirstPerson;
+}
+
+bool AAgentCharacter::GetActivePickupView(FVector& OutLocation, FRotator& OutRotation) const
+{
+	if (CurrentViewMode == EAgentViewMode::FirstPerson && FirstPersonCamera)
+	{
+		OutLocation = FirstPersonCamera->GetComponentLocation();
+		OutRotation = FirstPersonCamera->GetComponentRotation();
+		return true;
+	}
+
+	if (CurrentViewMode == EAgentViewMode::ThirdPerson)
+	{
+		if (ThirdPersonTransitionCamera && ThirdPersonTransitionCamera->IsActive())
+		{
+			OutLocation = ThirdPersonTransitionCamera->GetComponentLocation();
+			OutRotation = ThirdPersonTransitionCamera->GetComponentRotation();
+			return true;
+		}
+
+		if (FollowCamera)
+		{
+			OutLocation = FollowCamera->GetComponentLocation();
+			OutRotation = FollowCamera->GetComponentRotation();
+			return true;
+		}
+	}
+
+	return false;
+}
+
+void AAgentCharacter::UpdatePickupInteraction()
+{
+	if (HeldPickupComponent.IsValid())
+	{
+		UpdateHeldPickup();
+		if (HeldPickupComponent.IsValid())
+		{
+			return;
+		}
+	}
+
+	UpdatePickupCandidate();
+}
+
+bool AAgentCharacter::UpdatePickupCandidate()
+{
+	bPickupCandidateValid = false;
+	PickupCandidateComponent.Reset();
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return false;
+	}
+
+	FVector ViewLocation = FVector::ZeroVector;
+	FRotator ViewRotation = FRotator::ZeroRotator;
+	if (!GetActivePickupView(ViewLocation, ViewRotation))
+	{
+		return false;
+	}
+
+	const float TraceDistance = FMath::Max(0.0f, PickupTraceDistance);
+	const float TraceRadius = FMath::Max(0.0f, PickupTraceRadius);
+	const FVector TraceEnd = ViewLocation + ViewRotation.Vector() * TraceDistance;
+
+	FCollisionObjectQueryParams ObjectQueryParams;
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_PhysicsBody);
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_WorldDynamic);
+
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(PickupTrace), false, this);
+	QueryParams.bFindInitialOverlaps = true;
+	QueryParams.AddIgnoredActor(this);
+
+	if (DroneCompanion)
+	{
+		QueryParams.AddIgnoredActor(DroneCompanion.Get());
+	}
+
+	if (ConveyorPlacementPreview)
+	{
+		QueryParams.AddIgnoredActor(ConveyorPlacementPreview.Get());
+	}
+
+	TArray<FHitResult> Hits;
+	const bool bHitAnything = World->SweepMultiByObjectType(
+		Hits,
+		ViewLocation,
+		TraceEnd,
+		FQuat::Identity,
+		ObjectQueryParams,
+		FCollisionShape::MakeSphere(TraceRadius),
+		QueryParams);
+
+	FHitResult BestHit;
+	float BestDistanceSq = TNumericLimits<float>::Max();
+
+	if (bHitAnything)
+	{
+		for (const FHitResult& Hit : Hits)
+		{
+			UPrimitiveComponent* HitComponent = Hit.GetComponent();
+			if (!CanPickupComponent(HitComponent))
+			{
+				continue;
+			}
+
+			const FVector HitLocation = Hit.ImpactPoint.IsNearlyZero() ? Hit.Location : Hit.ImpactPoint;
+			const float DistanceSq = FVector::DistSquared(ViewLocation, HitLocation);
+			if (DistanceSq < BestDistanceSq)
+			{
+				BestDistanceSq = DistanceSq;
+				BestHit = Hit;
+			}
+		}
+	}
+
+	if (BestDistanceSq < TNumericLimits<float>::Max())
+	{
+		PickupCandidateComponent = BestHit.GetComponent();
+		PickupCandidateLocation = BestHit.ImpactPoint.IsNearlyZero() ? BestHit.Location : BestHit.ImpactPoint;
+		bPickupCandidateValid = true;
+		DrawPickupInfluenceDebug(PickupCandidateLocation, FColor::Green);
+		return true;
+	}
+
+	PickupCandidateLocation = TraceEnd;
+	DrawPickupInfluenceDebug(TraceEnd, FColor(200, 200, 200));
+	return false;
+}
+
+void AAgentCharacter::DrawPickupInfluenceDebug(
+	const FVector& SphereCenter,
+	const FColor& Color) const
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	if (!bShowPickupDebug)
+	{
+		return;
+	}
+
+	DrawDebugSphere(World, SphereCenter, FMath::Max(0.0f, PickupTraceRadius), 18, Color, false, 0.0f, 0, 1.25f);
+}
+
+bool AAgentCharacter::CanPickupComponent(const UPrimitiveComponent* PrimitiveComponent) const
+{
+	return PrimitiveComponent
+		&& PrimitiveComponent->IsSimulatingPhysics()
+		&& PrimitiveComponent->GetCollisionEnabled() != ECollisionEnabled::NoCollision;
+}
+
+bool AAgentCharacter::TryBeginPickup()
+{
+	if (!PickupPhysicsHandle)
+	{
+		return false;
+	}
+
+	if (HeldPickupComponent.IsValid())
+	{
+		return true;
+	}
+
+	if ((!bPickupCandidateValid || !PickupCandidateComponent.IsValid()) && !UpdatePickupCandidate())
+	{
+		return false;
+	}
+
+	UPrimitiveComponent* PrimitiveComponent = PickupCandidateComponent.Get();
+	if (!CanPickupComponent(PrimitiveComponent))
+	{
+		return false;
+	}
+
+	FVector ViewLocation = FVector::ZeroVector;
+	FRotator ViewRotation = FRotator::ZeroRotator;
+	if (!GetActivePickupView(ViewLocation, ViewRotation))
+	{
+		return false;
+	}
+
+	PrimitiveComponent->WakeAllRigidBodies();
+	PickupPhysicsHandle->ReleaseComponent();
+
+	HeldPickupComponent = PrimitiveComponent;
+	HeldPickupDistance = FMath::Clamp(
+		FVector::Dist(ViewLocation, PickupCandidateLocation),
+		FMath::Max(0.0f, PickupMinHoldDistance),
+		FMath::Max(PickupMinHoldDistance, PickupMaxHoldDistance));
+	HeldPickupMassKg = FMath::Max(0.0f, PrimitiveComponent->GetMass());
+	HeldPickupTargetRotation = PrimitiveComponent->GetComponentRotation();
+	SyncPickupHandleSettings();
+	PickupPhysicsHandle->GrabComponentAtLocationWithRotation(
+		PrimitiveComponent,
+		NAME_None,
+		PickupCandidateLocation,
+		HeldPickupTargetRotation);
+	return true;
+}
+
+void AAgentCharacter::EndPickup()
+{
+	if (PickupPhysicsHandle && PickupPhysicsHandle->GetGrabbedComponent() != nullptr)
+	{
+		PickupPhysicsHandle->ReleaseComponent();
+	}
+
+	HeldPickupComponent.Reset();
+	HeldPickupDistance = 0.0f;
+	HeldPickupMassKg = 0.0f;
+	HeldPickupTargetRotation = FRotator::ZeroRotator;
+}
+
+void AAgentCharacter::UpdateHeldPickup()
+{
+	if (!PickupPhysicsHandle)
+	{
+		EndPickup();
+		return;
+	}
+
+	UPrimitiveComponent* HeldComponent = HeldPickupComponent.Get();
+	if (!CanPickupComponent(HeldComponent))
+	{
+		EndPickup();
+		return;
+	}
+
+	FVector ViewLocation = FVector::ZeroVector;
+	FRotator ViewRotation = FRotator::ZeroRotator;
+	if (!GetActivePickupView(ViewLocation, ViewRotation))
+	{
+		EndPickup();
+		return;
+	}
+
+	HeldPickupMassKg = FMath::Max(0.0f, HeldComponent->GetMass());
+	SyncPickupHandleSettings();
+
+	const float HoldDistance = FMath::Clamp(
+		HeldPickupDistance,
+		FMath::Max(0.0f, PickupMinHoldDistance),
+		FMath::Max(PickupMinHoldDistance, PickupMaxHoldDistance));
+	const FVector DesiredTargetLocation = ViewLocation + ViewRotation.Vector() * HoldDistance;
+	PickupPhysicsHandle->SetTargetLocationAndRotation(DesiredTargetLocation, HeldPickupTargetRotation);
+	DrawPickupInfluenceDebug(DesiredTargetLocation, FColor::Cyan);
+}
+
+void AAgentCharacter::SyncPickupHandleSettings() const
+{
+	if (!PickupPhysicsHandle)
+	{
+		return;
+	}
+
+	PickupPhysicsHandle->bInterpolateTarget = true;
+	PickupPhysicsHandle->bSoftLinearConstraint = true;
+	PickupPhysicsHandle->bSoftAngularConstraint = false;
+	PickupPhysicsHandle->LinearStiffness = FMath::Max(0.0f, PickupHandleLinearStiffness);
+	PickupPhysicsHandle->LinearDamping = FMath::Max(0.0f, PickupHandleLinearDamping);
+	PickupPhysicsHandle->AngularStiffness = FMath::Max(0.0f, PickupHandleAngularStiffness);
+	PickupPhysicsHandle->AngularDamping = FMath::Max(0.0f, PickupHandleAngularDamping);
+
+	const float MassAlpha = FMath::Clamp(HeldPickupMassKg * FMath::Max(0.0f, CharacterPickupStrengthMultiplier), 0.0f, 1.0f);
+	const float InterpolationSpeed = FMath::Lerp(
+		PickupLightInterpolationSpeed,
+		PickupHeavyInterpolationSpeed,
+		MassAlpha);
+	PickupPhysicsHandle->SetInterpolationSpeed(InterpolationSpeed);
+}
+
 void AAgentCharacter::UpdateDronePilotInputs(float DeltaSeconds)
 {
 	if (!DroneCompanion || !IsDroneInputModeActive())
@@ -1453,9 +1801,11 @@ void AAgentCharacter::ToggleMapMode()
 		bMapModeActive = true;
 		DroneCompanion->SetFollowTarget(this);
 		DroneCompanion->SetViewReferenceRotation(GetControlRotation());
+		DroneCompanion->SetSuppressCameraMountRefresh(true);
 		DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
 		DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
 		DroneCompanion->SetUseRollPilotControls(false);
+		DroneCompanion->SetSuppressCameraMountRefresh(false);
 		ApplyDroneAssistState();
 		DroneCompanion->SetNextMapModeUsesEntryLift(CurrentViewMode != EAgentViewMode::DronePilot);
 		DroneCompanion->SetCompanionMode(EDroneCompanionMode::MapMode);
@@ -1496,9 +1846,11 @@ void AAgentCharacter::EnterMiniMapMode()
 	SetThirdPersonProxyVisible(false);
 	DroneCompanion->SetFollowTarget(this);
 	DroneCompanion->SetViewReferenceRotation(GetControlRotation());
+	DroneCompanion->SetSuppressCameraMountRefresh(true);
 	DroneCompanion->SetUseSimplePilotControls(bUseSimpleDronePilotControls);
 	DroneCompanion->SetUseFreeFlyPilotControls(IsFreeFlyDronePilotMode());
 	DroneCompanion->SetUseRollPilotControls(false);
+	DroneCompanion->SetSuppressCameraMountRefresh(false);
 	ApplyDroneAssistState();
 	DroneCompanion->SetCompanionMode(EDroneCompanionMode::MiniMapFollow);
 }
@@ -1752,6 +2104,12 @@ void AAgentCharacter::OnDroneGamepadLeftTriggerAxis(float Value)
 
 void AAgentCharacter::OnDroneGamepadRightTriggerAxis(float Value)
 {
+	if (bControllerPickupHeld && CanUsePickupInteraction())
+	{
+		DroneGamepadRightTriggerInput = 0.0f;
+		return;
+	}
+
 	DroneGamepadRightTriggerInput = FMath::Clamp(Value, 0.0f, 1.0f);
 }
 
@@ -1906,4 +2264,55 @@ void AAgentCharacter::OnConveyorRotateLeftPressed()
 void AAgentCharacter::OnConveyorRotateRightPressed()
 {
 	RotateConveyorPlacement(1);
+}
+
+void AAgentCharacter::OnPickupOrDroneYawRightPressed()
+{
+	if (CanUsePickupInteraction() && TryBeginPickup())
+	{
+		bKeyboardPickupHeld = true;
+		return;
+	}
+
+	if (IsDroneInputModeActive())
+	{
+		OnDroneYawRightPressed();
+	}
+}
+
+void AAgentCharacter::OnPickupOrDroneYawRightReleased()
+{
+	if (bKeyboardPickupHeld)
+	{
+		bKeyboardPickupHeld = false;
+		EndPickup();
+		return;
+	}
+
+	OnDroneYawRightReleased();
+}
+
+void AAgentCharacter::OnPickupOrPlacePressed()
+{
+	if (bConveyorPlacementModeActive)
+	{
+		OnConveyorPlacePressed();
+		return;
+	}
+
+	if (CanUsePickupInteraction() && TryBeginPickup())
+	{
+		bControllerPickupHeld = true;
+	}
+}
+
+void AAgentCharacter::OnPickupOrPlaceReleased()
+{
+	if (!bControllerPickupHeld)
+	{
+		return;
+	}
+
+	bControllerPickupHeld = false;
+	EndPickup();
 }

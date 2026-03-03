@@ -15,6 +15,8 @@ class AResourceSpawnerMachine;
 class AStorageBin;
 class UCameraComponent;
 class UInputAction;
+class UPhysicsHandleComponent;
+class UPrimitiveComponent;
 class USceneComponent;
 class UStaticMeshComponent;
 class USpringArmComponent;
@@ -80,6 +82,10 @@ class AAgentCharacter : public ACharacter
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UStaticMeshComponent* ThirdPersonDroneProxyMesh;
 
+	/** Reusable physics handle used for picking up and dragging objects */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	UPhysicsHandleComponent* PickupPhysicsHandle;
+
 protected:
 	UPROPERTY(EditAnywhere, Category="Input")
 	UInputAction* JumpAction;
@@ -105,6 +111,9 @@ protected:
 	void StopMove(const FInputActionValue& Value);
 	void Look(const FInputActionValue& Value);
 
+	void OnViewModeButtonPressed();
+	void OnViewModeButtonReleased();
+	void UpdateViewModeButtonHold(float DeltaSeconds);
 	void CycleViewMode();
 	void ApplyViewMode(EAgentViewMode NewMode, bool bBlend);
 	void SpawnDroneCompanion();
@@ -144,6 +153,16 @@ protected:
 	bool TryGetFactoryBuildableFaceSnapLocation(const FHitResult& AimHit, FVector& OutLocation) const;
 	void SelectFactoryPlacementType(EAgentFactoryPlacementType NewType, bool bToggleIfAlreadySelected);
 	void ApplyFactoryBuildableDefaults(AActor* SpawnedActor) const;
+	bool CanUsePickupInteraction() const;
+	bool GetActivePickupView(FVector& OutLocation, FRotator& OutRotation) const;
+	void UpdatePickupInteraction();
+	bool UpdatePickupCandidate();
+	void DrawPickupInfluenceDebug(const FVector& SphereCenter, const FColor& Color) const;
+	bool CanPickupComponent(const UPrimitiveComponent* PrimitiveComponent) const;
+	bool TryBeginPickup();
+	void EndPickup();
+	void UpdateHeldPickup();
+	void SyncPickupHandleSettings() const;
 
 	void OnDronePitchForwardPressed();
 	void OnDronePitchForwardReleased();
@@ -186,6 +205,10 @@ protected:
 	void OnConveyorCancelPressed();
 	void OnConveyorRotateLeftPressed();
 	void OnConveyorRotateRightPressed();
+	void OnPickupOrDroneYawRightPressed();
+	void OnPickupOrDroneYawRightReleased();
+	void OnPickupOrPlacePressed();
+	void OnPickupOrPlaceReleased();
 
 public:
 	UFUNCTION(BlueprintCallable, Category="Input")
@@ -242,6 +265,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera")
 	float ThirdPersonDroneProxyScale = 0.5f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera")
+	float DroneViewHoldTime = 0.25f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Map")
 	float ControllerMapButtonHoldTime = 0.35f;
 
@@ -270,10 +296,46 @@ public:
 	FVector ConveyorPlacementClearanceExtents = FVector(48.0f, 48.0f, 12.0f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
-	float ConveyorMasterBeltSpeed = 600.0f;
+	float ConveyorMasterBeltSpeed = 100.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
 	TSubclassOf<AFactoryPayloadActor> DefaultFactoryPayloadClass;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	float PickupTraceDistance = 650.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	float PickupTraceRadius = 5.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	float PickupMinHoldDistance = 125.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	float PickupMaxHoldDistance = 650.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	float CharacterPickupStrengthMultiplier = 0.012f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	float PickupLightInterpolationSpeed = 6.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	float PickupHeavyInterpolationSpeed = 4.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	float PickupHandleLinearStiffness = 8000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	float PickupHandleLinearDamping = 500.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	float PickupHandleAngularStiffness = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	float PickupHandleAngularDamping = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	bool bShowPickupDebug = true;
 
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
@@ -322,19 +384,31 @@ protected:
 	bool bDefaultUseControllerRotationYaw = false;
 	bool bDefaultOrientRotationToMovement = true;
 	bool bThirdPersonTransitionActive = false;
+	bool bViewModeButtonHeld = false;
+	bool bViewModeHoldTriggered = false;
 	bool bKeyboardMapButtonHeld = false;
 	bool bKeyboardMapButtonTriggeredMiniMap = false;
 	bool bControllerMapButtonHeld = false;
 	bool bControllerMapButtonTriggeredMiniMap = false;
 
 	float ThirdPersonTransitionElapsed = 0.0f;
+	float ViewModeButtonHeldDuration = 0.0f;
 	float KeyboardMapButtonHeldDuration = 0.0f;
 	float ControllerMapButtonHeldDuration = 0.0f;
+	float HeldPickupDistance = 0.0f;
+	float HeldPickupMassKg = 0.0f;
 	FVector ThirdPersonTransitionStartLocation = FVector::ZeroVector;
 	FRotator ThirdPersonTransitionStartRotation = FRotator::ZeroRotator;
 	FVector PendingConveyorPlacementLocation = FVector::ZeroVector;
 	FRotator PendingConveyorPlacementRotation = FRotator::ZeroRotator;
 	int32 ConveyorPlacementRotationSteps = 0;
+	TWeakObjectPtr<UPrimitiveComponent> PickupCandidateComponent;
+	TWeakObjectPtr<UPrimitiveComponent> HeldPickupComponent;
+	FVector PickupCandidateLocation = FVector::ZeroVector;
+	FRotator HeldPickupTargetRotation = FRotator::ZeroRotator;
+	bool bPickupCandidateValid = false;
+	bool bKeyboardPickupHeld = false;
+	bool bControllerPickupHeld = false;
 
 	float DroneGamepadThrottleInput = 0.0f;
 	float DroneGamepadYawInput = 0.0f;
