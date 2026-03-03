@@ -203,7 +203,7 @@ public:
 	float SimpleInputExpo = 0.2f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
-	float SimpleMaxTiltDegrees = 10.0f;
+	float SimpleMaxTiltDegrees = 20.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
 	float SimpleBrakingResponse = 2.25f;
@@ -215,7 +215,7 @@ public:
 	float SimpleAttitudeHoldRate = 12.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
-	float SimpleCameraTiltAxisSpeed = 55.0f;
+	float SimpleCameraTiltAxisSpeed = 100.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pilot")
 	float SimpleMaxDistanceFromTarget = 0.0f;

@@ -200,6 +200,12 @@
   - optional sim features like battery sag, propwash, or camera tilt
 
 ## Build Status
+- Last confirmed successful build on 2026-03-03:
+  - `AgentEditor Win64 Development` using `D:\UnrealEngine\UE_5.7\Engine\Build\BatchFiles\Build.bat`
+- For this project's current engine install (`UE 5.7`), keep both `Source/Agent.Target.cs` and `Source/AgentEditor.Target.cs` on:
+  - `DefaultBuildSettings = BuildSettingsVersion.V6;`
+  - `IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_7;`
+- Do not temporarily downgrade those target settings to `V5` / `Unreal5_5` just to satisfy an older local engine build. That causes upgrade warnings and can break the real `UE 5.7` build path used by this project.
 - Last confirmed successful builds on 2026-03-02:
   - `AgentEditor Win64 Development`
   - `Agent Win64 Development`

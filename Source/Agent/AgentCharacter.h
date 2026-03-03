@@ -172,6 +172,8 @@ protected:
 	bool TryBeginPickup();
 	void EndPickup();
 	void UpdateHeldPickup();
+	void RebaseHeldPickupRotationToView();
+	void RefreshHeldPickupConstraintMode();
 	void SyncPickupHandleSettings() const;
 
 	void OnDronePitchForwardPressed();
@@ -341,8 +343,17 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
 	FVector ThirdPersonPickupHoldOffset = FVector(7.5f, 0.0f, 0.0f);
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
-	float CharacterPickupStrengthMultiplier = 0.012f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup", meta=(DisplayName="Character Pickup Strength"))
+	float CharacterPickupStrengthMultiplier = 0.1f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup", meta=(DisplayName="Drone Pickup Strength"))
+	float DronePickupStrengthMultiplier = 0.01f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup", meta=(DisplayName="Pickup Strength Mass Scale (kg)"))
+	float PickupStrengthMassScaleKg = 1000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup", meta=(DisplayName="Pickup Soft Cap Response Fraction"))
+	float PickupSoftCapResponseMassFraction = 0.1f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
 	float PickupLightInterpolationSpeed = 6.0f;
@@ -357,10 +368,10 @@ public:
 	float PickupHandleLinearDamping = 500.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
-	float PickupHandleAngularStiffness = 0.0f;
+	float PickupHandleAngularStiffness = 3000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
-	float PickupHandleAngularDamping = 0.0f;
+	float PickupHandleAngularDamping = 350.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
 	float PickupRotationYawSpeed = 120.0f;
@@ -460,6 +471,8 @@ protected:
 	TWeakObjectPtr<UPrimitiveComponent> PickupCandidateComponent;
 	TWeakObjectPtr<UPrimitiveComponent> HeldPickupComponent;
 	FVector PickupCandidateLocation = FVector::ZeroVector;
+	FVector HeldPickupLocalGrabOffset = FVector::ZeroVector;
+	FRotator HeldPickupViewRelativeRotationOffset = FRotator::ZeroRotator;
 	FRotator HeldPickupTargetRotation = FRotator::ZeroRotator;
 	bool bPickupCandidateValid = false;
 	bool bKeyboardPickupHeld = false;
