@@ -263,6 +263,8 @@ void AAgentCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	PlayerInputComponent->BindKey(EKeys::Q, IE_Released, this, &AAgentCharacter::OnDroneYawLeftReleased);
 	PlayerInputComponent->BindKey(EKeys::E, IE_Pressed, this, &AAgentCharacter::OnPickupOrDroneYawRightPressed);
 	PlayerInputComponent->BindKey(EKeys::E, IE_Released, this, &AAgentCharacter::OnPickupOrDroneYawRightReleased);
+	PlayerInputComponent->BindKey(EKeys::LeftBracket, IE_Pressed, this, &AAgentCharacter::OnPickupStrengthDecreasePressed);
+	PlayerInputComponent->BindKey(EKeys::RightBracket, IE_Pressed, this, &AAgentCharacter::OnPickupStrengthIncreasePressed);
 	PlayerInputComponent->BindKey(EKeys::R, IE_Pressed, this, &AAgentCharacter::OnDroneThrottleUpPressed);
 	PlayerInputComponent->BindKey(EKeys::R, IE_Released, this, &AAgentCharacter::OnDroneThrottleUpReleased);
 	PlayerInputComponent->BindKey(EKeys::F, IE_Pressed, this, &AAgentCharacter::OnDroneThrottleDownPressed);
@@ -1532,6 +1534,8 @@ bool AAgentCharacter::TryBeginPickup()
 		FMath::Max(0.0f, PickupMinHoldDistance),
 		FMath::Max(PickupMinHoldDistance, PickupMaxHoldDistance));
 	HeldPickupMassKg = FMath::Max(0.0f, PrimitiveComponent->GetMass());
+	HeldPickupOriginalLinearDamping = PrimitiveComponent->GetLinearDamping();
+	HeldPickupOriginalAngularDamping = PrimitiveComponent->GetAngularDamping();
 	HeldPickupLocalGrabOffset = PrimitiveComponent->GetComponentTransform().InverseTransformPosition(PickupCandidateLocation);
 	HeldPickupTargetRotation = PrimitiveComponent->GetComponentRotation();
 	HeldPickupViewRelativeRotationOffset = (HeldPickupTargetRotation - ViewRotation).GetNormalized();
@@ -1543,6 +1547,12 @@ bool AAgentCharacter::TryBeginPickup()
 
 void AAgentCharacter::EndPickup()
 {
+	if (UPrimitiveComponent* HeldComponent = HeldPickupComponent.Get())
+	{
+		HeldComponent->SetLinearDamping(HeldPickupOriginalLinearDamping);
+		HeldComponent->SetAngularDamping(HeldPickupOriginalAngularDamping);
+	}
+
 	if (PickupPhysicsHandle && PickupPhysicsHandle->GetGrabbedComponent() != nullptr)
 	{
 		PickupPhysicsHandle->ReleaseComponent();
@@ -1551,6 +1561,8 @@ void AAgentCharacter::EndPickup()
 	HeldPickupComponent.Reset();
 	HeldPickupDistance = 0.0f;
 	HeldPickupMassKg = 0.0f;
+	HeldPickupOriginalLinearDamping = 0.0f;
+	HeldPickupOriginalAngularDamping = 0.0f;
 	HeldPickupLocalGrabOffset = FVector::ZeroVector;
 	HeldPickupViewRelativeRotationOffset = FRotator::ZeroRotator;
 	HeldPickupTargetRotation = FRotator::ZeroRotator;
@@ -1660,6 +1672,87 @@ void AAgentCharacter::RefreshHeldPickupConstraintMode()
 	}
 }
 
+float AAgentCharacter::GetActivePickupStrengthValue() const
+{
+	const float ActiveStrengthValue = CurrentViewMode == EAgentViewMode::DronePilot
+		? DronePickupStrengthMultiplier
+		: CharacterPickupStrengthMultiplier;
+	return FMath::Max(0.0f, ActiveStrengthValue);
+}
+
+float AAgentCharacter::GetHeldPickupResponsivenessScale() const
+{
+	const float StrengthValue = GetActivePickupStrengthValue();
+	const float CarryMassScaleKg = FMath::Max(1.0f, PickupStrengthMassScaleKg);
+	const float MaxCarryMassKg = FMath::Max(1.0f, StrengthValue * CarryMassScaleKg);
+	const float EffectiveHeldMassKg = HeldPickupMassKg * FMath::Max(0.0f, PickupMassFeelMultiplier);
+	const float LoadRatio = EffectiveHeldMassKg / MaxCarryMassKg;
+	const float ResponseMassFraction = FMath::Clamp(PickupSoftCapResponseMassFraction, 0.01f, 1.0f);
+	const float ResponseLoadRatio = LoadRatio / ResponseMassFraction;
+	const float OverloadRatio = FMath::Max(0.0f, ResponseLoadRatio - 1.0f);
+	return 1.0f / (1.0f + OverloadRatio);
+}
+
+float AAgentCharacter::GetHeldPickupHeavyDampingMultiplier() const
+{
+	const float ReferenceStrength = FMath::Max(0.01f, PickupHeavyDampingReferenceStrength);
+	const float StrengthScale = FMath::Max(0.05f, GetActivePickupStrengthValue() / ReferenceStrength);
+	const float HeavyDampingStartMassKg = FMath::Max(1.0f, PickupHeavyDampingStartMassKg * StrengthScale);
+	const float HeavyMassRatio = HeldPickupMassKg / HeavyDampingStartMassKg;
+	const float HeavyOverRatio = FMath::Max(0.0f, HeavyMassRatio - 1.0f);
+	return 1.0f + (HeavyOverRatio * FMath::Max(0.0f, PickupHeavyDampingMultiplier));
+}
+
+float AAgentCharacter::GetHeldPickupRotationLeverageMultiplier() const
+{
+	const UPrimitiveComponent* HeldComponent = HeldPickupComponent.Get();
+	if (!HeldComponent)
+	{
+		return 1.0f;
+	}
+
+	const FVector GrabLocation = HeldComponent->GetComponentTransform().TransformPosition(HeldPickupLocalGrabOffset);
+	const FVector CenterOfMass = HeldComponent->GetCenterOfMass(NAME_None);
+	const float LeverageDistanceCm = FVector::Dist(GrabLocation, CenterOfMass);
+	const float LeverageReferenceCm = FMath::Max(1.0f, PickupRotationLeverageReferenceCm);
+	return 1.0f + (LeverageDistanceCm / LeverageReferenceCm);
+}
+
+float AAgentCharacter::GetHeldPickupRotationDriveScale() const
+{
+	const float StrengthValue = GetActivePickupStrengthValue();
+	const float CarryMassScaleKg = FMath::Max(1.0f, PickupStrengthMassScaleKg);
+	const float CarryMassKg = FMath::Max(1.0f, StrengthValue * CarryMassScaleKg);
+	const float ComfortMassKg = FMath::Max(
+		1.0f,
+		CarryMassKg * FMath::Clamp(PickupRotationComfortMassFraction, 0.01f, 1.0f));
+	const float RotationEffectiveMassKg = HeldPickupMassKg * GetHeldPickupRotationLeverageMultiplier();
+	const float RotationLoadRatio = RotationEffectiveMassKg / ComfortMassKg;
+	const float RotationOverRatio = FMath::Max(0.0f, RotationLoadRatio - 1.0f);
+	const float ResistanceMultiplier = FMath::Max(0.1f, PickupRotationResistanceMultiplier);
+	const float Maneuverability = 1.0f / (1.0f + (RotationOverRatio * ResistanceMultiplier));
+	const float GuideInputScale = FMath::Clamp(PickupRotationGuideInputScale, 0.1f, 2.0f);
+	return FMath::Max(0.08f, GuideInputScale * Maneuverability);
+}
+
+void AAgentCharacter::ApplyHeldPickupRotationPhysicsInput(const FVector& RotationAxis, float InputValue, float DeltaSeconds)
+{
+	UPrimitiveComponent* HeldComponent = HeldPickupComponent.Get();
+	if (!HeldComponent || FMath::IsNearlyZero(InputValue))
+	{
+		return;
+	}
+
+	const float RotationDriveScale = GetHeldPickupRotationDriveScale();
+	const float AngularVelocityDelta = FMath::Max(0.0f, PickupRotationAngularImpulse)
+		* RotationDriveScale
+		* FMath::Max(0.0f, DeltaSeconds);
+	const FVector AngularVelocity = RotationAxis * (InputValue * AngularVelocityDelta);
+
+	HeldComponent->WakeAllRigidBodies();
+	HeldComponent->SetPhysicsAngularVelocityInDegrees(AngularVelocity, true, NAME_None);
+}
+
 void AAgentCharacter::SyncPickupHandleSettings() const
 {
 	if (!PickupPhysicsHandle)
@@ -1670,29 +1763,97 @@ void AAgentCharacter::SyncPickupHandleSettings() const
 	PickupPhysicsHandle->bInterpolateTarget = true;
 	PickupPhysicsHandle->bSoftLinearConstraint = true;
 	PickupPhysicsHandle->bSoftAngularConstraint = bPickupRotationModeActive;
-	const float ActiveStrengthValue = CurrentViewMode == EAgentViewMode::DronePilot
-		? DronePickupStrengthMultiplier
-		: CharacterPickupStrengthMultiplier;
-	const float StrengthValue = FMath::Max(0.0f, ActiveStrengthValue);
+	const float StrengthValue = GetActivePickupStrengthValue();
 	const float CarryMassScaleKg = FMath::Max(1.0f, PickupStrengthMassScaleKg);
 	const float MaxCarryMassKg = FMath::Max(1.0f, StrengthValue * CarryMassScaleKg);
-	const float LoadRatio = HeldPickupMassKg / MaxCarryMassKg;
+	const float EffectiveHeldMassKg = HeldPickupMassKg * FMath::Max(0.0f, PickupMassFeelMultiplier);
+	const float LoadRatio = EffectiveHeldMassKg / MaxCarryMassKg;
 	const float LoadAlpha = FMath::Clamp(LoadRatio, 0.0f, 1.0f);
-	const float ResponseMassFraction = FMath::Clamp(PickupSoftCapResponseMassFraction, 0.01f, 1.0f);
-	const float ResponseLoadRatio = LoadRatio / ResponseMassFraction;
-	const float OverloadRatio = FMath::Max(0.0f, ResponseLoadRatio - 1.0f);
-	const float ResponsivenessScale = 1.0f / (1.0f + OverloadRatio);
+	const float ResponsivenessScale = GetHeldPickupResponsivenessScale();
+	const float HeavyDampingMultiplier = GetHeldPickupHeavyDampingMultiplier();
+	const float LightSwingMultiplier = FMath::Lerp(
+		FMath::Max(1.0f, PickupLightSwingDampingMultiplier),
+		1.0f,
+		LoadAlpha);
+	const float MovementGuideScale = ResponsivenessScale / HeavyDampingMultiplier;
+	const float RotationDriveScale = bPickupRotationModeActive ? GetHeldPickupRotationDriveScale() : 1.0f;
+	const float RotationGuideStrength = bPickupRotationModeActive
+		? FMath::Clamp(PickupRotationGuideStrength * RotationDriveScale, 0.05f, 0.85f)
+		: 1.0f;
+	const float RotationDampingMultiplier = bPickupRotationModeActive
+		? FMath::Lerp(1.6f, 0.65f, FMath::Clamp(RotationDriveScale, 0.0f, 1.0f))
+		: 1.0f;
 
-	PickupPhysicsHandle->LinearStiffness = FMath::Max(0.0f, PickupHandleLinearStiffness * ResponsivenessScale);
-	PickupPhysicsHandle->LinearDamping = FMath::Max(0.0f, PickupHandleLinearDamping);
-	PickupPhysicsHandle->AngularStiffness = FMath::Max(0.0f, PickupHandleAngularStiffness * ResponsivenessScale);
-	PickupPhysicsHandle->AngularDamping = FMath::Max(0.0f, PickupHandleAngularDamping * FMath::Max(0.25f, ResponsivenessScale));
+	PickupPhysicsHandle->LinearStiffness = FMath::Max(0.0f, PickupHandleLinearStiffness * MovementGuideScale);
+	PickupPhysicsHandle->LinearDamping = FMath::Max(
+		0.0f,
+		PickupHandleLinearDamping * LightSwingMultiplier * HeavyDampingMultiplier);
+	PickupPhysicsHandle->AngularStiffness = FMath::Max(
+		0.0f,
+		PickupHandleAngularStiffness * MovementGuideScale * RotationGuideStrength);
+	PickupPhysicsHandle->AngularDamping = FMath::Max(
+		0.0f,
+		PickupHandleAngularDamping * LightSwingMultiplier * RotationDampingMultiplier * HeavyDampingMultiplier);
 
 	const float BaseInterpolationSpeed = FMath::Lerp(
 		PickupLightInterpolationSpeed,
 		PickupHeavyInterpolationSpeed,
 		LoadAlpha);
-	PickupPhysicsHandle->SetInterpolationSpeed(FMath::Max(0.1f, BaseInterpolationSpeed * ResponsivenessScale));
+	PickupPhysicsHandle->SetInterpolationSpeed(FMath::Max(0.05f, BaseInterpolationSpeed * MovementGuideScale));
+
+	if (UPrimitiveComponent* HeldComponent = HeldPickupComponent.Get())
+	{
+		HeldComponent->SetLinearDamping(
+			HeldPickupOriginalLinearDamping
+			+ (PickupHeldBodyLinearDamping * LightSwingMultiplier * HeavyDampingMultiplier));
+		HeldComponent->SetAngularDamping(
+			HeldPickupOriginalAngularDamping
+			+ (PickupHeldBodyAngularDamping * RotationDampingMultiplier * HeavyDampingMultiplier));
+	}
+}
+
+void AAgentCharacter::AdjustPickupStrength(float Delta)
+{
+	const float NewStrength = FMath::Max(0.0f, CharacterPickupStrengthMultiplier + Delta);
+	if (FMath::IsNearlyEqual(NewStrength, CharacterPickupStrengthMultiplier))
+	{
+		ShowPickupStrengthDebug();
+		return;
+	}
+
+	CharacterPickupStrengthMultiplier = NewStrength;
+	DronePickupStrengthMultiplier = CharacterPickupStrengthMultiplier * 0.1f;
+
+	if (HeldPickupComponent.IsValid())
+	{
+		SyncPickupHandleSettings();
+	}
+
+	ShowPickupStrengthDebug();
+}
+
+void AAgentCharacter::ShowPickupStrengthDebug() const
+{
+	if (!GEngine)
+	{
+		return;
+	}
+
+	const float CarryMassScaleKg = FMath::Max(1.0f, PickupStrengthMassScaleKg);
+	const float PlayerCarryMassKg = FMath::Max(0.0f, CharacterPickupStrengthMultiplier) * CarryMassScaleKg;
+	const float DroneCarryMassKg = FMath::Max(0.0f, DronePickupStrengthMultiplier) * CarryMassScaleKg;
+	const FString StrengthMessage = FString::Printf(
+		TEXT("Pickup Strength  Player: %.2f (%.0f kg)  Drone: %.2f (%.0f kg)  Feel x%.1f"),
+		CharacterPickupStrengthMultiplier,
+		PlayerCarryMassKg,
+		DronePickupStrengthMultiplier,
+		DroneCarryMassKg,
+		PickupMassFeelMultiplier);
+	GEngine->AddOnScreenDebugMessage(
+		static_cast<uint64>(GetUniqueID()) + 19000ULL,
+		2.5f,
+		FColor::Yellow,
+		StrengthMessage);
 }
 
 void AAgentCharacter::UpdateDronePilotInputs(float DeltaSeconds)
@@ -2438,8 +2599,17 @@ void AAgentCharacter::OnDroneGamepadRollAxis(float Value)
 	if (bPickupRotationModeActive && bControllerPickupHeld && HeldPickupComponent.IsValid())
 	{
 		const float DeltaSeconds = GetWorld() ? GetWorld()->GetDeltaSeconds() : (1.0f / 60.0f);
+		FVector ViewLocation = FVector::ZeroVector;
+		FRotator ViewRotation = FRotator::ZeroRotator;
+		if (GetActivePickupView(ViewLocation, ViewRotation))
+		{
+			ApplyHeldPickupRotationPhysicsInput(ViewRotation.Quaternion().GetUpVector(), Value, DeltaSeconds);
+		}
+
+		const float RotationGuideInputScale = GetHeldPickupRotationDriveScale();
 		HeldPickupViewRelativeRotationOffset.Yaw = FRotator::NormalizeAxis(
-			HeldPickupViewRelativeRotationOffset.Yaw + (Value * PickupRotationYawSpeed * DeltaSeconds));
+			HeldPickupViewRelativeRotationOffset.Yaw
+				+ (Value * PickupRotationYawSpeed * RotationGuideInputScale * DeltaSeconds));
 		DroneGamepadRollInput = 0.0f;
 		return;
 	}
@@ -2452,8 +2622,17 @@ void AAgentCharacter::OnDroneGamepadPitchAxis(float Value)
 	if (bPickupRotationModeActive && bControllerPickupHeld && HeldPickupComponent.IsValid())
 	{
 		const float DeltaSeconds = GetWorld() ? GetWorld()->GetDeltaSeconds() : (1.0f / 60.0f);
+		FVector ViewLocation = FVector::ZeroVector;
+		FRotator ViewRotation = FRotator::ZeroRotator;
+		if (GetActivePickupView(ViewLocation, ViewRotation))
+		{
+			ApplyHeldPickupRotationPhysicsInput(ViewRotation.Quaternion().GetRightVector(), Value, DeltaSeconds);
+		}
+
+		const float RotationGuideInputScale = GetHeldPickupRotationDriveScale();
 		HeldPickupViewRelativeRotationOffset.Pitch = FRotator::NormalizeAxis(
-			HeldPickupViewRelativeRotationOffset.Pitch + (Value * PickupRotationPitchSpeed * DeltaSeconds));
+			HeldPickupViewRelativeRotationOffset.Pitch
+				+ (Value * PickupRotationPitchSpeed * RotationGuideInputScale * DeltaSeconds));
 		DroneGamepadPitchInput = 0.0f;
 		return;
 	}
@@ -2704,4 +2883,14 @@ void AAgentCharacter::OnPickupOrPlaceReleased()
 	bControllerPickupHeld = false;
 	bPickupRotationModeActive = false;
 	EndPickup();
+}
+
+void AAgentCharacter::OnPickupStrengthDecreasePressed()
+{
+	AdjustPickupStrength(-0.1f);
+}
+
+void AAgentCharacter::OnPickupStrengthIncreasePressed()
+{
+	AdjustPickupStrength(0.1f);
 }

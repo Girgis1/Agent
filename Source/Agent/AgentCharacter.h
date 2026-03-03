@@ -175,6 +175,14 @@ protected:
 	void RebaseHeldPickupRotationToView();
 	void RefreshHeldPickupConstraintMode();
 	void SyncPickupHandleSettings() const;
+	float GetActivePickupStrengthValue() const;
+	float GetHeldPickupResponsivenessScale() const;
+	float GetHeldPickupHeavyDampingMultiplier() const;
+	float GetHeldPickupRotationLeverageMultiplier() const;
+	float GetHeldPickupRotationDriveScale() const;
+	void ApplyHeldPickupRotationPhysicsInput(const FVector& RotationAxis, float InputValue, float DeltaSeconds);
+	void AdjustPickupStrength(float Delta);
+	void ShowPickupStrengthDebug() const;
 
 	void OnDronePitchForwardPressed();
 	void OnDronePitchForwardReleased();
@@ -221,6 +229,8 @@ protected:
 	void OnPickupOrDroneYawRightReleased();
 	void OnPickupOrPlacePressed();
 	void OnPickupOrPlaceReleased();
+	void OnPickupStrengthDecreasePressed();
+	void OnPickupStrengthIncreasePressed();
 
 public:
 	UFUNCTION(BlueprintCallable, Category="Input")
@@ -350,10 +360,13 @@ public:
 	float DronePickupStrengthMultiplier = 0.01f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup", meta=(DisplayName="Pickup Strength Mass Scale (kg)"))
-	float PickupStrengthMassScaleKg = 1000.0f;
+	float PickupStrengthMassScaleKg = 500.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup", meta=(DisplayName="Pickup Mass Feel Multiplier"))
+	float PickupMassFeelMultiplier = 10.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup", meta=(DisplayName="Pickup Soft Cap Response Fraction"))
-	float PickupSoftCapResponseMassFraction = 0.1f;
+	float PickupSoftCapResponseMassFraction = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
 	float PickupLightInterpolationSpeed = 6.0f;
@@ -372,6 +385,42 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
 	float PickupHandleAngularDamping = 350.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	float PickupLightSwingDampingMultiplier = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	float PickupHeldBodyLinearDamping = 5.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	float PickupHeldBodyAngularDamping = 7.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	float PickupHeavyDampingStartMassKg = 100.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	float PickupHeavyDampingReferenceStrength = 0.1f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	float PickupHeavyDampingMultiplier = 4.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	float PickupRotationComfortMassFraction = 0.2f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	float PickupRotationLeverageReferenceCm = 30.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	float PickupRotationResistanceMultiplier = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	float PickupRotationGuideStrength = 0.35f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	float PickupRotationGuideInputScale = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	float PickupRotationAngularImpulse = 9000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
 	float PickupRotationYawSpeed = 120.0f;
@@ -463,6 +512,8 @@ protected:
 	float StoredRollJumpChargeAlpha = 0.0f;
 	float HeldPickupDistance = 0.0f;
 	float HeldPickupMassKg = 0.0f;
+	float HeldPickupOriginalLinearDamping = 0.0f;
+	float HeldPickupOriginalAngularDamping = 0.0f;
 	FVector ThirdPersonTransitionStartLocation = FVector::ZeroVector;
 	FRotator ThirdPersonTransitionStartRotation = FRotator::ZeroRotator;
 	FVector PendingConveyorPlacementLocation = FVector::ZeroVector;
