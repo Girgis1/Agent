@@ -3,7 +3,9 @@
 #include "AgentCharacter.h"
 #include "DroneCompanion.h"
 #include "Factory/ConveyorBeltStraight.h"
+#include "Factory/ConveyorCharacterMovementComponent.h"
 #include "Factory/ConveyorPlacementPreview.h"
+#include "Factory/ConveyorSurfaceVelocityComponent.h"
 #include "Factory/FactoryPayloadActor.h"
 #include "Factory/FactoryPlacementHelpers.h"
 #include "Factory/ResourceSpawnerMachine.h"
@@ -30,9 +32,12 @@
 #include "UObject/ConstructorHelpers.h"
 #include "Agent.h"
 
-AAgentCharacter::AAgentCharacter()
+AAgentCharacter::AAgentCharacter(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UConveyorCharacterMovementComponent>(ACharacter::CharacterMovementComponentName))
 {
 	PrimaryActorTick.bCanEverTick = true;
+
+	CreateDefaultSubobject<UConveyorSurfaceVelocityComponent>(TEXT("ConveyorSurfaceVelocity"));
 
 	GetCapsuleComponent()->InitCapsuleSize(42.f, 96.0f);
 
@@ -157,7 +162,6 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 	UpdateControllerMapButtonHold(DeltaSeconds);
 	UpdateRollModeJumpHold(DeltaSeconds);
 	UpdateDronePilotCameraLimits();
-	AConveyorBeltStraight::SetMasterConveyorSettings(ConveyorMasterBeltSpeed);
 
 	if (bConveyorPlacementModeActive)
 	{
@@ -171,7 +175,12 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 		}
 	}
 
-	if (CanUsePickupInteraction())
+	if (DroneCompanion && DroneCompanion->IsLiftAssistActive() && !CanMaintainDroneLiftAssist())
+	{
+		DroneCompanion->StopLiftAssist();
+	}
+
+	if (CanUsePickupInteraction() || CanMaintainHeldPickup())
 	{
 		UpdatePickupInteraction();
 	}
@@ -1308,12 +1317,6 @@ void AAgentCharacter::ApplyFactoryBuildableDefaults(AActor* SpawnedActor) const
 		return;
 	}
 
-	if (AConveyorBeltStraight* Conveyor = Cast<AConveyorBeltStraight>(SpawnedActor))
-	{
-		Conveyor->SetMasterConveyorSettings(ConveyorMasterBeltSpeed);
-		return;
-	}
-
 	if (AResourceSpawnerMachine* ResourceSpawner = Cast<AResourceSpawnerMachine>(SpawnedActor))
 	{
 		if (DefaultFactoryPayloadClass.Get())
@@ -1325,9 +1328,14 @@ void AAgentCharacter::ApplyFactoryBuildableDefaults(AActor* SpawnedActor) const
 
 bool AAgentCharacter::CanUsePickupInteraction() const
 {
-	if (bMiniMapModeActive || bConveyorPlacementModeActive || bMapModeActive)
+	if (bMiniMapModeActive || bConveyorPlacementModeActive)
 	{
 		return false;
+	}
+
+	if (bMapModeActive)
+	{
+		return CanUseMapModeDronePickup();
 	}
 
 	return CurrentViewMode == EAgentViewMode::ThirdPerson
@@ -1335,7 +1343,66 @@ bool AAgentCharacter::CanUsePickupInteraction() const
 		|| CurrentViewMode == EAgentViewMode::DronePilot;
 }
 
-bool AAgentCharacter::GetActivePickupView(FVector& OutLocation, FRotator& OutRotation) const
+bool AAgentCharacter::CanMaintainHeldPickup() const
+{
+	if (!HeldPickupComponent.IsValid())
+	{
+		return false;
+	}
+
+	if (bMiniMapModeActive || bConveyorPlacementModeActive)
+	{
+		return false;
+	}
+
+	if (bHeldPickupUsesDroneView)
+	{
+		return DroneCompanion != nullptr;
+	}
+
+	FVector ViewLocation = FVector::ZeroVector;
+	FRotator ViewRotation = FRotator::ZeroRotator;
+	return GetCharacterPickupView(ViewLocation, ViewRotation);
+}
+
+bool AAgentCharacter::CanUseDroneLiftAssist() const
+{
+	return DroneCompanion
+		&& CurrentViewMode == EAgentViewMode::FirstPerson
+		&& !bMapModeActive
+		&& !bMiniMapModeActive
+		&& !bConveyorPlacementModeActive;
+}
+
+bool AAgentCharacter::CanMaintainDroneLiftAssist() const
+{
+	return DroneCompanion
+		&& CurrentViewMode == EAgentViewMode::FirstPerson
+		&& !bMapModeActive
+		&& !bMiniMapModeActive
+		&& !bConveyorPlacementModeActive;
+}
+
+bool AAgentCharacter::CanUseMapModeDronePickup() const
+{
+	if (!bMapModeActive || !DroneCompanion)
+	{
+		return false;
+	}
+
+	FVector DroneViewLocation = FVector::ZeroVector;
+	FRotator DroneViewRotation = FRotator::ZeroRotator;
+	if (!DroneCompanion->GetDroneCameraTransform(DroneViewLocation, DroneViewRotation))
+	{
+		return false;
+	}
+
+	const FVector DroneViewForward = DroneViewRotation.Vector().GetSafeNormal();
+	const float DownwardDot = FVector::DotProduct(DroneViewForward, FVector::DownVector);
+	return DownwardDot >= FMath::Clamp(MapModePickupDownwardDotThreshold, -1.0f, 1.0f);
+}
+
+bool AAgentCharacter::GetCharacterPickupView(FVector& OutLocation, FRotator& OutRotation) const
 {
 	if (CurrentViewMode == EAgentViewMode::FirstPerson && FirstPersonCamera)
 	{
@@ -1344,21 +1411,51 @@ bool AAgentCharacter::GetActivePickupView(FVector& OutLocation, FRotator& OutRot
 		return true;
 	}
 
-	if (CurrentViewMode == EAgentViewMode::ThirdPerson)
+	if (ThirdPersonTransitionCamera && ThirdPersonTransitionCamera->IsActive())
 	{
-		if (ThirdPersonTransitionCamera && ThirdPersonTransitionCamera->IsActive())
+		OutLocation = ThirdPersonTransitionCamera->GetComponentLocation();
+		OutRotation = ThirdPersonTransitionCamera->GetComponentRotation();
+		return true;
+	}
+
+	if (FollowCamera)
+	{
+		OutLocation = FollowCamera->GetComponentLocation();
+		OutRotation = FollowCamera->GetComponentRotation();
+		return true;
+	}
+
+	if (FirstPersonCamera)
+	{
+		OutLocation = FirstPersonCamera->GetComponentLocation();
+		OutRotation = FirstPersonCamera->GetComponentRotation();
+		return true;
+	}
+
+	return false;
+}
+
+bool AAgentCharacter::GetActivePickupView(FVector& OutLocation, FRotator& OutRotation) const
+{
+	if (HeldPickupComponent.IsValid())
+	{
+		if (bHeldPickupUsesDroneView)
 		{
-			OutLocation = ThirdPersonTransitionCamera->GetComponentLocation();
-			OutRotation = ThirdPersonTransitionCamera->GetComponentRotation();
-			return true;
+			return DroneCompanion && DroneCompanion->GetDroneCameraTransform(OutLocation, OutRotation);
 		}
 
-		if (FollowCamera)
-		{
-			OutLocation = FollowCamera->GetComponentLocation();
-			OutRotation = FollowCamera->GetComponentRotation();
-			return true;
-		}
+		return GetCharacterPickupView(OutLocation, OutRotation);
+	}
+
+	if (bMapModeActive && DroneCompanion)
+	{
+		return DroneCompanion->GetDroneCameraTransform(OutLocation, OutRotation);
+	}
+
+	if ((CurrentViewMode == EAgentViewMode::FirstPerson || CurrentViewMode == EAgentViewMode::ThirdPerson)
+		&& GetCharacterPickupView(OutLocation, OutRotation))
+	{
+		return true;
 	}
 
 	if (CurrentViewMode == EAgentViewMode::DronePilot && DroneCompanion)
@@ -1528,6 +1625,7 @@ bool AAgentCharacter::TryBeginPickup()
 	PrimitiveComponent->WakeAllRigidBodies();
 	PickupPhysicsHandle->ReleaseComponent();
 
+	bHeldPickupUsesDroneView = bMapModeActive || CurrentViewMode == EAgentViewMode::DronePilot;
 	HeldPickupComponent = PrimitiveComponent;
 	HeldPickupDistance = FMath::Clamp(
 		FVector::Dist(ViewLocation, PickupCandidateLocation),
@@ -1567,6 +1665,7 @@ void AAgentCharacter::EndPickup()
 	HeldPickupViewRelativeRotationOffset = FRotator::ZeroRotator;
 	HeldPickupTargetRotation = FRotator::ZeroRotator;
 	bPickupRotationModeActive = false;
+	bHeldPickupUsesDroneView = false;
 }
 
 void AAgentCharacter::UpdateHeldPickup()
@@ -1674,7 +1773,10 @@ void AAgentCharacter::RefreshHeldPickupConstraintMode()
 
 float AAgentCharacter::GetActivePickupStrengthValue() const
 {
-	const float ActiveStrengthValue = CurrentViewMode == EAgentViewMode::DronePilot
+	const bool bUseDronePickupStrength = HeldPickupComponent.IsValid()
+		? bHeldPickupUsesDroneView
+		: (CurrentViewMode == EAgentViewMode::DronePilot || bMapModeActive);
+	const float ActiveStrengthValue = bUseDronePickupStrength
 		? DronePickupStrengthMultiplier
 		: CharacterPickupStrengthMultiplier;
 	return FMath::Max(0.0f, ActiveStrengthValue);
@@ -1753,6 +1855,82 @@ void AAgentCharacter::ApplyHeldPickupRotationPhysicsInput(const FVector& Rotatio
 	HeldComponent->SetPhysicsAngularVelocityInDegrees(AngularVelocity, true, NAME_None);
 }
 
+bool AAgentCharacter::TryToggleDroneLiftAssist()
+{
+	if (!DroneCompanion)
+	{
+		return false;
+	}
+
+	if (DroneCompanion->IsLiftAssistActive())
+	{
+		DroneCompanion->StopLiftAssist();
+		return true;
+	}
+
+	if (!CanUseDroneLiftAssist())
+	{
+		return false;
+	}
+
+	UPrimitiveComponent* PrimitiveComponent = nullptr;
+	FVector GrabLocation = FVector::ZeroVector;
+
+	if (HeldPickupComponent.IsValid() && CanPickupComponent(HeldPickupComponent.Get()))
+	{
+		PrimitiveComponent = HeldPickupComponent.Get();
+		GrabLocation = PrimitiveComponent->GetComponentTransform().TransformPosition(HeldPickupLocalGrabOffset);
+	}
+	else if ((!bPickupCandidateValid || !PickupCandidateComponent.IsValid()) && !UpdatePickupCandidate())
+	{
+		return false;
+	}
+
+	if (!PrimitiveComponent)
+	{
+		PrimitiveComponent = PickupCandidateComponent.Get();
+		GrabLocation = PickupCandidateLocation;
+	}
+
+	if (!CanPickupComponent(PrimitiveComponent))
+	{
+		return false;
+	}
+
+	if (!DroneCompanion->StartLiftAssist(PrimitiveComponent, GrabLocation))
+	{
+		return false;
+	}
+
+	SyncDroneLiftAssistTuning();
+	return true;
+}
+
+void AAgentCharacter::SyncDroneLiftAssistTuning() const
+{
+	if (!DroneCompanion)
+	{
+		return;
+	}
+
+	FDroneLiftAssistHandleTuning Tuning;
+	Tuning.StrengthValue = FMath::Max(0.0f, DronePickupStrengthMultiplier);
+	Tuning.StrengthMassScaleKg = FMath::Max(1.0f, PickupStrengthMassScaleKg);
+	Tuning.MassFeelMultiplier = FMath::Max(0.0f, PickupMassFeelMultiplier);
+	Tuning.SoftCapResponseMassFraction = PickupSoftCapResponseMassFraction;
+	Tuning.HandleLinearStiffness = FMath::Max(0.0f, PickupHandleLinearStiffness);
+	Tuning.HandleLinearDamping = FMath::Max(0.0f, PickupHandleLinearDamping);
+	Tuning.HandleAngularStiffness = FMath::Max(0.0f, PickupHandleAngularStiffness);
+	Tuning.HandleAngularDamping = FMath::Max(0.0f, PickupHandleAngularDamping);
+	Tuning.LightSwingDampingMultiplier = FMath::Max(1.0f, PickupLightSwingDampingMultiplier);
+	Tuning.HeavyDampingStartMassKg = FMath::Max(1.0f, PickupHeavyDampingStartMassKg);
+	Tuning.HeavyDampingReferenceStrength = FMath::Max(0.01f, PickupHeavyDampingReferenceStrength);
+	Tuning.HeavyDampingMultiplier = FMath::Max(0.0f, PickupHeavyDampingMultiplier);
+	Tuning.LightInterpolationSpeed = FMath::Max(0.05f, PickupLightInterpolationSpeed);
+	Tuning.HeavyInterpolationSpeed = FMath::Max(0.05f, PickupHeavyInterpolationSpeed);
+	DroneCompanion->SetLiftAssistHandleTuning(Tuning);
+}
+
 void AAgentCharacter::SyncPickupHandleSettings() const
 {
 	if (!PickupPhysicsHandle)
@@ -1823,6 +2001,11 @@ void AAgentCharacter::AdjustPickupStrength(float Delta)
 
 	CharacterPickupStrengthMultiplier = NewStrength;
 	DronePickupStrengthMultiplier = CharacterPickupStrengthMultiplier * 0.1f;
+
+	if (DroneCompanion && DroneCompanion->IsLiftAssistActive())
+	{
+		SyncDroneLiftAssistTuning();
+	}
 
 	if (HeldPickupComponent.IsValid())
 	{
@@ -2660,7 +2843,7 @@ void AAgentCharacter::OnDroneGamepadLeftTriggerAxis(float Value)
 
 void AAgentCharacter::OnDroneGamepadRightTriggerAxis(float Value)
 {
-	if (bControllerPickupHeld && CanUsePickupInteraction())
+	if (bControllerPickupHeld && HeldPickupComponent.IsValid())
 	{
 		DroneGamepadRightTriggerInput = 0.0f;
 		return;
@@ -2819,6 +3002,11 @@ void AAgentCharacter::OnConveyorRotateLeftPressed()
 
 void AAgentCharacter::OnConveyorRotateRightPressed()
 {
+	if (!bConveyorPlacementModeActive && TryToggleDroneLiftAssist())
+	{
+		return;
+	}
+
 	RotateConveyorPlacement(1);
 }
 
