@@ -1509,8 +1509,8 @@ bool AAgentCharacter::UpdatePickupCandidate()
 	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(PickupTrace), false, this);
 	QueryParams.bFindInitialOverlaps = true;
 	QueryParams.AddIgnoredActor(this);
-
-	if (DroneCompanion)
+	if (DroneCompanion
+		&& (CurrentViewMode == EAgentViewMode::DronePilot || bMapModeActive))
 	{
 		QueryParams.AddIgnoredActor(DroneCompanion.Get());
 	}
@@ -1913,22 +1913,29 @@ void AAgentCharacter::SyncDroneLiftAssistTuning() const
 		return;
 	}
 
-	FDroneLiftAssistHandleTuning Tuning;
+	FDroneLiftAssistForceTuning Tuning;
 	Tuning.StrengthValue = FMath::Max(0.0f, DronePickupStrengthMultiplier);
 	Tuning.StrengthMassScaleKg = FMath::Max(1.0f, PickupStrengthMassScaleKg);
-	Tuning.MassFeelMultiplier = FMath::Max(0.0f, PickupMassFeelMultiplier);
-	Tuning.SoftCapResponseMassFraction = PickupSoftCapResponseMassFraction;
-	Tuning.HandleLinearStiffness = FMath::Max(0.0f, PickupHandleLinearStiffness);
-	Tuning.HandleLinearDamping = FMath::Max(0.0f, PickupHandleLinearDamping);
-	Tuning.HandleAngularStiffness = FMath::Max(0.0f, PickupHandleAngularStiffness);
-	Tuning.HandleAngularDamping = FMath::Max(0.0f, PickupHandleAngularDamping);
-	Tuning.LightSwingDampingMultiplier = FMath::Max(1.0f, PickupLightSwingDampingMultiplier);
-	Tuning.HeavyDampingStartMassKg = FMath::Max(1.0f, PickupHeavyDampingStartMassKg);
-	Tuning.HeavyDampingReferenceStrength = FMath::Max(0.01f, PickupHeavyDampingReferenceStrength);
-	Tuning.HeavyDampingMultiplier = FMath::Max(0.0f, PickupHeavyDampingMultiplier);
-	Tuning.LightInterpolationSpeed = FMath::Max(0.05f, PickupLightInterpolationSpeed);
-	Tuning.HeavyInterpolationSpeed = FMath::Max(0.05f, PickupHeavyInterpolationSpeed);
-	DroneCompanion->SetLiftAssistHandleTuning(Tuning);
+	DroneCompanion->SetLiftAssistForceTuning(Tuning);
+}
+
+void AAgentCharacter::AdjustDroneLiftAssistStrength(float Delta)
+{
+	const float NewStrength = FMath::Max(0.0f, DronePickupStrengthMultiplier + Delta);
+	if (FMath::IsNearlyEqual(NewStrength, DronePickupStrengthMultiplier))
+	{
+		ShowPickupStrengthDebug();
+		return;
+	}
+
+	DronePickupStrengthMultiplier = NewStrength;
+
+	if (DroneCompanion && DroneCompanion->IsLiftAssistActive())
+	{
+		SyncDroneLiftAssistTuning();
+	}
+
+	ShowPickupStrengthDebug();
 }
 
 void AAgentCharacter::SyncPickupHandleSettings() const
@@ -2854,6 +2861,12 @@ void AAgentCharacter::OnDroneGamepadRightTriggerAxis(float Value)
 
 void AAgentCharacter::OnDroneCameraTiltUpPressed()
 {
+	if (DroneCompanion && (DroneCompanion->IsLiftAssistActive() || CanUseDroneLiftAssist()))
+	{
+		AdjustDroneLiftAssistStrength(0.1f);
+		return;
+	}
+
 	if (DroneCompanion)
 	{
 		DroneCompanion->AdjustCameraTilt(DroneCompanion->DroneCameraTiltStep);
@@ -2862,6 +2875,12 @@ void AAgentCharacter::OnDroneCameraTiltUpPressed()
 
 void AAgentCharacter::OnDroneCameraTiltDownPressed()
 {
+	if (DroneCompanion && (DroneCompanion->IsLiftAssistActive() || CanUseDroneLiftAssist()))
+	{
+		AdjustDroneLiftAssistStrength(-0.1f);
+		return;
+	}
+
 	if (DroneCompanion)
 	{
 		DroneCompanion->AdjustCameraTilt(-DroneCompanion->DroneCameraTiltStep);
