@@ -32,6 +32,8 @@ public:
 protected:
 	virtual bool TryProcessOverlappingActor(AActor* OverlappingActor) override;
 	virtual int32 GetCurrentStoredQuantityScaled() const override;
+	virtual ECollisionEnabled::Type GetConfiguredCollisionEnabled() const override;
+	virtual bool GetConfiguredGenerateOverlapEvents() const override;
 
 	bool CanSpawnPayload() const;
 	bool TryEmitOnePayload();

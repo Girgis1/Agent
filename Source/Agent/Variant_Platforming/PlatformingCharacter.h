@@ -60,7 +60,7 @@ protected:
 public:
 
 	/** Constructor */
-	APlatformingCharacter();
+	APlatformingCharacter(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 
 protected:
 

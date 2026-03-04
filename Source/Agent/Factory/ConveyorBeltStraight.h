@@ -9,7 +9,8 @@
 
 class UArrowComponent;
 class UBoxComponent;
-class ACharacter;
+class AFactoryWorldConfig;
+class UConveyorSurfaceVelocityComponent;
 class UPhysicalMaterial;
 class UPrimitiveComponent;
 class UStaticMeshComponent;
@@ -23,9 +24,10 @@ class AConveyorBeltStraight : public AActor
 public:
 	AConveyorBeltStraight();
 
-	static void SetMasterConveyorSettings(float InBeltSpeed);
-
 	virtual void Tick(float DeltaSeconds) override;
+
+	UFUNCTION(BlueprintPure, Category="Conveyor")
+	FVector GetSurfaceVelocity() const;
 
 protected:
 	virtual void BeginPlay() override;
@@ -50,9 +52,10 @@ protected:
 	void UpdateSupportPhysicalMaterial();
 	bool IsWorldPointSupportedByBelt(const FVector& WorldPoint) const;
 	bool IsPayloadValid(const UPrimitiveComponent* PrimitiveComponent) const;
-	bool IsCharacterOccupantValid(const ACharacter* Character) const;
+	float GetResolvedBeltSpeed() const;
+	UConveyorSurfaceVelocityComponent* GetSurfaceVelocityConsumer(AActor* OtherActor) const;
+	AFactoryWorldConfig* GetFactoryWorldConfig() const;
 	void ApplyBeltDrive(UPrimitiveComponent* PrimitiveComponent, float DeltaSeconds) const;
-	void ApplyBeltDriveToCharacter(ACharacter* Character) const;
 
 public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Conveyor")
@@ -71,7 +74,7 @@ public:
 	TObjectPtr<UArrowComponent> DirectionArrow = nullptr;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Conveyor")
-	float BeltSpeed = 100.0f;
+	float BeltSpeed = 60.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Conveyor")
 	bool bUseMasterSpeedSettings = true;
@@ -89,11 +92,11 @@ public:
 	FVector PayloadDriveExtent = FVector(42.0f, 42.0f, 20.0f);
 
 protected:
-	static float MasterBeltSpeed;
-
 	UPROPERTY(Transient)
 	TObjectPtr<UPhysicalMaterial> RuntimeSupportPhysicalMaterial = nullptr;
 
+	mutable TWeakObjectPtr<AFactoryWorldConfig> CachedWorldConfig;
+
 	TSet<TWeakObjectPtr<UPrimitiveComponent>> ActivePayloads;
-	TSet<TWeakObjectPtr<ACharacter>> ActiveCharacters;
+	TSet<TWeakObjectPtr<UConveyorSurfaceVelocityComponent>> ActiveSurfaceVelocityConsumers;
 };

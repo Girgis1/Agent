@@ -22,8 +22,10 @@
 - Controller `Y` (`Gamepad_FaceButton_Top`) now mirrors `V` for the hold-aware camera behavior.
 - Physics grab interaction is now a shared active-camera system in the main gameplay views:
   - hold `E` on keyboard or hold controller `RT` to grab and drag simulating physics objects
-  - it now works in `Third Person`, `First Person`, and `Drone Pilot`
-  - it is disabled in `Map Mode`, `MiniMap`, and factory placement mode
+  - it now works in `Third Person`, `First Person`, `Drone Pilot`, and `Map Mode`
+  - `Map Mode` pickup only starts when the drone camera is pointed almost straight down (`MapModePickupDownwardDotThreshold`)
+  - once a grab starts, it keeps the same holder source (player view or drone view) across drone-state transitions instead of being forced to drop
+  - it is disabled in `MiniMap` and factory placement mode
   - the system uses a sphere trace with a visible debug sphere to show the pickup influence area
   - objects are grabbed at the trace hit point (pinch point), not their center, so long props can pivot naturally when dragged from one end
   - while held, the system now matches the older `SandBox_01` style again: it uses a real `PhysicsHandleComponent` with a fixed hold point in front of the active camera instead of the abandoned rope/tether system
@@ -109,24 +111,27 @@
     - this allows extending a belt line out into the air by targeting the end or side face of the last placed conveyor
   - placement uses a camera trace, a downward surface trace, grid snapping, overlap validation, and a visible preview actor plus debug box / arrow
   - the placement preview actor is a pure ghost and must never have world collision; it should not block the player, payloads, or placement traces
-  - conveyor speed now has a single shared master control on `AAgentCharacter`:
+  - conveyor speed now has a single shared world-level master control on `AFactoryWorldConfig`:
     - `ConveyorMasterBeltSpeed`
-    - all conveyors use that shared value by default via `AConveyorBeltStraight::SetMasterConveyorSettings(...)`
-  - default shared conveyor speed is now a slow crawl (`150 uu/s`) instead of the older fast test value
+    - default shared conveyor speed is now `60 uu/s`
+    - conveyors fall back to that class default if no config actor is placed in the level
   - conveyor ticks now run in `TG_PrePhysics` so belt velocity is applied before the Chaos solve each frame
   - conveyors no longer use force-based drive, acceleration ramps, or weight-sensitive transport
-  - the belt now affects all supported dynamic occupants in the drive volume, not just factory payloads:
-    - simulating physics components use the physics path
-    - `ACharacter` occupants (player and future NPCs) use the character-movement path
+  - `AConveyorBeltStraight` now exposes `GetSurfaceVelocity()`
+  - the belt now treats occupants in two groups:
+    - passive simulating physics components use the support-checked physics path
+    - self-driven movers with `UConveyorSurfaceVelocityComponent` use transient conveyor surface velocity instead of the loose-payload path
+  - current self-driven movers on that path now include the player, the current `ACharacter` variants, and the drone
   - conveyor influence only applies when the occupant is actually supported by the belt surface
     - the thin top drive volume says "candidate for conveyor movement"
     - a direct support check against the belt top surface says "actually on this belt"
     - objects stacked on top of other objects in the drive volume are not directly belt-driven
-  - while a supported occupant is in the conveyor drive volume, the belt directly overwrites only that occupant's along-belt velocity component to the fixed `BeltSpeed`
+  - while a supported passive physics occupant is in the conveyor drive volume, the belt directly overwrites only that occupant's along-belt velocity component to the fixed `BeltSpeed`
     - mass does not change belt travel speed
     - angular velocity is untouched
     - sideways drift and vertical motion are untouched
     - Chaos still owns tumbling, rolling, jams, pileups, and objects being knocked off the side
+  - self-driven movers do not have their stored movement velocity overwritten; they consume the conveyor's surface velocity during their own movement update so they can move with or against the belt and stop being carried as soon as they leave the overlap
   - low-friction runtime physical material still applies to the conveyor support surface so payloads glide cleanly while the belt only owns the forward transport axis
   - spawned `AFactoryPayloadActor` ore cubes are still heavier and more damped by default so they feel less floaty when they land or collide
   - payload cubes now spawn with a small random uniform scale variance (`PayloadMinScale` / `PayloadMaxScale`), and their mass scales from size using volume (`scale^3`) relative to `PayloadReferenceScale` and `PayloadReferenceMassKg`
@@ -274,8 +279,10 @@
     - controller left stick moves, right stick looks, `RT` up, `LT` down
 - Pickup and interaction:
   - hold keyboard `E` or controller `RT` to grab and hold physics objects at the pinch point
-  - pickup works in `Third Person`, `First Person`, and `Drone Pilot`
-  - pickup is disabled in `Map Mode`, `MiniMap`, and factory placement mode
+  - pickup works in `Third Person`, `First Person`, `Drone Pilot`, and `Map Mode`
+  - map-mode pickup only starts while the drone camera is aimed nearly straight down
+  - once held, a drone-held object stays drone-held across drone state changes until released
+  - pickup is disabled in `MiniMap` and factory placement mode
   - while holding an object on controller, hold `LT` to enter loose rotation assist and use the right stick to guide the held object relative to the active camera
   - keyboard `[` / `]` adjust player pickup strength by `-0.1` / `+0.1` and resync drone pickup strength to `10%` of the player value
   - keyboard `E` remains context-sensitive: if no pickup starts, it falls back to the drone's right-side input

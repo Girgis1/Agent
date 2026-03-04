@@ -98,9 +98,9 @@ protected:
 	bool bMovingHorizontally = false;
 
 public:
-	
+
 	/** Constructor */
-	ASideScrollingCharacter();
+	ASideScrollingCharacter(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 
 protected:
 

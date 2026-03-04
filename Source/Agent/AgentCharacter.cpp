@@ -3,7 +3,9 @@
 #include "AgentCharacter.h"
 #include "DroneCompanion.h"
 #include "Factory/ConveyorBeltStraight.h"
+#include "Factory/ConveyorCharacterMovementComponent.h"
 #include "Factory/ConveyorPlacementPreview.h"
+#include "Factory/ConveyorSurfaceVelocityComponent.h"
 #include "Factory/FactoryPayloadActor.h"
 #include "Factory/FactoryPlacementHelpers.h"
 #include "Factory/ResourceSpawnerMachine.h"
@@ -31,9 +33,11 @@
 #include "Agent.h"
 
 AAgentCharacter::AAgentCharacter(const FObjectInitializer& ObjectInitializer)
-	: Super(ObjectInitializer)
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UConveyorCharacterMovementComponent>(ACharacter::CharacterMovementComponentName))
 {
 	PrimaryActorTick.bCanEverTick = true;
+
+	CreateDefaultSubobject<UConveyorSurfaceVelocityComponent>(TEXT("ConveyorSurfaceVelocity"));
 
 	GetCapsuleComponent()->InitCapsuleSize(42.f, 96.0f);
 
