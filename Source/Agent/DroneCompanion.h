@@ -368,9 +368,6 @@ public:
 	float LiftAssistPreFollowDelay = 0.4f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
-	float LiftAssistRopeStiffness = 35.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
 	float LiftAssistClearanceResponse = 6.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
