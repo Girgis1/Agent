@@ -7,7 +7,6 @@
 #include "DroneCompanion.generated.h"
 
 class UCameraComponent;
-class UConveyorSurfaceVelocityComponent;
 class UPhysicalMaterial;
 class UPrimitiveComponent;
 class UStaticMeshComponent;
@@ -550,9 +549,6 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UCameraComponent* DroneCamera;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
-	UConveyorSurfaceVelocityComponent* ConveyorSurfaceVelocity;
-
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
 	EDroneCompanionMode CompanionMode = EDroneCompanionMode::ThirdPersonFollow;
 
@@ -645,6 +641,7 @@ protected:
 	float CurrentRollCameraPitchOffset = 0.0f;
 	float CurrentRollCameraLean = 0.0f;
 	float LiftAssistStageTimeRemaining = 0.0f;
+	float LiftAssistForceRampTime = 0.0f;
 	FVector FreeFlyCurrentVelocity = FVector::ZeroVector;
 	FRotator CameraTransitionStartRotation = FRotator::ZeroRotator;
 	TWeakObjectPtr<UPrimitiveComponent> LiftAssistTargetComponent;

@@ -1,14 +1,12 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Factory/StorageBin.h"
-#include "Factory/FactoryPayloadActor.h"
 #include "Factory/FactoryPlacementHelpers.h"
+#include "Factory/StorageVolumeComponent.h"
 #include "Components/ArrowComponent.h"
 #include "Components/BoxComponent.h"
-#include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
-#include "Engine/Engine.h"
 #include "UObject/ConstructorHelpers.h"
 
 AStorageBin::AStorageBin()
@@ -37,17 +35,10 @@ AStorageBin::AStorageBin()
 	BinMesh->SetRelativeScale3D(FVector(1.0f, 1.0f, 1.2f));
 	BinMesh->SetCanEverAffectNavigation(false);
 
-	IntakeVolume = CreateDefaultSubobject<UBoxComponent>(TEXT("IntakeVolume"));
+	IntakeVolume = CreateDefaultSubobject<UStorageVolumeComponent>(TEXT("IntakeVolume"));
 	IntakeVolume->SetupAttachment(SceneRoot);
 	IntakeVolume->SetBoxExtent(FVector(46.0f, 40.0f, 40.0f));
 	IntakeVolume->SetRelativeLocation(FVector(-50.0f, 0.0f, 50.0f));
-	IntakeVolume->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-	IntakeVolume->SetCollisionObjectType(ECC_WorldDynamic);
-	IntakeVolume->SetCollisionResponseToAllChannels(ECR_Ignore);
-	IntakeVolume->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Overlap);
-	IntakeVolume->SetCollisionResponseToChannel(ECC_WorldDynamic, ECR_Overlap);
-	IntakeVolume->SetGenerateOverlapEvents(true);
-	IntakeVolume->SetCanEverAffectNavigation(false);
 
 	FlowArrow = CreateDefaultSubobject<UArrowComponent>(TEXT("FlowArrow"));
 	FlowArrow->SetupAttachment(SceneRoot);
@@ -55,8 +46,6 @@ AStorageBin::AStorageBin()
 	FlowArrow->SetArrowColor(FLinearColor(FColor::Cyan));
 	FlowArrow->ArrowSize = 1.25f;
 	FlowArrow->SetCanEverAffectNavigation(false);
-
-	IntakeVolume->OnComponentBeginOverlap.AddDynamic(this, &AStorageBin::OnIntakeBeginOverlap);
 
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> BinMeshAsset(TEXT("/Engine/BasicShapes/Cube.Cube"));
 	if (BinMeshAsset.Succeeded())
@@ -67,56 +56,20 @@ AStorageBin::AStorageBin()
 
 int32 AStorageBin::GetStoredItemCount(FName PayloadType) const
 {
+	if (!IntakeVolume)
+	{
+		return 0;
+	}
+
 	if (PayloadType.IsNone())
 	{
-		return TotalStoredItemCount;
+		return IntakeVolume->GetTotalStoredItemCount();
 	}
 
-	if (const int32* FoundCount = StoredItemCounts.Find(PayloadType))
-	{
-		return *FoundCount;
-	}
-
-	return 0;
+	return IntakeVolume->GetStoredItemCount(PayloadType);
 }
 
-void AStorageBin::OnIntakeBeginOverlap(
-	UPrimitiveComponent* OverlappedComponent,
-	AActor* OtherActor,
-	UPrimitiveComponent* OtherComp,
-	int32 OtherBodyIndex,
-	bool bFromSweep,
-	const FHitResult& SweepResult)
+float AStorageBin::GetStoredUnits(FName PayloadType) const
 {
-	(void)OverlappedComponent;
-	(void)OtherComp;
-	(void)OtherBodyIndex;
-	(void)bFromSweep;
-	(void)SweepResult;
-
-	AFactoryPayloadActor* PayloadActor = Cast<AFactoryPayloadActor>(OtherActor);
-	if (!PayloadActor)
-	{
-		return;
-	}
-
-	const FName PayloadType = PayloadActor->GetPayloadType().IsNone() ? TEXT("RawOre") : PayloadActor->GetPayloadType();
-	if (!AcceptedPayloadType.IsNone() && PayloadType != AcceptedPayloadType)
-	{
-		return;
-	}
-
-	StoredItemCounts.FindOrAdd(PayloadType) += 1;
-	++TotalStoredItemCount;
-
-	if (GEngine)
-	{
-		GEngine->AddOnScreenDebugMessage(
-			static_cast<uint64>(GetUniqueID()) + 19000ULL,
-			1.25f,
-			FColor::Cyan,
-			FString::Printf(TEXT("Bin Stored %s: %d (Total %d)"), *PayloadType.ToString(), GetStoredItemCount(PayloadType), TotalStoredItemCount));
-	}
-
-	PayloadActor->Destroy();
+	return IntakeVolume ? IntakeVolume->GetStoredUnits(PayloadType) : 0.0f;
 }

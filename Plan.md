@@ -122,3 +122,25 @@ Placement mode currently uses:
 - Do not build the project unless explicitly requested by the user.
 - Keep conveyor placement restricted to character camera modes for now.
 - Keep factory gameplay in `Source/Agent/Factory/` instead of growing `AgentCharacter` more than necessary.
+
+## Resource Rebuild Status
+
+The first post-conveyor resource slice is rebuilt and compiling again.
+
+### Completed
+
+- `UResourceDefinitionAsset` and `UResourceCompositionAsset` are back.
+- `UResourceComponent` and `AResourceSalvageActor` are back for physical salvage authoring.
+- `AFactoryPayloadActor` now carries a real resource id and quantity.
+- `AStorageBin` is now routed through `UStorageVolumeComponent`.
+- `UShredderVolumeComponent`, `UMachineInputVolumeComponent`, and `UMachineOutputVolumeComponent` are restored as modular Blueprint-placeable volumes.
+- `AShredderMachine` and `AProcessorMachine` are restored as placeable machine shells.
+- Editor-facing quantity fields use whole units, while runtime still stores `x1000` precision internally.
+- Generic buckets are blacklist-driven only: accept everything unless blocked.
+
+### Immediate Next Steps
+
+1. Create the first real `DA_Resource_*` assets (`Metal`, `Plastic`, `Stone`, `IronOre`).
+2. Create the first `UResourceCompositionAsset` examples for multi-output salvage such as `CarDoor`.
+3. Make a reusable `BP_IronOre` from `AResourceSalvageActor` and drive its mesh family through `MeshVariants`.
+4. Decide whether simple-item authoring should stay split between the BP and `UResourceComponent`, or move more of that setup into the `DA_Resource_*` assets.
