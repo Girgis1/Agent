@@ -2,6 +2,7 @@
 
 #include "Factory/FactoryPayloadActor.h"
 #include "Components/StaticMeshComponent.h"
+#include "Factory/ResourceTypes.h"
 #include "UObject/ConstructorHelpers.h"
 
 AFactoryPayloadActor::AFactoryPayloadActor()
@@ -33,6 +34,16 @@ void AFactoryPayloadActor::BeginPlay()
 {
 	Super::BeginPlay();
 	ApplyRandomizedScaleAndMass();
+
+	if (!ResourcePayload.HasQuantity())
+	{
+		ResourcePayload.ResourceId = PayloadType.IsNone() ? TEXT("Metal") : PayloadType;
+		ResourcePayload.SetWholeUnits(DefaultPayloadUnits);
+	}
+	else
+	{
+		PayloadType = ResourcePayload.ResourceId;
+	}
 }
 
 void AFactoryPayloadActor::ApplyRandomizedScaleAndMass()
@@ -58,5 +69,28 @@ void AFactoryPayloadActor::ApplyRandomizedScaleAndMass()
 
 void AFactoryPayloadActor::SetPayloadType(FName NewPayloadType)
 {
-	PayloadType = NewPayloadType.IsNone() ? TEXT("RawOre") : NewPayloadType;
+	PayloadType = NewPayloadType.IsNone() ? TEXT("Metal") : NewPayloadType;
+	ResourcePayload.ResourceId = PayloadType;
+	if (!ResourcePayload.HasQuantity())
+	{
+		ResourcePayload.SetWholeUnits(DefaultPayloadUnits);
+	}
+}
+
+void AFactoryPayloadActor::SetPayloadTypeAndWholeUnits(FName NewPayloadType, int32 QuantityUnits)
+{
+	PayloadType = NewPayloadType.IsNone() ? TEXT("Metal") : NewPayloadType;
+	ResourcePayload.ResourceId = PayloadType;
+	ResourcePayload.SetWholeUnits(QuantityUnits);
+}
+
+void AFactoryPayloadActor::SetPayloadResource(const FResourceAmount& NewPayloadResource)
+{
+	ResourcePayload = NewPayloadResource;
+	PayloadType = ResourcePayload.ResourceId.IsNone() ? TEXT("Metal") : ResourcePayload.ResourceId;
+	if (!ResourcePayload.HasQuantity())
+	{
+		ResourcePayload.ResourceId = PayloadType;
+		ResourcePayload.SetWholeUnits(DefaultPayloadUnits);
+	}
 }

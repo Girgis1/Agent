@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Factory/ResourceTypes.h"
 #include "GameFramework/Actor.h"
 #include "FactoryPayloadActor.generated.h"
 
@@ -19,14 +20,31 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Factory|Payload")
 	void SetPayloadType(FName NewPayloadType);
 
+	UFUNCTION(BlueprintCallable, Category="Factory|Payload")
+	void SetPayloadTypeAndWholeUnits(FName NewPayloadType, int32 QuantityUnits);
+
+	UFUNCTION(BlueprintCallable, Category="Factory|Payload")
+	void SetPayloadResource(const FResourceAmount& NewPayloadResource);
+
 	UFUNCTION(BlueprintPure, Category="Factory|Payload")
-	FName GetPayloadType() const { return PayloadType; }
+	FName GetPayloadType() const { return ResourcePayload.ResourceId.IsNone() ? PayloadType : ResourcePayload.ResourceId; }
+
+	UFUNCTION(BlueprintPure, Category="Factory|Payload")
+	float GetPayloadUnits() const { return ResourcePayload.GetUnits(); }
+
+	const FResourceAmount& GetPayloadResource() const { return ResourcePayload; }
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Payload")
 	TObjectPtr<UStaticMeshComponent> PayloadMesh = nullptr;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Payload")
-	FName PayloadType = TEXT("RawOre");
+	FName PayloadType = TEXT("Metal");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Payload")
+	FResourceAmount ResourcePayload;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Payload", meta=(ClampMin="0"))
+	int32 DefaultPayloadUnits = 1;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Payload")
 	bool bRandomizeScaleOnSpawn = true;

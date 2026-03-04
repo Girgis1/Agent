@@ -3,7 +3,6 @@
 #include "DroneCompanion.h"
 #include "Agent.h"
 #include "Camera/CameraComponent.h"
-#include "Factory/ConveyorSurfaceVelocityComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SceneComponent.h"
 #include "DrawDebugHelpers.h"
@@ -45,8 +44,6 @@ ADroneCompanion::ADroneCompanion()
 	DroneCamera->SetupAttachment(CameraMount);
 	DroneCamera->bUsePawnControlRotation = false;
 	DroneCamera->FieldOfView = PilotCameraFieldOfView;
-
-	ConveyorSurfaceVelocity = CreateDefaultSubobject<UConveyorSurfaceVelocityComponent>(TEXT("ConveyorSurfaceVelocity"));
 }
 
 void ADroneCompanion::BeginPlay()
@@ -177,20 +174,7 @@ void ADroneCompanion::RemoveAppliedConveyorSurfaceVelocity()
 
 void ADroneCompanion::ApplyConveyorSurfaceVelocity()
 {
-	if (!DroneBody || !ConveyorSurfaceVelocity)
-	{
-		return;
-	}
-
-	const FVector SurfaceVelocity = ConveyorSurfaceVelocity->GetConveyorSurfaceVelocity();
-	if (SurfaceVelocity.IsNearlyZero())
-	{
-		return;
-	}
-
-	const FVector CurrentVelocity = DroneBody->GetPhysicsLinearVelocity();
-	DroneBody->SetPhysicsLinearVelocity(CurrentVelocity + SurfaceVelocity, false);
-	AppliedConveyorSurfaceVelocity = SurfaceVelocity;
+	// Conveyor integration is temporarily disabled until the conveyor component is restored.
 }
 
 void ADroneCompanion::SetFollowTarget(AActor* NewFollowTarget)
@@ -578,6 +562,7 @@ bool ADroneCompanion::StartLiftAssist(
 	bLiftAssistLiftEngaged = false;
 	bLiftAssistFollowEngaged = false;
 	LiftAssistStageTimeRemaining = 0.0f;
+	LiftAssistForceRampTime = 0.0f;
 	return true;
 }
 
@@ -589,6 +574,7 @@ void ADroneCompanion::StopLiftAssist()
 	bLiftAssistLiftEngaged = false;
 	bLiftAssistFollowEngaged = false;
 	LiftAssistStageTimeRemaining = 0.0f;
+	LiftAssistForceRampTime = 0.0f;
 	LiftAssistTargetComponent.Reset();
 	LiftAssistLocalGrabOffset = FVector::ZeroVector;
 }
@@ -1324,6 +1310,7 @@ void ADroneCompanion::UpdateLiftAssistFlight(float DeltaSeconds)
 	else if (!bLiftAssistRopeVisible)
 	{
 		LiftAssistStageTimeRemaining = FMath::Max(0.0f, LiftAssistStageTimeRemaining - FMath::Max(0.0f, DeltaSeconds));
+		LiftAssistForceRampTime = 0.0f;
 		if (LiftAssistStageTimeRemaining <= KINDA_SMALL_NUMBER)
 		{
 			bLiftAssistRopeVisible = true;
@@ -1334,6 +1321,7 @@ void ADroneCompanion::UpdateLiftAssistFlight(float DeltaSeconds)
 	else if (!bLiftAssistLiftEngaged)
 	{
 		DesiredDroneLocation = AnchorLocation + FVector(0.0f, 0.0f, RopeRestLength);
+		LiftAssistForceRampTime = 0.0f;
 
 		LiftAssistStageTimeRemaining = FMath::Max(0.0f, LiftAssistStageTimeRemaining - FMath::Max(0.0f, DeltaSeconds));
 		if (LiftAssistStageTimeRemaining <= KINDA_SMALL_NUMBER)
@@ -1341,6 +1329,7 @@ void ADroneCompanion::UpdateLiftAssistFlight(float DeltaSeconds)
 			bLiftAssistLiftEngaged = true;
 			bLiftAssistFollowEngaged = false;
 			LiftAssistStageTimeRemaining = FMath::Max(0.0f, LiftAssistPreFollowDelay);
+			LiftAssistForceRampTime = 0.0f;
 		}
 	}
 	else
@@ -1411,6 +1400,10 @@ void ADroneCompanion::UpdateLiftAssistFlight(float DeltaSeconds)
 	const FVector CurrentVelocity = DroneVelocity;
 	if (bLiftAssistLiftEngaged)
 	{
+		constexpr float LiftRampStartScale = 0.1f;
+		constexpr float LiftRampEndScale = 1.0f;
+		constexpr float LiftRampDurationSeconds = 1.2f;
+
 		const UWorld* World = GetWorld();
 		LiftAssistGravityAcceleration = World ? FMath::Abs(World->GetGravityZ()) : 980.0f;
 		const float CarryMassScaleKg = FMath::Max(1.0f, LiftAssistForceTuning.StrengthMassScaleKg);
@@ -1442,7 +1435,14 @@ void ADroneCompanion::UpdateLiftAssistFlight(float DeltaSeconds)
 				0.0f,
 				1.0f)
 			: 0.0f;
-		const FVector UpwardAssistForce = FVector::UpVector * (LiftAssistMaxPayloadForce * LiftDemandAlpha);
+		LiftAssistForceRampTime = FMath::Min(
+			LiftAssistForceRampTime + FMath::Max(0.0f, DeltaSeconds),
+			LiftRampDurationSeconds);
+		const float LiftRampAlpha = LiftRampDurationSeconds > KINDA_SMALL_NUMBER
+			? FMath::Clamp(LiftAssistForceRampTime / LiftRampDurationSeconds, 0.0f, 1.0f)
+			: 1.0f;
+		const float LiftForceScale = FMath::Lerp(LiftRampStartScale, LiftRampEndScale, LiftRampAlpha);
+		const FVector UpwardAssistForce = FVector::UpVector * (LiftAssistMaxPayloadForce * LiftDemandAlpha * LiftForceScale);
 		FVector DroneDriveForce = HorizontalDriveForce
 			+ FVector::UpVector * HoverForce
 			+ UpwardAssistForce;

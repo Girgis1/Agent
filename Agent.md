@@ -145,6 +145,37 @@
     - `BuildPlacement` = `ECC_GameTraceChannel1`
     - `FactoryBuildable` = `ECC_GameTraceChannel2`
   - `Plan.md` now tracks the conveyor MVP architecture and next steps
+- Factory resource prototype is rebuilt on top of that conveyor slice:
+  - `AFactoryPayloadActor` now carries `FResourceAmount` (`ResourceId + quantity`) while still preserving the old `PayloadType` fallback
+  - editor-facing quantities stay whole-number units, but runtime stores them at `x1000` precision so machines can safely accumulate fractional totals
+  - resource authoring lives in:
+    - `UResourceDefinitionAsset` for shared resource identity (`DA_Resource_*`)
+    - `UResourceCompositionAsset` for multi-output breakdowns
+    - `UResourceComponent` on physical actors for shred yield data
+    - `AResourceSalvageActor` as the reusable physics salvage base with mesh randomization support
+  - the simple authoring path is:
+    - create a BP from `AResourceSalvageActor`
+    - set `ResourceData.PrimaryResource`
+    - tune `PrimaryResourceUnitsPerKg`, `MassMultiplier`, and `RecoveryMultiplier`
+    - optionally use `MeshVariants` plus `bRandomizeMeshOnSpawn`
+  - multi-output items should use `ResourceData.Composition` instead of the simple `PrimaryResource` path
+  - modular factory volumes now exist as Blueprint-placeable `UBoxComponent` derivatives:
+    - `UFactoryVolumeComponentBase`
+    - `UStorageVolumeComponent`
+    - `UShredderVolumeComponent`
+    - `UMachineInputVolumeComponent`
+    - `UMachineOutputVolumeComponent`
+  - `AStorageBin` now uses `UStorageVolumeComponent` as its intake instead of a custom overlap handler
+  - `AShredderMachine` is the first machine shell that pairs `UShredderVolumeComponent` with `UMachineOutputVolumeComponent`
+  - `AProcessorMachine` is the first generic processor shell with a simple timed `Input -> Output` conversion loop
+  - bucket-style factory volumes are blacklist-only now:
+    - they accept any resource unless its id is listed in `BlockedResourceIds`
+    - do not add allow-list filtering back into storage or generic input buckets
+  - shredder rule:
+    - if an object has no `UResourceComponent`, it may still be destroyed, but it yields nothing
+    - if an object has `UResourceComponent` data but all resulting resources are blocked or zero, it should not be silently deleted
+  - output rule:
+    - `UMachineOutputVolumeComponent` emits partial final chunks instead of deadlocking on remainders smaller than the normal chunk size
 - Drone controls in `Drone Pilot` (authoritative summary from `SetupPlayerInputComponent()` and `UpdateDronePilotInputs()`):
   - Shared:
     - `B` cycles drone pilot mode forward
@@ -256,6 +287,9 @@
   - controller `LB` / `RB` rotate the placement preview
 
 ## Build Status
+- Last confirmed successful build on 2026-03-05:
+  - `AgentEditor Win64 Development` using `D:\UnrealEngine\UE_5.7\Engine\Build\BatchFiles\Build.bat`
+  - this rebuild restored the missing conveyor helper components plus the first modular factory resource pipeline
 - Last confirmed successful build on 2026-03-04:
   - `AgentEditor Win64 Development` using `D:\UnrealEngine\UE_5.7\Engine\Build\BatchFiles\Build.bat`
 - For this project's current engine install (`UE 5.7`), keep both `Source/Agent.Target.cs` and `Source/AgentEditor.Target.cs` on:

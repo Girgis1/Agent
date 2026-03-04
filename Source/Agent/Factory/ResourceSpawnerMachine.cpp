@@ -85,6 +85,9 @@ bool AResourceSpawnerMachine::CanSpawnPayload() const
 
 	FCollisionObjectQueryParams ObjectQueryParams;
 	ObjectQueryParams.AddObjectTypesToQuery(ECC_PhysicsBody);
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_Pawn);
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_WorldDynamic);
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_WorldStatic);
 
 	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(ResourceSpawnerOutputClearance), false, this);
 
@@ -112,7 +115,7 @@ void AResourceSpawnerMachine::SpawnPayload()
 
 	FActorSpawnParameters SpawnParameters{};
 	SpawnParameters.Owner = this;
-	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
+	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::DontSpawnIfColliding;
 
 	AFactoryPayloadActor* PayloadActor = World->SpawnActor<AFactoryPayloadActor>(
 		PayloadClass,
@@ -125,7 +128,7 @@ void AResourceSpawnerMachine::SpawnPayload()
 		return;
 	}
 
-	PayloadActor->SetPayloadType(SpawnedPayloadType);
+	PayloadActor->SetPayloadTypeAndWholeUnits(SpawnedPayloadType, SpawnedPayloadUnits);
 
 	if (UPrimitiveComponent* PayloadPrimitive = Cast<UPrimitiveComponent>(PayloadActor->GetRootComponent()))
 	{

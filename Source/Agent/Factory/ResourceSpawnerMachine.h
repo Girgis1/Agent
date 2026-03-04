@@ -47,7 +47,10 @@ public:
 	float OutputClearanceRadius = 28.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Spawner")
-	FName SpawnedPayloadType = TEXT("RawOre");
+	FName SpawnedPayloadType = TEXT("Metal");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Spawner", meta=(ClampMin="1"))
+	int32 SpawnedPayloadUnits = 1;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Spawner")
 	bool bAutoSpawnEnabled = true;

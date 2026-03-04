@@ -129,6 +129,34 @@ A plain Unreal-style dev fly camera with simple first-person fly controls.
 - `Right Mouse Button` / `Gamepad B`: cancel placement.
 - `Gamepad LB / RB`: rotate the placement preview.
 
+### Factory Resources
+
+- Factory quantities are authored as whole units in the editor, but stored internally at `x1000` precision so machines can safely hold fractional totals.
+- `AFactoryPayloadActor` now carries a resource id plus quantity, not just a legacy payload name.
+- `AStorageBin` now uses a reusable `UStorageVolumeComponent` intake and stores resource totals instead of only raw item counts.
+- `AShredderMachine` is the new placeable shredder shell:
+  - `UShredderVolumeComponent` intake destroys physical objects and converts them into resource output
+  - `UMachineOutputVolumeComponent` emits those resources back into the world as physical chunks
+- `AProcessorMachine` is the new placeable processing shell:
+  - `UMachineInputVolumeComponent` buffers incoming chunks
+  - `UMachineOutputVolumeComponent` ejects processed chunks
+  - the current built-in loop is a simple timed `Input -> Output` conversion, not the final recipe system
+- Factory volumes are now blacklist-driven:
+  - storage, shredder, and machine input accept anything unless its resource id is listed in `BlockedResourceIds`
+  - there is no whitelist step for normal buckets
+
+### Simple Salvage Authoring
+
+- For single-resource items, create a Blueprint from `AResourceSalvageActor`.
+- Put your mesh family in `MeshVariants` and enable `bRandomizeMeshOnSpawn` if you want one BP to choose from several static meshes.
+- On the built-in `ResourceData` component:
+  - set `PrimaryResource` to a `DA_Resource_*` asset such as `DA_Resource_IronOre`
+  - set `PrimaryResourceUnitsPerKg` to control yield from mass
+  - keep `bUsePhysicsMass` enabled for scale / weight driven output
+  - use `MassMultiplier` and `RecoveryMultiplier` as the main tuning knobs
+- For multi-output items, assign a `UResourceCompositionAsset` to `ResourceData.Composition` instead of using `PrimaryResource`.
+- If a physical object has no `UResourceComponent`, the shredder can still destroy it, but it yields no resources.
+
 ## Key Source Files
 
 - `Source/Agent/AgentCharacter.*`
@@ -136,6 +164,9 @@ Character movement, camera mode switching, drone spawning, and player input rout
 
 - `Source/Agent/DroneCompanion.*`
 Drone actor, physics, pilot logic, camera transitions, map mode, crash handling, and autonomous companion behavior.
+
+- `Source/Agent/Factory/*`
+Factory transport, modular machine volumes, resource definitions, salvage actors, and the first processor / shredder shells.
 
 - `Agent.md`
 Internal running notes used to preserve design intent and implementation rules between sessions.
