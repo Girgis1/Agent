@@ -188,6 +188,7 @@ protected:
 	void ApplyHeldPickupRotationPhysicsInput(const FVector& RotationAxis, float InputValue, float DeltaSeconds);
 	bool TryToggleDroneLiftAssist();
 	void SyncDroneLiftAssistTuning() const;
+	void AdjustDroneLiftAssistStrength(float Delta);
 	void AdjustPickupStrength(float Delta);
 	void ShowPickupStrengthDebug() const;
 
