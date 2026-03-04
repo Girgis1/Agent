@@ -101,7 +101,7 @@ protected:
 	UInputAction* MouseLookAction;
 
 public:
-	AAgentCharacter();
+	AAgentCharacter(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 
 protected:
 	virtual void BeginPlay() override;
@@ -164,6 +164,11 @@ protected:
 	void SelectFactoryPlacementType(EAgentFactoryPlacementType NewType, bool bToggleIfAlreadySelected);
 	void ApplyFactoryBuildableDefaults(AActor* SpawnedActor) const;
 	bool CanUsePickupInteraction() const;
+	bool CanMaintainHeldPickup() const;
+	bool CanUseDroneLiftAssist() const;
+	bool CanMaintainDroneLiftAssist() const;
+	bool CanUseMapModeDronePickup() const;
+	bool GetCharacterPickupView(FVector& OutLocation, FRotator& OutRotation) const;
 	bool GetActivePickupView(FVector& OutLocation, FRotator& OutRotation) const;
 	void UpdatePickupInteraction();
 	bool UpdatePickupCandidate();
@@ -181,6 +186,8 @@ protected:
 	float GetHeldPickupRotationLeverageMultiplier() const;
 	float GetHeldPickupRotationDriveScale() const;
 	void ApplyHeldPickupRotationPhysicsInput(const FVector& RotationAxis, float InputValue, float DeltaSeconds);
+	bool TryToggleDroneLiftAssist();
+	void SyncDroneLiftAssistTuning() const;
 	void AdjustPickupStrength(float Delta);
 	void ShowPickupStrengthDebug() const;
 
@@ -333,9 +340,6 @@ public:
 	FVector ConveyorPlacementClearanceExtents = FVector(48.0f, 48.0f, 12.0f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
-	float ConveyorMasterBeltSpeed = 100.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
 	TSubclassOf<AFactoryPayloadActor> DefaultFactoryPayloadClass;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
@@ -349,6 +353,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
 	float PickupMaxHoldDistance = 650.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
+	float MapModePickupDownwardDotThreshold = 0.95f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
 	FVector ThirdPersonPickupHoldOffset = FVector(7.5f, 0.0f, 0.0f);
@@ -499,6 +506,7 @@ protected:
 	bool bCrashRollRecoveryActive = false;
 	bool bRollModeJumpHeld = false;
 	bool bPickupRotationModeActive = false;
+	bool bHeldPickupUsesDroneView = false;
 
 	float ThirdPersonTransitionElapsed = 0.0f;
 	float ViewModeButtonHeldDuration = 0.0f;

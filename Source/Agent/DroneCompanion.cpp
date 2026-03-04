@@ -3,12 +3,15 @@
 #include "DroneCompanion.h"
 #include "Agent.h"
 #include "Camera/CameraComponent.h"
+#include "Factory/ConveyorSurfaceVelocityComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SceneComponent.h"
+#include "DrawDebugHelpers.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/Controller.h"
+#include "PhysicsEngine/PhysicsHandleComponent.h"
 #include "PhysicalMaterials/PhysicalMaterial.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -43,6 +46,9 @@ ADroneCompanion::ADroneCompanion()
 	DroneCamera->SetupAttachment(CameraMount);
 	DroneCamera->bUsePawnControlRotation = false;
 	DroneCamera->FieldOfView = PilotCameraFieldOfView;
+
+	ConveyorSurfaceVelocity = CreateDefaultSubobject<UConveyorSurfaceVelocityComponent>(TEXT("ConveyorSurfaceVelocity"));
+	LiftAssistPhysicsHandle = CreateDefaultSubobject<UPhysicsHandleComponent>(TEXT("LiftAssistPhysicsHandle"));
 }
 
 void ADroneCompanion::BeginPlay()
@@ -73,6 +79,7 @@ void ADroneCompanion::Tick(float DeltaSeconds)
 	}
 
 	PreviousLinearVelocity = DroneBody->GetPhysicsLinearVelocity();
+	RemoveAppliedConveyorSurfaceVelocity();
 	RollJumpCooldownRemaining = FMath::Max(0.0f, RollJumpCooldownRemaining - DeltaSeconds);
 	RollModeLogTimeRemaining = FMath::Max(0.0f, RollModeLogTimeRemaining - DeltaSeconds);
 
@@ -133,7 +140,14 @@ void ADroneCompanion::Tick(float DeltaSeconds)
 		}
 		else
 		{
-			UpdateAutonomousFlight(DeltaSeconds);
+			if (bLiftAssistActive && CompanionMode == EDroneCompanionMode::BuddyFollow)
+			{
+				UpdateLiftAssistFlight(DeltaSeconds);
+			}
+			else
+			{
+				UpdateAutonomousFlight(DeltaSeconds);
+			}
 		}
 	}
 
@@ -141,12 +155,44 @@ void ADroneCompanion::Tick(float DeltaSeconds)
 	{
 		ClampVelocity();
 	}
+
+	ApplyConveyorSurfaceVelocity();
 	UpdateCameraTransition(DeltaSeconds);
 	if (bRollPilotActive && !bCameraTransitionActive && CameraMount)
 	{
 		UpdateRollCamera(DeltaSeconds);
 	}
 	UpdateDebugOutput();
+}
+
+void ADroneCompanion::RemoveAppliedConveyorSurfaceVelocity()
+{
+	if (!DroneBody || AppliedConveyorSurfaceVelocity.IsNearlyZero())
+	{
+		return;
+	}
+
+	const FVector CurrentVelocity = DroneBody->GetPhysicsLinearVelocity();
+	DroneBody->SetPhysicsLinearVelocity(CurrentVelocity - AppliedConveyorSurfaceVelocity, false);
+	AppliedConveyorSurfaceVelocity = FVector::ZeroVector;
+}
+
+void ADroneCompanion::ApplyConveyorSurfaceVelocity()
+{
+	if (!DroneBody || !ConveyorSurfaceVelocity)
+	{
+		return;
+	}
+
+	const FVector SurfaceVelocity = ConveyorSurfaceVelocity->GetConveyorSurfaceVelocity();
+	if (SurfaceVelocity.IsNearlyZero())
+	{
+		return;
+	}
+
+	const FVector CurrentVelocity = DroneBody->GetPhysicsLinearVelocity();
+	DroneBody->SetPhysicsLinearVelocity(CurrentVelocity + SurfaceVelocity, false);
+	AppliedConveyorSurfaceVelocity = SurfaceVelocity;
 }
 
 void ADroneCompanion::SetFollowTarget(AActor* NewFollowTarget)
@@ -158,6 +204,11 @@ void ADroneCompanion::SetCompanionMode(EDroneCompanionMode NewMode)
 {
 	const EDroneCompanionMode PreviousMode = CompanionMode;
 	CompanionMode = NewMode;
+	if (CompanionMode != EDroneCompanionMode::BuddyFollow)
+	{
+		StopLiftAssist();
+	}
+
 	if (CompanionMode != EDroneCompanionMode::PilotControlled)
 	{
 		bCrashed = false;
@@ -507,6 +558,110 @@ void ADroneCompanion::SetNextMapModeUsesEntryLift(bool bEnable)
 void ADroneCompanion::SetSuppressCameraMountRefresh(bool bSuppress)
 {
 	bSuppressCameraMountRefresh = bSuppress;
+}
+
+bool ADroneCompanion::StartLiftAssist(
+	UPrimitiveComponent* InTargetComponent,
+	const FVector& InGrabLocation)
+{
+	if (!DroneBody
+		|| !InTargetComponent
+		|| !InTargetComponent->IsSimulatingPhysics()
+		|| CompanionMode != EDroneCompanionMode::BuddyFollow)
+	{
+		return false;
+	}
+
+	LiftAssistTargetComponent = InTargetComponent;
+	LiftAssistLocalGrabOffset = InTargetComponent->GetComponentTransform().InverseTransformPosition(InGrabLocation);
+	if (LiftAssistPhysicsHandle && LiftAssistPhysicsHandle->GetGrabbedComponent())
+	{
+		LiftAssistPhysicsHandle->ReleaseComponent();
+	}
+	bLiftAssistActive = true;
+	bLiftAssistLatched = false;
+	bLiftAssistRopeVisible = false;
+	bLiftAssistLiftEngaged = false;
+	LiftAssistStageTimeRemaining = 0.0f;
+	return true;
+}
+
+void ADroneCompanion::StopLiftAssist()
+{
+	bLiftAssistActive = false;
+	bLiftAssistLatched = false;
+	bLiftAssistRopeVisible = false;
+	bLiftAssistLiftEngaged = false;
+	LiftAssistStageTimeRemaining = 0.0f;
+	if (LiftAssistPhysicsHandle && LiftAssistPhysicsHandle->GetGrabbedComponent())
+	{
+		LiftAssistPhysicsHandle->ReleaseComponent();
+	}
+	LiftAssistTargetComponent.Reset();
+	LiftAssistLocalGrabOffset = FVector::ZeroVector;
+}
+
+void ADroneCompanion::SetLiftAssistHandleTuning(const FDroneLiftAssistHandleTuning& InTuning)
+{
+	LiftAssistHandleTuning = InTuning;
+
+	if (bLiftAssistActive)
+	{
+		if (UPrimitiveComponent* TargetComponent = LiftAssistTargetComponent.Get())
+		{
+			SyncLiftAssistHandleSettings(TargetComponent);
+		}
+	}
+}
+
+void ADroneCompanion::SyncLiftAssistHandleSettings(UPrimitiveComponent* TargetComponent)
+{
+	if (!LiftAssistPhysicsHandle || !TargetComponent)
+	{
+		return;
+	}
+
+	LiftAssistPhysicsHandle->bInterpolateTarget = true;
+	LiftAssistPhysicsHandle->bSoftLinearConstraint = true;
+	LiftAssistPhysicsHandle->bSoftAngularConstraint = false;
+
+	const float StrengthValue = FMath::Max(0.0f, LiftAssistHandleTuning.StrengthValue);
+	const float CarryMassScaleKg = FMath::Max(1.0f, LiftAssistHandleTuning.StrengthMassScaleKg);
+	const float MaxCarryMassKg = FMath::Max(1.0f, StrengthValue * CarryMassScaleKg);
+	const float HeldMassKg = FMath::Max(0.0f, TargetComponent->GetMass());
+	const float EffectiveHeldMassKg = HeldMassKg * FMath::Max(0.0f, LiftAssistHandleTuning.MassFeelMultiplier);
+	const float LoadRatio = EffectiveHeldMassKg / MaxCarryMassKg;
+	const float LoadAlpha = FMath::Clamp(LoadRatio, 0.0f, 1.0f);
+	const float ResponseMassFraction = FMath::Clamp(LiftAssistHandleTuning.SoftCapResponseMassFraction, 0.01f, 1.0f);
+	const float ResponseLoadRatio = LoadRatio / ResponseMassFraction;
+	const float OverloadRatio = FMath::Max(0.0f, ResponseLoadRatio - 1.0f);
+	const float ResponsivenessScale = 1.0f / (1.0f + OverloadRatio);
+	const float ReferenceStrength = FMath::Max(0.01f, LiftAssistHandleTuning.HeavyDampingReferenceStrength);
+	const float StrengthScale = FMath::Max(0.05f, StrengthValue / ReferenceStrength);
+	const float HeavyDampingStartMassKg = FMath::Max(1.0f, LiftAssistHandleTuning.HeavyDampingStartMassKg * StrengthScale);
+	const float HeavyMassRatio = HeldMassKg / HeavyDampingStartMassKg;
+	const float HeavyOverRatio = FMath::Max(0.0f, HeavyMassRatio - 1.0f);
+	const float HeavyDampingMultiplier = 1.0f + (HeavyOverRatio * FMath::Max(0.0f, LiftAssistHandleTuning.HeavyDampingMultiplier));
+	const float LightSwingMultiplier = FMath::Lerp(
+		FMath::Max(1.0f, LiftAssistHandleTuning.LightSwingDampingMultiplier),
+		1.0f,
+		LoadAlpha);
+	const float MovementGuideScale = ResponsivenessScale / HeavyDampingMultiplier;
+
+	LiftAssistPhysicsHandle->LinearStiffness = FMath::Max(0.0f, LiftAssistHandleTuning.HandleLinearStiffness * MovementGuideScale);
+	LiftAssistPhysicsHandle->LinearDamping = FMath::Max(
+		0.0f,
+		LiftAssistHandleTuning.HandleLinearDamping * LightSwingMultiplier * HeavyDampingMultiplier);
+	LiftAssistPhysicsHandle->AngularStiffness = FMath::Max(0.0f, LiftAssistHandleTuning.HandleAngularStiffness * MovementGuideScale);
+	LiftAssistPhysicsHandle->AngularDamping = FMath::Max(
+		0.0f,
+		LiftAssistHandleTuning.HandleAngularDamping * LightSwingMultiplier * HeavyDampingMultiplier);
+
+	const float BaseInterpolationSpeed = FMath::Lerp(
+		LiftAssistHandleTuning.LightInterpolationSpeed,
+		LiftAssistHandleTuning.HeavyInterpolationSpeed,
+		LoadAlpha);
+	LiftAssistPhysicsHandle->SetInterpolationSpeed(FMath::Max(0.05f, BaseInterpolationSpeed * MovementGuideScale));
 }
 
 void ADroneCompanion::StartPilotCameraTransitionFromThirdPerson()
@@ -1158,6 +1313,174 @@ void ADroneCompanion::UpdateAutonomousFlight(float DeltaSeconds)
 	ApplyDesiredAngularVelocity(DesiredLocalAngularVelocity, DeltaSeconds, RotationResponse);
 }
 
+void ADroneCompanion::UpdateLiftAssistFlight(float DeltaSeconds)
+{
+	if (!DroneBody)
+	{
+		return;
+	}
+
+	UPrimitiveComponent* TargetComponent = LiftAssistTargetComponent.Get();
+	if (!bLiftAssistActive || !TargetComponent || !TargetComponent->IsSimulatingPhysics() || !LiftAssistPhysicsHandle)
+	{
+		StopLiftAssist();
+		UpdateAutonomousFlight(DeltaSeconds);
+		return;
+	}
+
+	CurrentHoverCommandInput = 0.0f;
+	CurrentHoverVerticalAcceleration = 0.0f;
+	CurrentHoverBaseAcceleration = 0.0f;
+	CurrentHoverLiftDot = 1.0f;
+	AppliedThrottleInput = 0.0f;
+
+	const FVector AnchorLocation = TargetComponent->GetComponentTransform().TransformPosition(LiftAssistLocalGrabOffset);
+	const FRotator ReferenceYawRotation(0.0f, ViewReferenceRotation.Yaw, 0.0f);
+	auto EnsureLiftAssistGrabbed = [&]() -> bool
+	{
+		if (LiftAssistPhysicsHandle->GetGrabbedComponent() == TargetComponent)
+		{
+			return true;
+		}
+
+		if (LiftAssistPhysicsHandle->GetGrabbedComponent())
+		{
+			LiftAssistPhysicsHandle->ReleaseComponent();
+		}
+
+		SyncLiftAssistHandleSettings(TargetComponent);
+		TargetComponent->WakeAllRigidBodies();
+		LiftAssistPhysicsHandle->GrabComponentAtLocation(TargetComponent, NAME_None, AnchorLocation);
+		return LiftAssistPhysicsHandle->GetGrabbedComponent() == TargetComponent;
+	};
+
+	FVector DesiredDroneLocation = AnchorLocation + FVector(0.0f, 0.0f, FMath::Max(0.0f, LiftAssistApproachHeight));
+	const FVector DroneLocation = DroneBody->GetComponentLocation();
+
+	if (!bLiftAssistLatched)
+	{
+		const float LatchDistance = FMath::Max(0.0f, LiftAssistLatchDistance);
+		if (FVector::DistSquared(DroneLocation, DesiredDroneLocation) <= FMath::Square(LatchDistance))
+		{
+			bLiftAssistLatched = true;
+			bLiftAssistRopeVisible = false;
+			bLiftAssistLiftEngaged = false;
+			LiftAssistStageTimeRemaining = FMath::Max(0.0f, LiftAssistPreRopeDelay);
+		}
+	}
+	else if (!bLiftAssistRopeVisible)
+	{
+		LiftAssistStageTimeRemaining = FMath::Max(0.0f, LiftAssistStageTimeRemaining - FMath::Max(0.0f, DeltaSeconds));
+		if (LiftAssistStageTimeRemaining <= KINDA_SMALL_NUMBER)
+		{
+			bLiftAssistRopeVisible = true;
+			bLiftAssistLiftEngaged = false;
+			LiftAssistStageTimeRemaining = FMath::Max(0.0f, LiftAssistPreLiftDelay);
+
+			if (EnsureLiftAssistGrabbed())
+			{
+				LiftAssistPhysicsHandle->SetTargetLocation(AnchorLocation);
+			}
+		}
+	}
+	else if (!bLiftAssistLiftEngaged)
+	{
+		DesiredDroneLocation = AnchorLocation + FVector(0.0f, 0.0f, FMath::Max(1.0f, LiftAssistRopeLength));
+
+		if (EnsureLiftAssistGrabbed())
+		{
+			SyncLiftAssistHandleSettings(TargetComponent);
+			LiftAssistPhysicsHandle->SetTargetLocation(AnchorLocation);
+		}
+
+		LiftAssistStageTimeRemaining = FMath::Max(0.0f, LiftAssistStageTimeRemaining - FMath::Max(0.0f, DeltaSeconds));
+		if (LiftAssistStageTimeRemaining <= KINDA_SMALL_NUMBER)
+		{
+			bLiftAssistLiftEngaged = true;
+			LiftAssistStageTimeRemaining = 0.0f;
+		}
+	}
+	else
+	{
+		FVector DesiredCarryAnchorLocation = AnchorLocation;
+		if (FollowTarget)
+		{
+			const FVector HorizontalOffset = FRotationMatrix(ReferenceYawRotation).TransformVector(
+				FVector(LiftAssistCarryLocalOffset.X, LiftAssistCarryLocalOffset.Y, 0.0f));
+			DesiredCarryAnchorLocation = FollowTarget->GetActorLocation() + HorizontalOffset;
+		}
+
+		float GroundZ = DesiredCarryAnchorLocation.Z;
+		if (UWorld* World = GetWorld())
+		{
+			const float TraceHeight = FMath::Max(2000.0f, FMath::Max(0.0f, LiftAssistDesiredClearance) + 1000.0f);
+			const float TraceDepth = FMath::Max(5000.0f, FMath::Max(0.0f, LiftAssistDesiredClearance) + 3000.0f);
+			FCollisionQueryParams QueryParams(FName(TEXT("DroneLiftAssistCarryTrace")), false, this);
+			QueryParams.AddIgnoredActor(this);
+			if (AActor* TargetOwner = TargetComponent->GetOwner())
+			{
+				QueryParams.AddIgnoredActor(TargetOwner);
+			}
+
+			FHitResult GroundHit;
+			if (World->LineTraceSingleByChannel(
+				GroundHit,
+				DesiredCarryAnchorLocation + FVector(0.0f, 0.0f, TraceHeight),
+				DesiredCarryAnchorLocation - FVector(0.0f, 0.0f, TraceDepth),
+				ECC_Visibility,
+				QueryParams))
+			{
+				GroundZ = GroundHit.ImpactPoint.Z;
+			}
+		}
+
+		DesiredCarryAnchorLocation.Z = GroundZ + FMath::Max(0.0f, LiftAssistDesiredClearance);
+		if (EnsureLiftAssistGrabbed())
+		{
+			SyncLiftAssistHandleSettings(TargetComponent);
+			LiftAssistPhysicsHandle->SetTargetLocation(DesiredCarryAnchorLocation);
+		}
+
+		DesiredDroneLocation = AnchorLocation + FVector(0.0f, 0.0f, FMath::Max(1.0f, LiftAssistRopeLength));
+	}
+
+	const FVector CurrentVelocity = DroneBody->GetPhysicsLinearVelocity();
+	DroneBody->AddForce(
+		((DesiredDroneLocation - DroneLocation) * BuddyPositionGain) - (CurrentVelocity * BuddyVelocityDamping),
+		NAME_None,
+		true);
+
+	FRotator DesiredRotation = DroneBody->GetComponentRotation();
+	const FVector DesiredForward = bLiftAssistRopeVisible
+		? (AnchorLocation - DroneLocation)
+		: (DesiredDroneLocation - DroneLocation);
+	if (!DesiredForward.IsNearlyZero())
+	{
+		DesiredRotation = DesiredForward.Rotation();
+	}
+
+	const FRotator DeltaRotation = (DesiredRotation - DroneBody->GetComponentRotation()).GetNormalized();
+	const float RotationResponse = FMath::Max(0.0f, AutopilotAngularResponse);
+	const FVector DesiredLocalAngularVelocity(
+		-DeltaRotation.Roll * RotationResponse,
+		-DeltaRotation.Pitch * RotationResponse,
+		DeltaRotation.Yaw * RotationResponse);
+	ApplyDesiredAngularVelocity(DesiredLocalAngularVelocity, DeltaSeconds, RotationResponse);
+
+	if (bLiftAssistRopeVisible)
+	{
+		if (UWorld* World = GetWorld())
+		{
+			const float RopeDistance = FVector::Dist(DroneLocation, AnchorLocation);
+			const float RopeRestLength = FMath::Max(1.0f, LiftAssistRopeLength);
+			const FColor RopeColor = bLiftAssistLiftEngaged
+				? (RopeDistance > RopeRestLength ? FColor::Orange : FColor::Yellow)
+				: FColor::Cyan;
+			DrawDebugLine(World, DroneLocation, AnchorLocation, RopeColor, false, 0.0f, 0, 2.0f);
+		}
+	}
+}
+
 void ADroneCompanion::UpdateBuddyDrift(float DeltaSeconds)
 {
 	BuddyDriftTimeRemaining -= DeltaSeconds;
@@ -1473,7 +1796,7 @@ void ADroneCompanion::UpdateDebugOutput() const
 	}
 	else if (CompanionMode == EDroneCompanionMode::BuddyFollow)
 	{
-		ModeLabel = TEXT("Buddy");
+		ModeLabel = bLiftAssistActive ? TEXT("BuddyLift") : TEXT("Buddy");
 	}
 	else if (CompanionMode == EDroneCompanionMode::MapMode)
 	{

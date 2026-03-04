@@ -7,7 +7,9 @@
 #include "DroneCompanion.generated.h"
 
 class UCameraComponent;
+class UConveyorSurfaceVelocityComponent;
 class UPhysicalMaterial;
+class UPhysicsHandleComponent;
 class UPrimitiveComponent;
 class UStaticMeshComponent;
 class USceneComponent;
@@ -22,6 +24,24 @@ enum class EDroneCompanionMode : uint8
 	BuddyFollow,
 	MapMode,
 	MiniMapFollow
+};
+
+struct FDroneLiftAssistHandleTuning
+{
+	float StrengthValue = 0.0f;
+	float StrengthMassScaleKg = 500.0f;
+	float MassFeelMultiplier = 10.0f;
+	float SoftCapResponseMassFraction = 1.0f;
+	float HandleLinearStiffness = 8000.0f;
+	float HandleLinearDamping = 500.0f;
+	float HandleAngularStiffness = 3000.0f;
+	float HandleAngularDamping = 350.0f;
+	float LightSwingDampingMultiplier = 2.0f;
+	float HeavyDampingStartMassKg = 100.0f;
+	float HeavyDampingReferenceStrength = 0.1f;
+	float HeavyDampingMultiplier = 4.0f;
+	float LightInterpolationSpeed = 6.0f;
+	float HeavyInterpolationSpeed = 4.5f;
 };
 
 UCLASS()
@@ -89,6 +109,14 @@ public:
 	void SetSuppressCameraMountRefresh(bool bSuppress);
 
 	UFUNCTION(BlueprintCallable, Category="Drone")
+	bool StartLiftAssist(UPrimitiveComponent* InTargetComponent, const FVector& InGrabLocation);
+
+	UFUNCTION(BlueprintCallable, Category="Drone")
+	void StopLiftAssist();
+
+	void SetLiftAssistHandleTuning(const FDroneLiftAssistHandleTuning& InTuning);
+
+	UFUNCTION(BlueprintCallable, Category="Drone")
 	void StartPilotCameraTransitionFromThirdPerson();
 
 	UFUNCTION(BlueprintCallable, Category="Drone")
@@ -111,6 +139,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category="Drone")
 	bool IsStableForRollRecovery() const;
+
+	UFUNCTION(BlueprintPure, Category="Drone")
+	bool IsLiftAssistActive() const { return bLiftAssistActive; }
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Physics")
 	float DroneMassKg = 3.0f;
@@ -322,6 +353,42 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Autopilot")
 	float AutopilotAngularResponse = 5.5f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
+	FVector LiftAssistCarryLocalOffset = FVector(80.0f, -140.0f, 0.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
+	float LiftAssistApproachHeight = 150.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
+	float LiftAssistDesiredClearance = 100.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
+	float LiftAssistLatchDistance = 150.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
+	float LiftAssistRopeLength = 300.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
+	float LiftAssistPreRopeDelay = 1.2f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
+	float LiftAssistPreLiftDelay = 0.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
+	float LiftAssistRopeStiffness = 35.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
+	float LiftAssistClearanceResponse = 6.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
+	float LiftAssistMaxRaiseAcceleration = 600.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
+	float LiftAssistStrengthScale = 1.35f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
+	float LiftAssistReactionScale = 0.65f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Camera")
 	float DroneCameraTiltStep = 5.0f;
 
@@ -459,6 +526,8 @@ protected:
 	void UpdateMapFlight(float DeltaSeconds);
 	void UpdateMiniMapFlight(float DeltaSeconds);
 	void UpdateAutonomousFlight(float DeltaSeconds);
+	void UpdateLiftAssistFlight(float DeltaSeconds);
+	void SyncLiftAssistHandleSettings(UPrimitiveComponent* TargetComponent);
 	void UpdateBuddyDrift(float DeltaSeconds);
 	void ClampVelocity() const;
 	void ApplyDesiredAngularVelocity(const FVector& DesiredLocalAngularVelocity, float DeltaSeconds, float ResponseSpeed);
@@ -469,6 +538,8 @@ protected:
 	bool QueryRollGroundContact(float& OutGroundClearance) const;
 	void LogRollModeState(const TCHAR* Context, bool bProbeGround);
 	void UpdateDebugOutput() const;
+	void RemoveAppliedConveyorSurfaceVelocity();
+	void ApplyConveyorSurfaceVelocity();
 	void ApplyRuntimePhysicalMaterial();
 	void RefreshCameraForPilotControlModeChange(bool bWasRollControls);
 	void UpdateCameraTransition(float DeltaSeconds);
@@ -490,6 +561,12 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UCameraComponent* DroneCamera;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	UConveyorSurfaceVelocityComponent* ConveyorSurfaceVelocity;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	UPhysicsHandleComponent* LiftAssistPhysicsHandle;
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
 	EDroneCompanionMode CompanionMode = EDroneCompanionMode::ThirdPersonFollow;
 
@@ -498,6 +575,8 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
 	bool bUseSimplePilotControls = false;
+
+	FVector AppliedConveyorSurfaceVelocity = FVector::ZeroVector;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
 	bool bUseFreeFlyPilotControls = false;
@@ -554,6 +633,10 @@ protected:
 	bool bCameraTransitionActive = false;
 	bool bPendingCrashRollRecovery = false;
 	bool bSuppressCameraMountRefresh = false;
+	bool bLiftAssistActive = false;
+	bool bLiftAssistLatched = false;
+	bool bLiftAssistRopeVisible = false;
+	bool bLiftAssistLiftEngaged = false;
 	float BuddyDriftTimeRemaining = 0.0f;
 	float ImpactDebugTimeRemaining = 0.0f;
 	float CameraTransitionElapsed = 0.0f;
@@ -574,7 +657,11 @@ protected:
 	float CurrentHoverLiftDot = 1.0f;
 	float CurrentRollCameraPitchOffset = 0.0f;
 	float CurrentRollCameraLean = 0.0f;
+	float LiftAssistStageTimeRemaining = 0.0f;
 	FVector FreeFlyCurrentVelocity = FVector::ZeroVector;
 	FRotator CameraTransitionStartRotation = FRotator::ZeroRotator;
+	TWeakObjectPtr<UPrimitiveComponent> LiftAssistTargetComponent;
+	FVector LiftAssistLocalGrabOffset = FVector::ZeroVector;
+	FDroneLiftAssistHandleTuning LiftAssistHandleTuning;
 	FRotator CameraTransitionTargetRotation = FRotator::ZeroRotator;
 };
