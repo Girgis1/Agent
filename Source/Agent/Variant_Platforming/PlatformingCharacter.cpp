@@ -2,6 +2,8 @@
 
 
 #include "PlatformingCharacter.h"
+#include "Factory/ConveyorCharacterMovementComponent.h"
+#include "Factory/ConveyorSurfaceVelocityComponent.h"
 
 #include "Components/CapsuleComponent.h"
 #include "Engine/World.h"
@@ -14,9 +16,12 @@
 #include "TimerManager.h"
 #include "Engine/LocalPlayer.h"
 
-APlatformingCharacter::APlatformingCharacter()
+APlatformingCharacter::APlatformingCharacter(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UConveyorCharacterMovementComponent>(ACharacter::CharacterMovementComponentName))
 {
  	PrimaryActorTick.bCanEverTick = true;
+
+	CreateDefaultSubobject<UConveyorSurfaceVelocityComponent>(TEXT("ConveyorSurfaceVelocity"));
 
 	// initialize the flags
 	bHasWallJumped = false;

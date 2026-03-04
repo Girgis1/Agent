@@ -39,7 +39,7 @@ class ACombatEnemy : public ACharacter, public ICombatAttacker, public ICombatDa
 public:
 	
 	/** Constructor */
-	ACombatEnemy();
+	ACombatEnemy(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 
 protected:
 

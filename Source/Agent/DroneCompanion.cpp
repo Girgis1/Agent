@@ -3,6 +3,7 @@
 #include "DroneCompanion.h"
 #include "Agent.h"
 #include "Camera/CameraComponent.h"
+#include "Factory/ConveyorSurfaceVelocityComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SceneComponent.h"
 #include "DrawDebugHelpers.h"
@@ -44,6 +45,8 @@ ADroneCompanion::ADroneCompanion()
 	DroneCamera->SetupAttachment(CameraMount);
 	DroneCamera->bUsePawnControlRotation = false;
 	DroneCamera->FieldOfView = PilotCameraFieldOfView;
+
+	ConveyorSurfaceVelocity = CreateDefaultSubobject<UConveyorSurfaceVelocityComponent>(TEXT("ConveyorSurfaceVelocity"));
 }
 
 void ADroneCompanion::BeginPlay()
@@ -174,7 +177,22 @@ void ADroneCompanion::RemoveAppliedConveyorSurfaceVelocity()
 
 void ADroneCompanion::ApplyConveyorSurfaceVelocity()
 {
-	// Conveyor integration is temporarily disabled until the conveyor component is restored.
+	if (!DroneBody || !ConveyorSurfaceVelocity)
+	{
+		AppliedConveyorSurfaceVelocity = FVector::ZeroVector;
+		return;
+	}
+
+	const FVector SurfaceVelocity = ConveyorSurfaceVelocity->GetConveyorSurfaceVelocity();
+	if (SurfaceVelocity.IsNearlyZero())
+	{
+		AppliedConveyorSurfaceVelocity = FVector::ZeroVector;
+		return;
+	}
+
+	const FVector CurrentVelocity = DroneBody->GetPhysicsLinearVelocity();
+	DroneBody->SetPhysicsLinearVelocity(CurrentVelocity + SurfaceVelocity, false);
+	AppliedConveyorSurfaceVelocity = SurfaceVelocity;
 }
 
 void ADroneCompanion::SetFollowTarget(AActor* NewFollowTarget)
@@ -1400,9 +1418,9 @@ void ADroneCompanion::UpdateLiftAssistFlight(float DeltaSeconds)
 	const FVector CurrentVelocity = DroneVelocity;
 	if (bLiftAssistLiftEngaged)
 	{
-		constexpr float LiftRampStartScale = 0.1f;
+		constexpr float LiftRampStartScale = 0.0f;
 		constexpr float LiftRampEndScale = 1.0f;
-		constexpr float LiftRampDurationSeconds = 1.2f;
+		constexpr float LiftRampDurationSeconds = 3.0f;
 
 		const UWorld* World = GetWorld();
 		LiftAssistGravityAcceleration = World ? FMath::Abs(World->GetGravityZ()) : 980.0f;
@@ -1441,7 +1459,8 @@ void ADroneCompanion::UpdateLiftAssistFlight(float DeltaSeconds)
 		const float LiftRampAlpha = LiftRampDurationSeconds > KINDA_SMALL_NUMBER
 			? FMath::Clamp(LiftAssistForceRampTime / LiftRampDurationSeconds, 0.0f, 1.0f)
 			: 1.0f;
-		const float LiftForceScale = FMath::Lerp(LiftRampStartScale, LiftRampEndScale, LiftRampAlpha);
+		const float SmoothedLiftRampAlpha = LiftRampAlpha * LiftRampAlpha * (3.0f - (2.0f * LiftRampAlpha));
+		const float LiftForceScale = FMath::Lerp(LiftRampStartScale, LiftRampEndScale, SmoothedLiftRampAlpha);
 		const FVector UpwardAssistForce = FVector::UpVector * (LiftAssistMaxPayloadForce * LiftDemandAlpha * LiftForceScale);
 		FVector DroneDriveForce = HorizontalDriveForce
 			+ FVector::UpVector * HoverForce

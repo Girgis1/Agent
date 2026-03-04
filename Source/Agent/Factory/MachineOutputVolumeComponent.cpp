@@ -10,8 +10,6 @@
 UMachineOutputVolumeComponent::UMachineOutputVolumeComponent()
 {
 	DebugName = TEXT("MachineOutput");
-	SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	SetGenerateOverlapEvents(false);
 }
 
 void UMachineOutputVolumeComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
@@ -86,6 +84,16 @@ float UMachineOutputVolumeComponent::GetBufferedUnits(FName ResourceId) const
 bool UMachineOutputVolumeComponent::TryProcessOverlappingActor(AActor* OverlappingActor)
 {
 	(void)OverlappingActor;
+	return false;
+}
+
+ECollisionEnabled::Type UMachineOutputVolumeComponent::GetConfiguredCollisionEnabled() const
+{
+	return ECollisionEnabled::NoCollision;
+}
+
+bool UMachineOutputVolumeComponent::GetConfiguredGenerateOverlapEvents() const
+{
 	return false;
 }
 

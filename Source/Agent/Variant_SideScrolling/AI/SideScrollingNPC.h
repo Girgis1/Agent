@@ -43,7 +43,7 @@ public:
 public:
 
 	/** Constructor */
-	ASideScrollingNPC();
+	ASideScrollingNPC(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 
 public:
 

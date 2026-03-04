@@ -2,13 +2,18 @@
 
 
 #include "SideScrollingNPC.h"
+#include "Factory/ConveyorCharacterMovementComponent.h"
+#include "Factory/ConveyorSurfaceVelocityComponent.h"
 #include "Engine/World.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "TimerManager.h"
 
-ASideScrollingNPC::ASideScrollingNPC()
+ASideScrollingNPC::ASideScrollingNPC(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UConveyorCharacterMovementComponent>(ACharacter::CharacterMovementComponentName))
 {
  	PrimaryActorTick.bCanEverTick = true;
+
+	CreateDefaultSubobject<UConveyorSurfaceVelocityComponent>(TEXT("ConveyorSurfaceVelocity"));
 
 	GetCharacterMovement()->MaxWalkSpeed = 150.0f;
 }

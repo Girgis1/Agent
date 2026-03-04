@@ -26,8 +26,11 @@ public:
 	bool IsResourceBlocked(FName ResourceId) const;
 
 protected:
+	virtual void OnRegister() override;
 	virtual bool TryProcessOverlappingActor(AActor* OverlappingActor);
 	virtual int32 GetCurrentStoredQuantityScaled() const;
+	virtual ECollisionEnabled::Type GetConfiguredCollisionEnabled() const;
+	virtual bool GetConfiguredGenerateOverlapEvents() const;
 
 	bool HasCapacityForAdditionalQuantity(int32 AdditionalQuantityScaled) const;
 

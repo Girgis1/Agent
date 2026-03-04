@@ -8,13 +8,19 @@ UFactoryVolumeComponentBase::UFactoryVolumeComponentBase()
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.bStartWithTickEnabled = true;
 
-	SetBoxExtent(FVector(40.0f, 40.0f, 40.0f));
-	SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	InitBoxExtent(FVector(40.0f, 40.0f, 40.0f));
+}
+
+void UFactoryVolumeComponentBase::OnRegister()
+{
+	Super::OnRegister();
+
+	SetCollisionEnabled(GetConfiguredCollisionEnabled());
 	SetCollisionObjectType(ECC_WorldDynamic);
 	SetCollisionResponseToAllChannels(ECR_Ignore);
 	SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Overlap);
 	SetCollisionResponseToChannel(ECC_WorldDynamic, ECR_Overlap);
-	SetGenerateOverlapEvents(true);
+	SetGenerateOverlapEvents(GetConfiguredGenerateOverlapEvents());
 	SetCanEverAffectNavigation(false);
 }
 
@@ -70,6 +76,16 @@ bool UFactoryVolumeComponentBase::TryProcessOverlappingActor(AActor* Overlapping
 int32 UFactoryVolumeComponentBase::GetCurrentStoredQuantityScaled() const
 {
 	return 0;
+}
+
+ECollisionEnabled::Type UFactoryVolumeComponentBase::GetConfiguredCollisionEnabled() const
+{
+	return ECollisionEnabled::QueryOnly;
+}
+
+bool UFactoryVolumeComponentBase::GetConfiguredGenerateOverlapEvents() const
+{
+	return true;
 }
 
 bool UFactoryVolumeComponentBase::HasCapacityForAdditionalQuantity(int32 AdditionalQuantityScaled) const

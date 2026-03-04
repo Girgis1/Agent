@@ -1,6 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Factory/ConveyorCharacterMovementComponent.h"
+#include "Factory/ConveyorSurfaceVelocityComponent.h"
+#include "GameFramework/Actor.h"
 
 UConveyorCharacterMovementComponent::UConveyorCharacterMovementComponent()
 {
@@ -20,9 +22,30 @@ void UConveyorCharacterMovementComponent::OnMovementUpdated(float DeltaSeconds, 
 {
 	Super::OnMovementUpdated(DeltaSeconds, OldLocation, OldVelocity);
 
-	if (!PendingConveyorVelocity.IsNearlyZero() && IsMovingOnGround())
+	if (!UpdatedComponent || DeltaSeconds <= 0.0f)
 	{
-		Velocity += PendingConveyorVelocity;
+		PendingConveyorVelocity = FVector::ZeroVector;
+		return;
+	}
+
+	FVector ConveyorVelocity = PendingConveyorVelocity;
+	if (AActor* OwnerActor = GetOwner())
+	{
+		if (UConveyorSurfaceVelocityComponent* SurfaceVelocityComponent = OwnerActor->FindComponentByClass<UConveyorSurfaceVelocityComponent>())
+		{
+			ConveyorVelocity += SurfaceVelocityComponent->GetConveyorSurfaceVelocity();
+		}
+	}
+
+	if (!ConveyorVelocity.IsNearlyZero())
+	{
+		const FVector ConveyorDelta = ConveyorVelocity * DeltaSeconds;
+		FHitResult ConveyorHit;
+		SafeMoveUpdatedComponent(ConveyorDelta, UpdatedComponent->GetComponentQuat(), true, ConveyorHit);
+		if (ConveyorHit.IsValidBlockingHit())
+		{
+			SlideAlongSurface(ConveyorDelta, 1.0f - ConveyorHit.Time, ConveyorHit.Normal, ConveyorHit, true);
+		}
 	}
 
 	PendingConveyorVelocity = FVector::ZeroVector;

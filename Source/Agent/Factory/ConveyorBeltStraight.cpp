@@ -1,19 +1,17 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Factory/ConveyorBeltStraight.h"
+#include "Factory/ConveyorSurfaceVelocityComponent.h"
 #include "Factory/FactoryPlacementHelpers.h"
+#include "Factory/FactoryWorldConfig.h"
 #include "Components/ArrowComponent.h"
 #include "Components/BoxComponent.h"
-#include "Components/CapsuleComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
-#include "GameFramework/Character.h"
-#include "GameFramework/CharacterMovementComponent.h"
+#include "EngineUtils.h"
 #include "PhysicalMaterials/PhysicalMaterial.h"
 #include "UObject/ConstructorHelpers.h"
-
-float AConveyorBeltStraight::MasterBeltSpeed = 150.0f;
 
 AConveyorBeltStraight::AConveyorBeltStraight()
 {
@@ -74,9 +72,10 @@ AConveyorBeltStraight::AConveyorBeltStraight()
 	}
 }
 
-void AConveyorBeltStraight::SetMasterConveyorSettings(float InBeltSpeed)
+FVector AConveyorBeltStraight::GetSurfaceVelocity() const
 {
-	MasterBeltSpeed = FMath::Max(0.0f, InBeltSpeed);
+	const FVector DriveDirection = DirectionArrow ? DirectionArrow->GetForwardVector() : GetActorForwardVector();
+	return DriveDirection.GetSafeNormal() * GetResolvedBeltSpeed();
 }
 
 void AConveyorBeltStraight::BeginPlay()
@@ -121,22 +120,23 @@ void AConveyorBeltStraight::Tick(float DeltaSeconds)
 		ActivePayloads.Remove(PayloadToRemove);
 	}
 
-	TArray<TWeakObjectPtr<ACharacter>> CharactersToRemove;
-	for (const TWeakObjectPtr<ACharacter>& CharacterEntry : ActiveCharacters)
+	const FVector SurfaceVelocity = GetSurfaceVelocity();
+	TArray<TWeakObjectPtr<UConveyorSurfaceVelocityComponent>> ConsumersToRemove;
+	for (const TWeakObjectPtr<UConveyorSurfaceVelocityComponent>& ConsumerEntry : ActiveSurfaceVelocityConsumers)
 	{
-		ACharacter* Character = CharacterEntry.Get();
-		if (!IsCharacterOccupantValid(Character))
+		UConveyorSurfaceVelocityComponent* SurfaceVelocityComponent = ConsumerEntry.Get();
+		if (!IsValid(SurfaceVelocityComponent))
 		{
-			CharactersToRemove.Add(CharacterEntry);
+			ConsumersToRemove.Add(ConsumerEntry);
 			continue;
 		}
 
-		ApplyBeltDriveToCharacter(Character);
+		SurfaceVelocityComponent->SetConveyorSurfaceVelocity(this, SurfaceVelocity);
 	}
 
-	for (const TWeakObjectPtr<ACharacter>& CharacterToRemove : CharactersToRemove)
+	for (const TWeakObjectPtr<UConveyorSurfaceVelocityComponent>& ConsumerToRemove : ConsumersToRemove)
 	{
-		ActiveCharacters.Remove(CharacterToRemove);
+		ActiveSurfaceVelocityConsumers.Remove(ConsumerToRemove);
 	}
 
 	UpdateTickState();
@@ -156,17 +156,14 @@ void AConveyorBeltStraight::OnPayloadBeginOverlap(
 	(void)bFromSweep;
 	(void)SweepResult;
 
-	if (IsPayloadValid(OtherComp))
+	if (UConveyorSurfaceVelocityComponent* SurfaceVelocityConsumer = GetSurfaceVelocityConsumer(OtherActor))
+	{
+		ActiveSurfaceVelocityConsumers.Add(SurfaceVelocityConsumer);
+		SurfaceVelocityConsumer->SetConveyorSurfaceVelocity(this, GetSurfaceVelocity());
+	}
+	else if (IsPayloadValid(OtherComp))
 	{
 		ActivePayloads.Add(OtherComp);
-	}
-
-	if (ACharacter* Character = Cast<ACharacter>(OtherActor))
-	{
-		if (OtherComp == Character->GetCapsuleComponent() && IsCharacterOccupantValid(Character))
-		{
-			ActiveCharacters.Add(Character);
-		}
 	}
 
 	UpdateTickState();
@@ -187,12 +184,10 @@ void AConveyorBeltStraight::OnPayloadEndOverlap(
 		ActivePayloads.Remove(OtherComp);
 	}
 
-	if (ACharacter* Character = Cast<ACharacter>(OtherActor))
+	if (UConveyorSurfaceVelocityComponent* SurfaceVelocityConsumer = GetSurfaceVelocityConsumer(OtherActor))
 	{
-		if (OtherComp == Character->GetCapsuleComponent())
-		{
-			ActiveCharacters.Remove(Character);
-		}
+		ActiveSurfaceVelocityConsumers.Remove(SurfaceVelocityConsumer);
+		SurfaceVelocityConsumer->ClearConveyorSurfaceVelocity(this);
 	}
 
 	UpdateTickState();
@@ -200,7 +195,7 @@ void AConveyorBeltStraight::OnPayloadEndOverlap(
 
 void AConveyorBeltStraight::UpdateTickState()
 {
-	SetActorTickEnabled(ActivePayloads.Num() > 0 || ActiveCharacters.Num() > 0);
+	SetActorTickEnabled(ActivePayloads.Num() > 0 || ActiveSurfaceVelocityConsumers.Num() > 0);
 }
 
 void AConveyorBeltStraight::UpdateSupportPhysicalMaterial()
@@ -238,6 +233,53 @@ bool AConveyorBeltStraight::IsPayloadValid(const UPrimitiveComponent* PrimitiveC
 		&& PrimitiveComponent->IsRegistered();
 }
 
+float AConveyorBeltStraight::GetResolvedBeltSpeed() const
+{
+	if (!bUseMasterSpeedSettings)
+	{
+		return FMath::Max(0.0f, BeltSpeed);
+	}
+
+	if (const AFactoryWorldConfig* WorldConfig = GetFactoryWorldConfig())
+	{
+		return FMath::Max(0.0f, WorldConfig->ConveyorMasterBeltSpeed);
+	}
+
+	if (const AFactoryWorldConfig* DefaultConfig = GetDefault<AFactoryWorldConfig>())
+	{
+		return FMath::Max(0.0f, DefaultConfig->ConveyorMasterBeltSpeed);
+	}
+
+	return FMath::Max(0.0f, BeltSpeed);
+}
+
+UConveyorSurfaceVelocityComponent* AConveyorBeltStraight::GetSurfaceVelocityConsumer(AActor* OtherActor) const
+{
+	return IsValid(OtherActor) ? OtherActor->FindComponentByClass<UConveyorSurfaceVelocityComponent>() : nullptr;
+}
+
+AFactoryWorldConfig* AConveyorBeltStraight::GetFactoryWorldConfig() const
+{
+	if (CachedWorldConfig.IsValid())
+	{
+		return CachedWorldConfig.Get();
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return nullptr;
+	}
+
+	for (TActorIterator<AFactoryWorldConfig> It(World); It; ++It)
+	{
+		CachedWorldConfig = *It;
+		return CachedWorldConfig.Get();
+	}
+
+	return nullptr;
+}
+
 bool AConveyorBeltStraight::IsWorldPointSupportedByBelt(const FVector& WorldPoint) const
 {
 	if (!SupportCollision)
@@ -258,14 +300,6 @@ bool AConveyorBeltStraight::IsWorldPointSupportedByBelt(const FVector& WorldPoin
 	return bWithinX && bWithinY && bNearSurface;
 }
 
-bool AConveyorBeltStraight::IsCharacterOccupantValid(const ACharacter* Character) const
-{
-	return IsValid(Character)
-		&& Character->GetCharacterMovement() != nullptr
-		&& Character->GetRootComponent() != nullptr
-		&& Character->GetRootComponent()->IsRegistered();
-}
-
 void AConveyorBeltStraight::ApplyBeltDrive(UPrimitiveComponent* PrimitiveComponent, float DeltaSeconds) const
 {
 	(void)DeltaSeconds;
@@ -284,37 +318,8 @@ void AConveyorBeltStraight::ApplyBeltDrive(UPrimitiveComponent* PrimitiveCompone
 	const FVector DriveDirection = DirectionArrow ? DirectionArrow->GetForwardVector() : GetActorForwardVector();
 	const FVector CurrentVelocity = PrimitiveComponent->GetPhysicsLinearVelocity();
 	const float CurrentAlongBeltSpeed = FVector::DotProduct(CurrentVelocity, DriveDirection);
-	const float TargetSpeed = bUseMasterSpeedSettings ? MasterBeltSpeed : FMath::Max(0.0f, BeltSpeed);
+	const float TargetSpeed = GetResolvedBeltSpeed();
 	const FVector NonConveyorVelocity = CurrentVelocity - (DriveDirection * CurrentAlongBeltSpeed);
 	const FVector DesiredVelocity = NonConveyorVelocity + (DriveDirection * TargetSpeed);
 	PrimitiveComponent->SetPhysicsLinearVelocity(DesiredVelocity, false);
-}
-
-void AConveyorBeltStraight::ApplyBeltDriveToCharacter(ACharacter* Character) const
-{
-	if (!IsCharacterOccupantValid(Character))
-	{
-		return;
-	}
-
-	UCharacterMovementComponent* CharacterMovement = Character->GetCharacterMovement();
-	if (!CharacterMovement || !CharacterMovement->IsMovingOnGround())
-	{
-		return;
-	}
-
-	const UCapsuleComponent* CapsuleComponent = Character->GetCapsuleComponent();
-	const float CapsuleHalfHeight = CapsuleComponent ? CapsuleComponent->GetScaledCapsuleHalfHeight() : 88.0f;
-	const FVector SupportPoint = Character->GetActorLocation() - FVector(0.0f, 0.0f, CapsuleHalfHeight - 2.0f);
-	if (!IsWorldPointSupportedByBelt(SupportPoint))
-	{
-		return;
-	}
-
-	const FVector DriveDirection = DirectionArrow ? DirectionArrow->GetForwardVector() : GetActorForwardVector();
-	const FVector CurrentVelocity = CharacterMovement->Velocity;
-	const float CurrentAlongBeltSpeed = FVector::DotProduct(CurrentVelocity, DriveDirection);
-	const float TargetSpeed = bUseMasterSpeedSettings ? MasterBeltSpeed : FMath::Max(0.0f, BeltSpeed);
-	const FVector NonConveyorVelocity = CurrentVelocity - (DriveDirection * CurrentAlongBeltSpeed);
-	CharacterMovement->Velocity = NonConveyorVelocity + (DriveDirection * TargetSpeed);
 }

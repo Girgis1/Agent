@@ -2,6 +2,8 @@
 
 
 #include "SideScrollingCharacter.h"
+#include "Factory/ConveyorCharacterMovementComponent.h"
+#include "Factory/ConveyorSurfaceVelocityComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Camera/CameraComponent.h"
@@ -14,9 +16,12 @@
 #include "Kismet/KismetMathLibrary.h"
 #include "TimerManager.h"
 
-ASideScrollingCharacter::ASideScrollingCharacter()
+ASideScrollingCharacter::ASideScrollingCharacter(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UConveyorCharacterMovementComponent>(ACharacter::CharacterMovementComponentName))
 {
 	PrimaryActorTick.bCanEverTick = true;
+
+	CreateDefaultSubobject<UConveyorSurfaceVelocityComponent>(TEXT("ConveyorSurfaceVelocity"));
 
 	// create the camera component
 	Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));

@@ -186,9 +186,9 @@ protected:
 	FTransform MeshStartingTransform;
 
 public:
-	
+
 	/** Constructor */
-	ACombatCharacter();
+	ACombatCharacter(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 
 protected:
 

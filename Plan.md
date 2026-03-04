@@ -1,5 +1,14 @@
 # Conveyor MVP Plan
 
+## Handoff Note
+
+- Restored conveyor surface-velocity routing:
+  - shared world-level tuning now lives on `AFactoryWorldConfig`
+  - `ConveyorMasterBeltSpeed` defaults to `60 uu/s`
+  - `AConveyorBeltStraight::GetSurfaceVelocity()` is the shared belt output
+  - self-driven movers (player, current character variants, drone, and future AI movers) should use `UConveyorSurfaceVelocityComponent`
+  - passive physics payloads still use the support-checked physics path
+
 ## Goal
 
 Build the first factory-system vertical slice:
@@ -65,16 +74,16 @@ The straight conveyor uses:
 
 - a blocking support collision volume
 - a separate top overlap volume to detect payloads
-- per-tick velocity change in the conveyor's forward direction
+- a shared `GetSurfaceVelocity()` output in the conveyor's forward direction
 
-The belt accelerates payloads toward a target belt speed instead of teleporting them.
+Passive physics payloads still use direct along-belt velocity control, but self-driven movers should consume the belt's surface velocity during their own movement update instead of being treated like payloads.
 
-Shared speed control is now driven by the player character's master settings:
+Shared speed control is now driven by a world-level config actor:
 
+- `AFactoryWorldConfig`
 - `ConveyorMasterBeltSpeed`
-- `ConveyorMasterBeltAcceleration`
 
-Placed conveyors read from those shared values by default so tuning one place affects all belts consistently.
+Placed conveyors read from that shared value by default so tuning one place affects all belts consistently.
 
 ### First Factory Loop Actors
 

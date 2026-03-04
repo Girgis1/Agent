@@ -2,6 +2,8 @@
 
 
 #include "CombatEnemy.h"
+#include "Factory/ConveyorCharacterMovementComponent.h"
+#include "Factory/ConveyorSurfaceVelocityComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "CombatAIController.h"
@@ -12,9 +14,12 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Animation/AnimInstance.h"
 
-ACombatEnemy::ACombatEnemy()
+ACombatEnemy::ACombatEnemy(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UConveyorCharacterMovementComponent>(ACharacter::CharacterMovementComponentName))
 {
 	PrimaryActorTick.bCanEverTick = true;
+
+	CreateDefaultSubobject<UConveyorSurfaceVelocityComponent>(TEXT("ConveyorSurfaceVelocity"));
 
 	// bind the attack montage ended delegate
 	OnAttackMontageEnded.BindUObject(this, &ACombatEnemy::AttackMontageEnded);
