@@ -153,17 +153,23 @@
 - Factory resource prototype is rebuilt on top of that conveyor slice:
   - `AFactoryPayloadActor` now carries `FResourceAmount` (`ResourceId + quantity`) while still preserving the old `PayloadType` fallback
   - editor-facing quantities stay whole-number units, but runtime stores them at `x1000` precision so machines can safely accumulate fractional totals
-  - resource authoring lives in:
-    - `UResourceDefinitionAsset` for shared resource identity (`DA_Resource_*`)
-    - `UResourceCompositionAsset` for multi-output breakdowns
-    - `UResourceComponent` on physical actors for shred yield data
-    - `AResourceSalvageActor` as the reusable physics salvage base with mesh randomization support
-  - the simple authoring path is:
-    - create a BP from `AResourceSalvageActor`
-    - set `ResourceData.PrimaryResource`
-    - tune `PrimaryResourceUnitsPerKg`, `MassMultiplier`, and `RecoveryMultiplier`
-    - optionally use `MeshVariants` plus `bRandomizeMeshOnSpawn`
-  - multi-output items should use `ResourceData.Composition` instead of the simple `PrimaryResource` path
+  - `UResourceDefinitionAsset` (`DA_Resource_*`) now also defines `MassPerUnitKg`
+  - resource actor authoring is now centered on:
+    - `AResourceActor` as the reusable physics resource base actor
+    - `UResourceComponent.Materials` for one-or-many material outputs per actor
+  - each material entry can be:
+    - fixed units, or
+    - min/max range units
+  - optional randomized-content flow on `UResourceComponent`:
+    - weighted subset selection (`PickWeight`)
+    - configurable chosen-material-count min/max
+    - optional total-units range normalization
+    - generated contents resolve once per spawn and remain stable afterward
+  - mass formula is now:
+    - `FinalMassKg = TotalMaterialWeightKg + (BaseMassKg * ResourceBaseMassMultiplier)`
+    - then multiplied by local `MassMultiplier`
+  - global mass control lives in `AFactoryWorldConfig.ResourceBaseMassMultiplier`
+  - legacy simple/composition fields remain only as hidden backward-compat fallbacks and should not be used for new authoring
   - modular factory volumes now exist as Blueprint-placeable `UBoxComponent` derivatives:
     - `UFactoryVolumeComponentBase`
     - `UStorageVolumeComponent`
@@ -294,6 +300,9 @@
   - controller `LB` / `RB` rotate the placement preview
 
 ## Build Status
+- Last confirmed successful build on 2026-03-05:
+  - `AgentEditor Win64 Development` using `D:\UnrealEngine\UE_5.7\Engine\Build\BatchFiles\Build.bat`
+  - validated after resource-authoring refactor (`AResourceActor`, `UResourceComponent.Materials` randomization path, and world-config mass formula update)
 - Last confirmed successful build on 2026-03-05:
   - `AgentEditor Win64 Development` using `D:\UnrealEngine\UE_5.7\Engine\Build\BatchFiles\Build.bat`
   - this rebuild restored the missing conveyor helper components plus the first modular factory resource pipeline

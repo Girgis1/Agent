@@ -138,18 +138,28 @@ The first post-conveyor resource slice is rebuilt and compiling again.
 
 ### Completed
 
-- `UResourceDefinitionAsset` and `UResourceCompositionAsset` are back.
-- `UResourceComponent` and `AResourceSalvageActor` are back for physical salvage authoring.
+- `UResourceDefinitionAsset` (`DA_Resource_*`) is back and now includes `MassPerUnitKg`.
+- `UResourceComponent` now supports direct multi-material authoring via `Materials` entries.
+- `AResourceActor` is the new reusable physics resource base actor.
+- `AResourceSalvageActor` remains as a deprecated compatibility wrapper.
 - `AFactoryPayloadActor` now carries a real resource id and quantity.
 - `AStorageBin` is now routed through `UStorageVolumeComponent`.
 - `UShredderVolumeComponent`, `UMachineInputVolumeComponent`, and `UMachineOutputVolumeComponent` are restored as modular Blueprint-placeable volumes.
 - `AShredderMachine` and `AProcessorMachine` are restored as placeable machine shells.
 - Editor-facing quantity fields use whole units, while runtime still stores `x1000` precision internally.
 - Generic buckets are blacklist-driven only: accept everything unless blocked.
+- `UResourceComponent` randomized-content workflow is implemented:
+  - weighted material picking
+  - range-based per-material units
+  - optional total-units normalization
+  - generated contents locked per spawned actor instance
+- World-config mass formula is implemented:
+  - `FinalMassKg = TotalMaterialWeightKg + (BaseMassKg * ResourceBaseMassMultiplier)`
+  - global scalar in `AFactoryWorldConfig`
 
 ### Immediate Next Steps
 
 1. Create the first real `DA_Resource_*` assets (`Metal`, `Plastic`, `Stone`, `IronOre`).
-2. Create the first `UResourceCompositionAsset` examples for multi-output salvage such as `CarDoor`.
-3. Make a reusable `BP_IronOre` from `AResourceSalvageActor` and drive its mesh family through `MeshVariants`.
-4. Decide whether simple-item authoring should stay split between the BP and `UResourceComponent`, or move more of that setup into the `DA_Resource_*` assets.
+2. Create reusable `BP_Resource_*` actors from `AResourceActor` and drive mesh families through `MeshVariants`.
+3. Author the first multi-material entries (for example `DamagedCarDoor`: `Metal`, `Glass`, `Plastic`).
+4. Add an editor utility workflow to batch-assign `UResourceComponent` presets for large mesh libraries.

@@ -6,8 +6,6 @@
 #include "Factory/FactoryPayloadActor.h"
 #include "Factory/MachineOutputVolumeComponent.h"
 #include "Factory/ResourceComponent.h"
-#include "Factory/ResourceCompositionAsset.h"
-#include "Factory/ResourceDefinitionAsset.h"
 #include "Factory/ResourceTypes.h"
 
 namespace
@@ -153,10 +151,10 @@ int32 UShredderVolumeComponent::GetCurrentStoredQuantityScaled() const
 	return TotalQuantityScaled;
 }
 
-bool UShredderVolumeComponent::TryBuildRecoveredResources(const UResourceComponent* ResourceData, const UPrimitiveComponent* SourcePrimitive, TArray<FResourceAmount>& OutRecoveredResources) const
+bool UShredderVolumeComponent::TryBuildRecoveredResources(UResourceComponent* ResourceData, UPrimitiveComponent* SourcePrimitive, TArray<FResourceAmount>& OutRecoveredResources) const
 {
 	OutRecoveredResources.Reset();
-	if (!ResourceData)
+	if (!ResourceData || !SourcePrimitive)
 	{
 		return false;
 	}
@@ -167,73 +165,31 @@ bool UShredderVolumeComponent::TryBuildRecoveredResources(const UResourceCompone
 		return false;
 	}
 
-	if (ResourceData->Composition && ResourceData->Composition->HasDefinedResources())
+	TMap<FName, int32> ResolvedQuantitiesScaled;
+	if (!ResourceData->BuildResolvedResourceQuantitiesScaled(SourcePrimitive, ResolvedQuantitiesScaled))
 	{
-		const float EffectiveMassKg = ResourceData->ResolveEffectiveMassKg(SourcePrimitive);
-		const float TotalMassFraction = ResourceData->Composition->GetTotalMassFraction();
-		const float CompositionRecoveryScalar = ResourceData->ResolveRecoveryScalar();
-		if (EffectiveMassKg <= 0.0f || TotalMassFraction <= KINDA_SMALL_NUMBER || CompositionRecoveryScalar <= 0.0f)
+		return false;
+	}
+
+	for (const TPair<FName, int32>& Pair : ResolvedQuantitiesScaled)
+	{
+		const FName ResourceId = Pair.Key;
+		const int32 QuantityScaled = FMath::Max(0, Pair.Value);
+		if (ResourceId.IsNone() || QuantityScaled <= 0 || IsResourceBlocked(ResourceId))
 		{
-			return false;
+			continue;
 		}
 
-		for (const FResourceCompositionEntry& Entry : ResourceData->Composition->Entries)
+		FResourceAmount RecoveredAmount;
+		RecoveredAmount.ResourceId = ResourceId;
+		RecoveredAmount.SetScaledQuantity(FMath::Max(0, FMath::RoundToInt(static_cast<float>(QuantityScaled) * RecoveryScalar)));
+		if (RecoveredAmount.HasQuantity())
 		{
-			if (!Entry.IsDefined())
-			{
-				continue;
-			}
-
-			const FName ResourceId = Entry.Resource->GetResolvedResourceId();
-			if (ResourceId.IsNone() || IsResourceBlocked(ResourceId))
-			{
-				continue;
-			}
-
-			const float NormalizedFraction = FMath::Max(0.0f, Entry.MassFraction) / TotalMassFraction;
-			const float QuantityUnits = EffectiveMassKg
-				* NormalizedFraction
-				* FMath::Max(0.0f, Entry.YieldScalar)
-				* CompositionRecoveryScalar
-				* RecoveryScalar;
-			const int32 QuantityScaled = AgentResource::UnitsToScaled(QuantityUnits);
-			if (QuantityScaled <= 0)
-			{
-				continue;
-			}
-
-			FResourceAmount RecoveredAmount;
-			RecoveredAmount.ResourceId = ResourceId;
-			RecoveredAmount.SetScaledQuantity(QuantityScaled);
 			OutRecoveredResources.Add(RecoveredAmount);
 		}
-
-		return OutRecoveredResources.Num() > 0;
 	}
 
-	if (!ResourceData->HasSimpleResourceDefinition())
-	{
-		return false;
-	}
-
-	const FName ResourceId = ResourceData->GetPrimaryResourceId();
-	if (ResourceId.IsNone() || IsResourceBlocked(ResourceId))
-	{
-		return false;
-	}
-
-	const int32 BaseQuantityScaled = ResourceData->ResolveSimpleResourceQuantityScaled(SourcePrimitive);
-	const int32 QuantityScaled = FMath::Max(0, FMath::RoundToInt(static_cast<float>(BaseQuantityScaled) * RecoveryScalar));
-	if (QuantityScaled <= 0)
-	{
-		return false;
-	}
-
-	FResourceAmount RecoveredAmount;
-	RecoveredAmount.ResourceId = ResourceId;
-	RecoveredAmount.SetScaledQuantity(QuantityScaled);
-	OutRecoveredResources.Add(RecoveredAmount);
-	return true;
+	return OutRecoveredResources.Num() > 0;
 }
 
 void UShredderVolumeComponent::CommitRecoveredResources(const TArray<FResourceAmount>& RecoveredResources)
