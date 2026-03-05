@@ -581,7 +581,7 @@ bool ADroneCompanion::StartLiftAssist(
 	bLiftAssistFollowEngaged = false;
 	LiftAssistStageTimeRemaining = 0.0f;
 	LiftAssistForceRampTime = 0.0f;
-	LiftAssistSmoothedDemandAlpha = 0.0f;
+	LiftAssistSmoothedVerticalAcceleration = 0.0f;
 	return true;
 }
 
@@ -594,7 +594,7 @@ void ADroneCompanion::StopLiftAssist()
 	bLiftAssistFollowEngaged = false;
 	LiftAssistStageTimeRemaining = 0.0f;
 	LiftAssistForceRampTime = 0.0f;
-	LiftAssistSmoothedDemandAlpha = 0.0f;
+	LiftAssistSmoothedVerticalAcceleration = 0.0f;
 	LiftAssistTargetComponent.Reset();
 	LiftAssistLocalGrabOffset = FVector::ZeroVector;
 }
@@ -1332,7 +1332,7 @@ void ADroneCompanion::UpdateLiftAssistFlight(float DeltaSeconds)
 	{
 		LiftAssistStageTimeRemaining = FMath::Max(0.0f, LiftAssistStageTimeRemaining - FMath::Max(0.0f, DeltaSeconds));
 		LiftAssistForceRampTime = 0.0f;
-		LiftAssistSmoothedDemandAlpha = 0.0f;
+		LiftAssistSmoothedVerticalAcceleration = 0.0f;
 		if (LiftAssistStageTimeRemaining <= KINDA_SMALL_NUMBER)
 		{
 			bLiftAssistRopeVisible = true;
@@ -1344,7 +1344,7 @@ void ADroneCompanion::UpdateLiftAssistFlight(float DeltaSeconds)
 	{
 		DesiredDroneLocation = AnchorLocation + FVector(0.0f, 0.0f, RopeRestLength);
 		LiftAssistForceRampTime = 0.0f;
-		LiftAssistSmoothedDemandAlpha = 0.0f;
+		LiftAssistSmoothedVerticalAcceleration = 0.0f;
 
 		LiftAssistStageTimeRemaining = FMath::Max(0.0f, LiftAssistStageTimeRemaining - FMath::Max(0.0f, DeltaSeconds));
 		if (LiftAssistStageTimeRemaining <= KINDA_SMALL_NUMBER)
@@ -1456,19 +1456,51 @@ void ADroneCompanion::UpdateLiftAssistFlight(float DeltaSeconds)
 
 		const float HoverForce = DroneBodyMassKg * LiftAssistGravityAcceleration;
 		const float HeightError = DesiredAnchorLocation.Z - AnchorLocation.Z;
-		const float ClearanceTarget = FMath::Max(1.0f, LiftAssistDesiredClearance);
-		const float HeightErrorWithDeadband = HeightError - FMath::Max(0.0f, LiftAssistClearanceDeadband);
-		const float RawLiftDemandAlpha = HeightErrorWithDeadband > 0.0f
-			? FMath::Clamp(
-				(HeightErrorWithDeadband / ClearanceTarget) * FMath::Max(0.0f, LiftAssistClearanceResponse),
-				0.0f,
-				1.0f)
-			: 0.0f;
+		const float ClearanceDeadband = FMath::Max(0.0f, LiftAssistClearanceDeadband);
+		float HeightErrorWithDeadband = 0.0f;
+		if (FMath::Abs(HeightError) > ClearanceDeadband)
+		{
+			HeightErrorWithDeadband = FMath::Sign(HeightError) * (FMath::Abs(HeightError) - ClearanceDeadband);
+		}
+
+		const float PositionResponse = FMath::Max(0.0f, LiftAssistClearanceResponse);
+		const float MaxControllerSpeed = FMath::Max(0.0f, LiftAssistPDMaxVerticalSpeed);
+		const float DesiredAnchorVerticalSpeed = FMath::Clamp(
+			HeightErrorWithDeadband * PositionResponse,
+			-MaxControllerSpeed,
+			MaxControllerSpeed);
+
+		const float AnchorVerticalSpeed = TargetComponent->GetPhysicsLinearVelocityAtPoint(AnchorLocation).Z;
+		const float VerticalSpeedError = DesiredAnchorVerticalSpeed - AnchorVerticalSpeed;
+		const float VelocityResponse = FMath::Max(0.0f, LiftAssistPDVelocityResponse);
+		const float MaxControllerAcceleration = FMath::Max(0.0f, LiftAssistPDMaxVerticalAcceleration);
+		float RawControllerVerticalAcceleration = VerticalSpeedError * VelocityResponse;
+		if (MaxControllerAcceleration > KINDA_SMALL_NUMBER)
+		{
+			RawControllerVerticalAcceleration = FMath::Clamp(
+				RawControllerVerticalAcceleration,
+				-MaxControllerAcceleration,
+				MaxControllerAcceleration);
+		}
+
 		const float LiftDemandResponse = FMath::Max(0.0f, LiftAssistDemandResponse);
-		LiftAssistSmoothedDemandAlpha = LiftDemandResponse > KINDA_SMALL_NUMBER
-			? FMath::FInterpTo(LiftAssistSmoothedDemandAlpha, RawLiftDemandAlpha, DeltaSeconds, LiftDemandResponse)
-			: RawLiftDemandAlpha;
-		const float LiftDemandAlpha = LiftAssistSmoothedDemandAlpha;
+		LiftAssistSmoothedVerticalAcceleration = LiftDemandResponse > KINDA_SMALL_NUMBER
+			? FMath::FInterpTo(
+				LiftAssistSmoothedVerticalAcceleration,
+				RawControllerVerticalAcceleration,
+				DeltaSeconds,
+				LiftDemandResponse)
+			: RawControllerVerticalAcceleration;
+		const float ControllerVerticalAcceleration = LiftAssistSmoothedVerticalAcceleration;
+		CurrentHoverBaseAcceleration = LiftAssistGravityAcceleration;
+		CurrentHoverCommandInput = DesiredAnchorVerticalSpeed;
+		CurrentHoverVerticalAcceleration = ControllerVerticalAcceleration;
+		CurrentHoverLiftDot = 1.0f;
+
+		const float PayloadMassKg = FMath::Max(0.01f, TargetComponent->GetMass());
+		const float DesiredPayloadSupportForce = PayloadMassKg * FMath::Max(
+			0.0f,
+			LiftAssistGravityAcceleration + ControllerVerticalAcceleration);
 		LiftAssistForceRampTime = FMath::Min(
 			LiftAssistForceRampTime + FMath::Max(0.0f, DeltaSeconds),
 			LiftRampDurationSeconds);
@@ -1477,12 +1509,14 @@ void ADroneCompanion::UpdateLiftAssistFlight(float DeltaSeconds)
 			: 1.0f;
 		const float SmoothedLiftRampAlpha = LiftRampAlpha * LiftRampAlpha * (3.0f - (2.0f * LiftRampAlpha));
 		const float LiftForceScale = FMath::Lerp(LiftRampStartScale, LiftRampEndScale, SmoothedLiftRampAlpha);
-		const FVector UpwardAssistForce = FVector::UpVector * (LiftAssistMaxPayloadForce * LiftDemandAlpha * LiftForceScale);
+		const float MaxAvailablePayloadForce = LiftAssistMaxPayloadForce * LiftForceScale;
+		const float ClampedPayloadTensionForce = FMath::Min(MaxAvailablePayloadForce, DesiredPayloadSupportForce);
+		const FVector PayloadSupportAssistForce = FVector::UpVector * ClampedPayloadTensionForce;
 		const float VerticalDampingAcceleration = -CurrentVelocity.Z * FMath::Max(0.0f, LiftAssistVerticalDamping);
 		const FVector VerticalDampingForce = FVector::UpVector * (DroneBodyMassKg * VerticalDampingAcceleration);
 		FVector DroneDriveForce = HorizontalDriveForce
 			+ FVector::UpVector * HoverForce
-			+ UpwardAssistForce
+			+ PayloadSupportAssistForce
 			+ VerticalDampingForce;
 
 		if (bLiftAssistRopeVisible)
@@ -1494,12 +1528,9 @@ void ADroneCompanion::UpdateLiftAssistFlight(float DeltaSeconds)
 				const FVector RopeDirection = RopeDistance > KINDA_SMALL_NUMBER
 					? (RopeVector / RopeDistance)
 					: FVector::UpVector;
-				const FVector AssistDriveForce = HorizontalDriveForce + UpwardAssistForce;
-				const float DesiredTensionForce = FMath::Max(0.0f, FVector::DotProduct(AssistDriveForce, RopeDirection));
-				const float ClampedTensionForce = FMath::Min(LiftAssistMaxPayloadForce, DesiredTensionForce);
-				if (ClampedTensionForce > KINDA_SMALL_NUMBER)
+				if (ClampedPayloadTensionForce > KINDA_SMALL_NUMBER)
 				{
-					const FVector RopePullForce = RopeDirection * ClampedTensionForce;
+					const FVector RopePullForce = RopeDirection * ClampedPayloadTensionForce;
 					TargetComponent->WakeAllRigidBodies();
 					TargetComponent->AddForceAtLocation(RopePullForce, AnchorLocation, NAME_None);
 					DroneDriveForce += -RopePullForce * FMath::Max(0.0f, LiftAssistReactionScale);

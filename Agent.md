@@ -161,15 +161,16 @@
     - fixed units, or
     - min/max range units
   - optional randomized-content flow on `UResourceComponent`:
-    - weighted subset selection (`PickWeight`)
+    - random subset selection (uniform across defined material entries)
     - configurable chosen-material-count min/max
     - optional total-units range normalization
     - generated contents resolve once per spawn and remain stable afterward
   - mass formula is now:
     - `FinalMassKg = TotalMaterialWeightKg + (BaseMassKg * ResourceBaseMassMultiplier)`
-    - then multiplied by local `MassMultiplier`
+    - `BaseMassKg` comes from the mesh/body physics mass settings on the actor component
   - global mass control lives in `AFactoryWorldConfig.ResourceBaseMassMultiplier`
-  - legacy simple/composition fields remain only as hidden backward-compat fallbacks and should not be used for new authoring
+  - `AResourceSalvageActor` is removed and redirected to `AResourceActor`
+  - legacy simple/composition resource authoring is removed from `UResourceComponent`
   - modular factory volumes now exist as Blueprint-placeable `UBoxComponent` derivatives:
     - `UFactoryVolumeComponentBase`
     - `UStorageVolumeComponent`

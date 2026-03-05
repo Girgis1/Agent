@@ -368,25 +368,34 @@ public:
 	float LiftAssistPreFollowDelay = 0.4f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
-	float LiftAssistClearanceResponse = 6.0f;
+	float LiftAssistClearanceResponse = 3.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
 	float LiftAssistClearanceDeadband = 20.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
-	float LiftAssistDemandResponse = 2.0f;
+	float LiftAssistDemandResponse = 1.2f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
 	float LiftAssistMaxRaiseAcceleration = 600.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
-	float LiftAssistVerticalDamping = 1.8f;
+	float LiftAssistPDMaxVerticalSpeed = 260.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
-	float LiftAssistRopeSlack = 18.0f;
+	float LiftAssistPDVelocityResponse = 2.4f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
-	float LiftAssistRopeOutwardDamping = 10.0f;
+	float LiftAssistPDMaxVerticalAcceleration = 650.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
+	float LiftAssistVerticalDamping = 3.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
+	float LiftAssistRopeSlack = 6.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
+	float LiftAssistRopeOutwardDamping = 14.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
 	float LiftAssistStrengthScale = 0.2f;
@@ -661,7 +670,7 @@ protected:
 	float CurrentRollCameraLean = 0.0f;
 	float LiftAssistStageTimeRemaining = 0.0f;
 	float LiftAssistForceRampTime = 0.0f;
-	float LiftAssistSmoothedDemandAlpha = 0.0f;
+	float LiftAssistSmoothedVerticalAcceleration = 0.0f;
 	FVector FreeFlyCurrentVelocity = FVector::ZeroVector;
 	FRotator CameraTransitionStartRotation = FRotator::ZeroRotator;
 	TWeakObjectPtr<UPrimitiveComponent> LiftAssistTargetComponent;

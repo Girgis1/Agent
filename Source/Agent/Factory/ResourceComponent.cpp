@@ -5,7 +5,6 @@
 #include "EngineUtils.h"
 #include "Engine/World.h"
 #include "Factory/FactoryWorldConfig.h"
-#include "Factory/ResourceCompositionAsset.h"
 #include "Factory/ResourceDefinitionAsset.h"
 #include "Factory/ResourceTypes.h"
 
@@ -32,16 +31,6 @@ float FResourceMaterialEntry::ResolveUnits(bool bAllowRangeRoll) const
 	return FMath::FRandRange(MinValue, MaxValue);
 }
 
-FName FResourceMaterialEntry::GetResourceId() const
-{
-	return Resource ? Resource->GetResolvedResourceId() : NAME_None;
-}
-
-float FResourceMaterialEntry::GetPickWeight() const
-{
-	return FMath::Max(0.0f, PickWeight);
-}
-
 float FResourceMaterialEntry::GetMaxPossibleUnits() const
 {
 	if (!bUseRange)
@@ -57,21 +46,9 @@ UResourceComponent::UResourceComponent()
 	PrimaryComponentTick.bCanEverTick = false;
 }
 
-void UResourceComponent::BeginPlay()
-{
-	Super::BeginPlay();
-
-	if (UPrimitiveComponent* RootPrimitive = Cast<UPrimitiveComponent>(GetOwner() ? GetOwner()->GetRootComponent() : nullptr))
-	{
-		InitializeRuntimeResourceState(RootPrimitive);
-	}
-}
-
 bool UResourceComponent::HasDefinedResources() const
 {
-	return HasMaterialEntries()
-		|| (Composition && Composition->HasDefinedResources())
-		|| HasSimpleResourceDefinition();
+	return HasMaterialEntries();
 }
 
 bool UResourceComponent::HasMaterialEntries() const
@@ -89,12 +66,7 @@ bool UResourceComponent::HasMaterialEntries() const
 
 float UResourceComponent::ResolveEffectiveMassKg(const UPrimitiveComponent* SourcePrimitive) const
 {
-	float EffectiveMassKg = bUsePhysicsMass && SourcePrimitive
-		? SourcePrimitive->GetMass()
-		: FMath::Max(0.0f, MassOverrideKg);
-
-	EffectiveMassKg *= FMath::Max(0.0f, MassMultiplier);
-	return FMath::Max(0.0f, EffectiveMassKg);
+	return SourcePrimitive ? FMath::Max(0.0f, SourcePrimitive->GetMass()) : 0.0f;
 }
 
 void UResourceComponent::InitializeRuntimeResourceState(UPrimitiveComponent* SourcePrimitive)
@@ -118,62 +90,7 @@ bool UResourceComponent::BuildResolvedResourceQuantitiesScaled(UPrimitiveCompone
 		OutQuantitiesScaled.FindOrAdd(Amount.ResourceId) += Amount.GetScaledQuantity();
 	}
 
-	if (OutQuantitiesScaled.Num() > 0)
-	{
-		return true;
-	}
-
-	// Legacy composition fallback.
-	if (Composition && Composition->HasDefinedResources())
-	{
-		const float EffectiveMassKg = ResolveEffectiveMassKg(SourcePrimitive);
-		const float TotalMassFraction = Composition->GetTotalMassFraction();
-		const float RecoveryScalar = ResolveRecoveryScalar();
-		if (EffectiveMassKg <= 0.0f || TotalMassFraction <= KINDA_SMALL_NUMBER || RecoveryScalar <= 0.0f)
-		{
-			return false;
-		}
-
-		for (const FResourceCompositionEntry& Entry : Composition->Entries)
-		{
-			if (!Entry.IsDefined())
-			{
-				continue;
-			}
-
-			const FName ResourceId = Entry.Resource->GetResolvedResourceId();
-			if (ResourceId.IsNone())
-			{
-				continue;
-			}
-
-			const float NormalizedFraction = FMath::Max(0.0f, Entry.MassFraction) / TotalMassFraction;
-			const float QuantityUnits = EffectiveMassKg
-				* NormalizedFraction
-				* FMath::Max(0.0f, Entry.YieldScalar)
-				* RecoveryScalar;
-			const int32 QuantityScaled = AgentResource::UnitsToScaled(QuantityUnits);
-			if (QuantityScaled > 0)
-			{
-				OutQuantitiesScaled.FindOrAdd(ResourceId) += QuantityScaled;
-			}
-		}
-
-		return OutQuantitiesScaled.Num() > 0;
-	}
-
-	// Legacy simple fallback.
-	if (HasSimpleResourceDefinition())
-	{
-		const int32 QuantityScaled = ResolveSimpleResourceQuantityScaled(SourcePrimitive);
-		if (QuantityScaled > 0)
-		{
-			OutQuantitiesScaled.FindOrAdd(GetPrimaryResourceId()) += QuantityScaled;
-			return true;
-		}
-	}
-
-	return false;
+	return OutQuantitiesScaled.Num() > 0;
 }
 
 float UResourceComponent::CalculateAndApplyFinalMassKg(UPrimitiveComponent* SourcePrimitive)
@@ -185,17 +102,9 @@ float UResourceComponent::CalculateAndApplyFinalMassKg(UPrimitiveComponent* Sour
 
 	ResolveGeneratedContents(SourcePrimitive);
 
-	// Ensure base mass comes from the current physical body, not a prior override.
-	if (bUsePhysicsMass)
-	{
-		SourcePrimitive->SetMassOverrideInKg(NAME_None, 0.0f, false);
-	}
-
 	const float BaseMassKg = ResolveBaseMassKgForFormula(SourcePrimitive);
 	const float GlobalMassMultiplier = ResolveGlobalMassMultiplier(GetWorld());
-	float FinalMassKg = CachedTotalMaterialWeightKg + (BaseMassKg * GlobalMassMultiplier);
-	FinalMassKg *= FMath::Max(0.0f, MassMultiplier);
-	FinalMassKg = FMath::Max(0.1f, FinalMassKg);
+	const float FinalMassKg = FMath::Max(0.1f, CachedTotalMaterialWeightKg + (BaseMassKg * GlobalMassMultiplier));
 
 	SourcePrimitive->SetMassOverrideInKg(NAME_None, FinalMassKg, true);
 	return FinalMassKg;
@@ -204,42 +113,10 @@ float UResourceComponent::CalculateAndApplyFinalMassKg(UPrimitiveComponent* Sour
 void UResourceComponent::ResetGeneratedContents()
 {
 	bGeneratedContentsResolved = false;
-	CachedTotalMaterialWeightKg = 0.0f;
 	GeneratedResourceAmounts.Reset();
-}
-
-bool UResourceComponent::HasSimpleResourceDefinition() const
-{
-	return PrimaryResource != nullptr
-		&& !GetPrimaryResourceId().IsNone()
-		&& PrimaryResourceUnitsPerKg > 0.0f;
-}
-
-FName UResourceComponent::GetPrimaryResourceId() const
-{
-	return PrimaryResource ? PrimaryResource->GetResolvedResourceId() : NAME_None;
-}
-
-int32 UResourceComponent::ResolveSimpleResourceQuantityScaled(const UPrimitiveComponent* SourcePrimitive) const
-{
-	if (!HasSimpleResourceDefinition())
-	{
-		return 0;
-	}
-
-	const float EffectiveMassKg = ResolveEffectiveMassKg(SourcePrimitive);
-	if (EffectiveMassKg <= 0.0f)
-	{
-		return 0;
-	}
-
-	const float QuantityUnits = EffectiveMassKg * FMath::Max(0.0f, PrimaryResourceUnitsPerKg) * ResolveRecoveryScalar();
-	return AgentResource::UnitsToScaled(QuantityUnits);
-}
-
-float UResourceComponent::ResolveRecoveryScalar() const
-{
-	return FMath::Max(0.0f, RecoveryMultiplier);
+	CachedTotalMaterialWeightKg = 0.0f;
+	bBaseMassResolved = false;
+	CachedBaseMassKg = 0.0f;
 }
 
 void UResourceComponent::ResolveGeneratedContents(UPrimitiveComponent* SourcePrimitive)
@@ -269,7 +146,7 @@ void UResourceComponent::ResolveGeneratedContents(UPrimitiveComponent* SourcePri
 
 void UResourceComponent::BuildFixedContents(UPrimitiveComponent* SourcePrimitive)
 {
-	const float ScaleFactor = ResolveScaleUnitsFactor(SourcePrimitive);
+	const float ScaleFactor = ResolveLinearScaleFactor(SourcePrimitive);
 	for (const FResourceMaterialEntry& Entry : Materials)
 	{
 		if (!Entry.IsUsable() || !Entry.Resource)
@@ -277,8 +154,7 @@ void UResourceComponent::BuildFixedContents(UPrimitiveComponent* SourcePrimitive
 			continue;
 		}
 
-		const float Units = Entry.ResolveUnits(true) * ScaleFactor;
-		AppendResolvedResource(Entry.Resource, Units);
+		AppendResolvedResource(Entry.Resource, Entry.ResolveUnits(true) * ScaleFactor);
 	}
 }
 
@@ -294,7 +170,7 @@ void UResourceComponent::BuildRandomizedContents(UPrimitiveComponent* SourcePrim
 	for (int32 Index = 0; Index < Materials.Num(); ++Index)
 	{
 		const FResourceMaterialEntry& Entry = Materials[Index];
-		if (!Entry.IsUsable() || !Entry.Resource || Entry.GetPickWeight() <= KINDA_SMALL_NUMBER)
+		if (!Entry.IsUsable() || !Entry.Resource)
 		{
 			continue;
 		}
@@ -317,12 +193,12 @@ void UResourceComponent::BuildRandomizedContents(UPrimitiveComponent* SourcePrim
 
 	for (int32 SelectionIndex = 0; SelectionIndex < SelectionCount; ++SelectionIndex)
 	{
-		const int32 PickedPosition = PickWeightedEntryIndex(RemainingIndices);
-		if (!RemainingIndices.IsValidIndex(PickedPosition))
+		if (RemainingIndices.Num() == 0)
 		{
 			break;
 		}
 
+		const int32 PickedPosition = FMath::RandRange(0, RemainingIndices.Num() - 1);
 		SelectedEntryIndices.Add(RemainingIndices[PickedPosition]);
 		RemainingIndices.RemoveAtSwap(PickedPosition);
 	}
@@ -375,7 +251,7 @@ void UResourceComponent::BuildRandomizedContents(UPrimitiveComponent* SourcePrim
 		}
 	}
 
-	const float ScaleFactor = ResolveScaleUnitsFactor(SourcePrimitive);
+	const float ScaleFactor = ResolveLinearScaleFactor(SourcePrimitive);
 	for (const FLocalResolvedEntry& Entry : ResolvedEntries)
 	{
 		if (!Entry.Resource)
@@ -423,38 +299,32 @@ void UResourceComponent::AppendResolvedResource(const UResourceDefinitionAsset* 
 	CachedTotalMaterialWeightKg += QuantityUnits * ResourceAsset->GetMassPerUnitKg();
 }
 
-float UResourceComponent::ResolveScaleUnitsFactor(const UPrimitiveComponent* SourcePrimitive) const
+float UResourceComponent::ResolveLinearScaleFactor(const UPrimitiveComponent* SourcePrimitive) const
 {
-	if (!SourcePrimitive || ScaleUnitsMode == EResourceScaleUnitsMode::None)
+	if (!SourcePrimitive)
 	{
 		return 1.0f;
 	}
 
 	const FVector Scale3D = SourcePrimitive->GetComponentScale().GetAbs();
-	const float UniformScale = FMath::Max(KINDA_SMALL_NUMBER, (Scale3D.X + Scale3D.Y + Scale3D.Z) / 3.0f);
-
-	switch (ScaleUnitsMode)
-	{
-	case EResourceScaleUnitsMode::Linear:
-		return UniformScale;
-
-	case EResourceScaleUnitsMode::Volume:
-		return FMath::Pow(UniformScale, 3.0f);
-
-	case EResourceScaleUnitsMode::None:
-	default:
-		return 1.0f;
-	}
+	const float UniformScale = (Scale3D.X + Scale3D.Y + Scale3D.Z) / 3.0f;
+	return FMath::Max(KINDA_SMALL_NUMBER, UniformScale);
 }
 
-float UResourceComponent::ResolveBaseMassKgForFormula(const UPrimitiveComponent* SourcePrimitive) const
+float UResourceComponent::ResolveBaseMassKgForFormula(UPrimitiveComponent* SourcePrimitive)
 {
-	if (bUsePhysicsMass && SourcePrimitive)
+	if (!SourcePrimitive)
 	{
-		return FMath::Max(0.0f, SourcePrimitive->GetMass());
+		return 0.0f;
 	}
 
-	return FMath::Max(0.0f, MassOverrideKg);
+	if (!bBaseMassResolved)
+	{
+		CachedBaseMassKg = FMath::Max(0.0f, SourcePrimitive->GetMass());
+		bBaseMassResolved = true;
+	}
+
+	return CachedBaseMassKg;
 }
 
 float UResourceComponent::ResolveGlobalMassMultiplier(const UWorld* World) const
@@ -476,44 +346,4 @@ float UResourceComponent::ResolveGlobalMassMultiplier(const UWorld* World) const
 	}
 
 	return 1.0f;
-}
-
-int32 UResourceComponent::PickWeightedEntryIndex(const TArray<int32>& CandidateIndices) const
-{
-	if (CandidateIndices.Num() == 0)
-	{
-		return INDEX_NONE;
-	}
-
-	float TotalWeight = 0.0f;
-	for (const int32 CandidateIndex : CandidateIndices)
-	{
-		if (Materials.IsValidIndex(CandidateIndex))
-		{
-			TotalWeight += Materials[CandidateIndex].GetPickWeight();
-		}
-	}
-
-	if (TotalWeight <= KINDA_SMALL_NUMBER)
-	{
-		return FMath::RandRange(0, CandidateIndices.Num() - 1);
-	}
-
-	float RemainingWeight = FMath::FRandRange(0.0f, TotalWeight);
-	for (int32 ArrayIndex = 0; ArrayIndex < CandidateIndices.Num(); ++ArrayIndex)
-	{
-		const int32 CandidateIndex = CandidateIndices[ArrayIndex];
-		if (!Materials.IsValidIndex(CandidateIndex))
-		{
-			continue;
-		}
-
-		RemainingWeight -= Materials[CandidateIndex].GetPickWeight();
-		if (RemainingWeight <= 0.0f)
-		{
-			return ArrayIndex;
-		}
-	}
-
-	return CandidateIndices.Num() - 1;
 }

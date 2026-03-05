@@ -141,7 +141,7 @@ The first post-conveyor resource slice is rebuilt and compiling again.
 - `UResourceDefinitionAsset` (`DA_Resource_*`) is back and now includes `MassPerUnitKg`.
 - `UResourceComponent` now supports direct multi-material authoring via `Materials` entries.
 - `AResourceActor` is the new reusable physics resource base actor.
-- `AResourceSalvageActor` remains as a deprecated compatibility wrapper.
+- `AResourceSalvageActor` is removed and redirected to `AResourceActor`.
 - `AFactoryPayloadActor` now carries a real resource id and quantity.
 - `AStorageBin` is now routed through `UStorageVolumeComponent`.
 - `UShredderVolumeComponent`, `UMachineInputVolumeComponent`, and `UMachineOutputVolumeComponent` are restored as modular Blueprint-placeable volumes.
@@ -149,12 +149,13 @@ The first post-conveyor resource slice is rebuilt and compiling again.
 - Editor-facing quantity fields use whole units, while runtime still stores `x1000` precision internally.
 - Generic buckets are blacklist-driven only: accept everything unless blocked.
 - `UResourceComponent` randomized-content workflow is implemented:
-  - weighted material picking
+  - random material picking from the defined entries
   - range-based per-material units
   - optional total-units normalization
   - generated contents locked per spawned actor instance
 - World-config mass formula is implemented:
   - `FinalMassKg = TotalMaterialWeightKg + (BaseMassKg * ResourceBaseMassMultiplier)`
+  - `BaseMassKg` comes from the mesh/body physics mass settings
   - global scalar in `AFactoryWorldConfig`
 
 ### Immediate Next Steps
