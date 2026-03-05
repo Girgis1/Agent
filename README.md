@@ -148,6 +148,8 @@ A plain Unreal-style dev fly camera with simple first-person fly controls.
   - `ResourceId`
   - display data
   - `MassPerUnitKg` for physical weight contribution
+  - batch creation/update script: `Tools/Factory/generate_resource_definitions.py`
+  - preset list: `Tools/Factory/resource_definitions_v1.json`
 - `UResourceComponent` now uses a materials array as the primary authoring path:
   - each entry references a `DA_Resource_*`
   - each entry can be fixed units or min/max range

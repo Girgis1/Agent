@@ -154,6 +154,9 @@
   - `AFactoryPayloadActor` now carries `FResourceAmount` (`ResourceId + quantity`) while still preserving the old `PayloadType` fallback
   - editor-facing quantities stay whole-number units, but runtime stores them at `x1000` precision so machines can safely accumulate fractional totals
   - `UResourceDefinitionAsset` (`DA_Resource_*`) now also defines `MassPerUnitKg`
+  - DA seeding/update helper now exists:
+    - `Tools/Factory/generate_resource_definitions.py`
+    - `Tools/Factory/resource_definitions_v1.json`
   - resource actor authoring is now centered on:
     - `AResourceActor` as the reusable physics resource base actor
     - `UResourceComponent.Materials` for one-or-many material outputs per actor
