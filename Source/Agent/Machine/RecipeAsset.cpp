@@ -97,4 +97,37 @@ void URecipeAsset::BuildInputGroupRequirementsScaled(TMap<FName, int32>& OutGrou
 
 	for (const FRecipeGroupInputEntry& Entry : InputGroups)
 	{
-	
+		if (!Entry.IsDefined())
+		{
+			continue;
+		}
+
+		OutGroupRequirementsScaled.FindOrAdd(Entry.GroupId) += Entry.GetRequiredEquivalentScaled();
+	}
+}
+
+void URecipeAsset::BuildOutputAmountsScaled(TMap<FName, int32>& OutOutputScaled) const
+{
+	OutOutputScaled.Reset();
+
+	for (const FRecipeResourceEntry& Entry : Outputs)
+	{
+		if (!Entry.IsDefined())
+		{
+			continue;
+		}
+
+		OutOutputScaled.FindOrAdd(Entry.GetResolvedResourceId()) += Entry.GetQuantityScaled();
+	}
+}
+
+float URecipeAsset::GetResolvedCraftTimeSeconds() const
+{
+	return FMath::Max(KINDA_SMALL_NUMBER, CraftTimeSeconds);
+}
+
+FPrimaryAssetId URecipeAsset::GetPrimaryAssetId() const
+{
+	const FName ResolvedRecipeId = RecipeId.IsNone() ? GetFName() : RecipeId;
+	return FPrimaryAssetId(TEXT("Recipe"), ResolvedRecipeId);
+}
