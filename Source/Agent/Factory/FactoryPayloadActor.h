@@ -8,6 +8,7 @@
 #include "FactoryPayloadActor.generated.h"
 
 class UStaticMeshComponent;
+class UResourceComponent;
 
 UCLASS()
 class AFactoryPayloadActor : public AActor
@@ -36,6 +37,9 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Payload")
 	TObjectPtr<UStaticMeshComponent> PayloadMesh = nullptr;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Payload")
+	TObjectPtr<UResourceComponent> ResourceData = nullptr;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Payload")
 	FName PayloadType = TEXT("Metal");

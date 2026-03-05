@@ -6,13 +6,18 @@
 #include "Factory/ConveyorCharacterMovementComponent.h"
 #include "Factory/ConveyorPlacementPreview.h"
 #include "Factory/ConveyorSurfaceVelocityComponent.h"
-#include "Factory/FactoryPayloadActor.h"
 #include "Factory/FactoryPlacementHelpers.h"
-#include "Factory/ResourceSpawnerMachine.h"
+#include "Machine/MachineActor.h"
 #include "Factory/StorageBin.h"
+#include "Interact/Actors/DragCubeDedicatedActor.h"
+#include "Interact/Components/AgentInteractorComponent.h"
+#include "Interact/Components/DualHandleGrabComponent.h"
+#include "Interact/Components/GrabVehiclePushComponent.h"
+#include "Vehicle/Components/VehicleInteractionComponent.h"
 #include "Camera/CameraComponent.h"
 #include "CollisionShape.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "DrawDebugHelpers.h"
 #include "EnhancedInputComponent.h"
@@ -31,6 +36,27 @@
 #include "InputCoreTypes.h"
 #include "UObject/ConstructorHelpers.h"
 #include "Agent.h"
+
+namespace
+{
+	ADragCubeDedicatedActor* ResolveActiveDrivenDragCube(const AAgentCharacter* Character)
+	{
+		if (!Character)
+		{
+			return nullptr;
+		}
+
+		const UAgentInteractorComponent* InteractorComponent = Character->FindComponentByClass<UAgentInteractorComponent>();
+		AActor* ActiveInteractable = InteractorComponent ? InteractorComponent->GetActiveInteractable() : nullptr;
+		ADragCubeDedicatedActor* ActiveDragCube = Cast<ADragCubeDedicatedActor>(ActiveInteractable);
+		if (!ActiveDragCube || !ActiveDragCube->IsDrivenBy(Character))
+		{
+			return nullptr;
+		}
+
+		return ActiveDragCube;
+	}
+}
 
 AAgentCharacter::AAgentCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer.SetDefaultSubobjectClass<UConveyorCharacterMovementComponent>(ACharacter::CharacterMovementComponentName))
@@ -80,6 +106,17 @@ AAgentCharacter::AAgentCharacter(const FObjectInitializer& ObjectInitializer)
 	ThirdPersonTransitionCamera->SetActive(false);
 
 	PickupPhysicsHandle = CreateDefaultSubobject<UPhysicsHandleComponent>(TEXT("PickupPhysicsHandle"));
+	InteractorComponent = CreateDefaultSubobject<UAgentInteractorComponent>(TEXT("InteractorComponent"));
+	VehicleInteractionComponent = CreateDefaultSubobject<UVehicleInteractionComponent>(TEXT("VehicleInteractionComponent"));
+	LeftGrabHandPivot = CreateDefaultSubobject<USceneComponent>(TEXT("LeftGrabHandPivot"));
+	RightGrabHandPivot = CreateDefaultSubobject<USceneComponent>(TEXT("RightGrabHandPivot"));
+	DualHandleGrabComponent = CreateDefaultSubobject<UDualHandleGrabComponent>(TEXT("DualHandleGrabComponent"));
+	GrabVehiclePushComponent = CreateDefaultSubobject<UGrabVehiclePushComponent>(TEXT("GrabVehiclePushComponent"));
+
+	LeftGrabHandPivot->SetupAttachment(GetCapsuleComponent());
+	LeftGrabHandPivot->SetRelativeLocation(FVector(42.0f, -22.0f, 64.0f));
+	RightGrabHandPivot->SetupAttachment(GetCapsuleComponent());
+	RightGrabHandPivot->SetRelativeLocation(FVector(42.0f, 22.0f, 64.0f));
 
 	ThirdPersonDroneProxyMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ThirdPersonDroneProxyMesh"));
 	ThirdPersonDroneProxyMesh->SetupAttachment(FollowCamera);
@@ -142,6 +179,17 @@ void AAgentCharacter::BeginPlay()
 		ThirdPersonDroneProxyMesh->SetRelativeScale3D(FVector(FMath::Max(0.01f, ThirdPersonDroneProxyScale)));
 	}
 
+	if (DualHandleGrabComponent)
+	{
+		DualHandleGrabComponent->SetHandPivots(LeftGrabHandPivot, RightGrabHandPivot);
+		DualHandleGrabComponent->DebugSphereRadius = FMath::Max(0.1f, PickupTraceRadius);
+	}
+
+	if (GrabVehiclePushComponent)
+	{
+		GrabVehiclePushComponent->DebugSphereRadius = FMath::Max(0.1f, PickupTraceRadius);
+	}
+
 	FVector InitialThirdPersonLocation = FVector::ZeroVector;
 	FRotator InitialThirdPersonRotation = FRotator::ZeroRotator;
 	if (GetThirdPersonDroneTarget(InitialThirdPersonLocation, InitialThirdPersonRotation))
@@ -173,6 +221,28 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 		{
 			UpdateConveyorPlacementPreview();
 		}
+	}
+
+	if (InteractorComponent && InteractorComponent->IsInteracting() && !CanUseCharacterInteraction())
+	{
+		InteractorComponent->EndCurrentInteraction();
+	}
+
+	if (DualHandleGrabComponent && DualHandleGrabComponent->IsGrabbing())
+	{
+		if (!CanUseCharacterInteraction())
+		{
+			DualHandleGrabComponent->EndGrab();
+		}
+		else
+		{
+			UpdateDualHandleGrabCameraAlignment(DeltaSeconds);
+		}
+	}
+
+	if (GrabVehiclePushComponent && GrabVehiclePushComponent->IsPushing() && !CanUseCharacterInteraction())
+	{
+		GrabVehiclePushComponent->EndPush();
 	}
 
 	if (DroneCompanion && DroneCompanion->IsLiftAssistActive() && !CanMaintainDroneLiftAssist())
@@ -244,7 +314,7 @@ void AAgentCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Top, IE_Released, this, &AAgentCharacter::OnViewModeButtonReleased);
 	PlayerInputComponent->BindKey(EKeys::One, IE_Pressed, this, &AAgentCharacter::OnConveyorPlacementModePressed);
 	PlayerInputComponent->BindKey(EKeys::Two, IE_Pressed, this, &AAgentCharacter::OnStorageBinPlacementModePressed);
-	PlayerInputComponent->BindKey(EKeys::Three, IE_Pressed, this, &AAgentCharacter::OnResourceSpawnerPlacementModePressed);
+	PlayerInputComponent->BindKey(EKeys::Three, IE_Pressed, this, &AAgentCharacter::OnMachinePlacementModePressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Left, IE_Pressed, this, &AAgentCharacter::OnFactoryPlacementTogglePressed);
 	PlayerInputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &AAgentCharacter::OnConveyorPlacePressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_RightTrigger, IE_Pressed, this, &AAgentCharacter::OnPickupOrPlacePressed);
@@ -276,8 +346,9 @@ void AAgentCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	PlayerInputComponent->BindKey(EKeys::RightBracket, IE_Pressed, this, &AAgentCharacter::OnPickupStrengthIncreasePressed);
 	PlayerInputComponent->BindKey(EKeys::R, IE_Pressed, this, &AAgentCharacter::OnDroneThrottleUpPressed);
 	PlayerInputComponent->BindKey(EKeys::R, IE_Released, this, &AAgentCharacter::OnDroneThrottleUpReleased);
-	PlayerInputComponent->BindKey(EKeys::F, IE_Pressed, this, &AAgentCharacter::OnDroneThrottleDownPressed);
-	PlayerInputComponent->BindKey(EKeys::F, IE_Released, this, &AAgentCharacter::OnDroneThrottleDownReleased);
+	PlayerInputComponent->BindKey(EKeys::F, IE_Pressed, this, &AAgentCharacter::OnInteractPressed);
+	PlayerInputComponent->BindKey(EKeys::F, IE_Released, this, &AAgentCharacter::OnInteractReleased);
+	PlayerInputComponent->BindKey(EKeys::T, IE_Pressed, this, &AAgentCharacter::OnVehicleInteractPressed);
 
 	PlayerInputComponent->BindAxisKey(EKeys::Gamepad_LeftX, this, &AAgentCharacter::OnDroneGamepadYawAxis);
 	PlayerInputComponent->BindAxisKey(EKeys::Gamepad_LeftY, this, &AAgentCharacter::OnDroneGamepadThrottleAxis);
@@ -306,6 +377,21 @@ void AAgentCharacter::StopMove(const FInputActionValue& Value)
 
 void AAgentCharacter::Look(const FInputActionValue& Value)
 {
+	if (ResolveActiveDrivenDragCube(this))
+	{
+		return;
+	}
+
+	if (GrabVehiclePushComponent && GrabVehiclePushComponent->IsPushing())
+	{
+		return;
+	}
+
+	if (DualHandleGrabComponent && DualHandleGrabComponent->IsGrabbing())
+	{
+		return;
+	}
+
 	if (bPickupRotationModeActive && bControllerPickupHeld && HeldPickupComponent.IsValid())
 	{
 		return;
@@ -843,6 +929,38 @@ bool AAgentCharacter::CanUseConveyorPlacementMode() const
 		&& (CurrentViewMode == EAgentViewMode::ThirdPerson || CurrentViewMode == EAgentViewMode::FirstPerson);
 }
 
+bool AAgentCharacter::CanUseCharacterInteraction() const
+{
+	return !bMapModeActive
+		&& !bMiniMapModeActive
+		&& !bConveyorPlacementModeActive
+		&& (CurrentViewMode == EAgentViewMode::ThirdPerson || CurrentViewMode == EAgentViewMode::FirstPerson);
+}
+
+void AAgentCharacter::UpdateDualHandleGrabCameraAlignment(float DeltaSeconds)
+{
+	if (!DualHandleGrabComponent || !DualHandleGrabComponent->IsGrabbing())
+	{
+		return;
+	}
+
+	AController* CharacterController = GetController();
+	if (!CharacterController)
+	{
+		return;
+	}
+
+	const FRotator CurrentControlRotation = CharacterController->GetControlRotation();
+	const FRotator TargetControlRotation(CurrentControlRotation.Pitch, GetActorRotation().Yaw, CurrentControlRotation.Roll);
+	const FRotator NewControlRotation = FMath::RInterpTo(
+		CurrentControlRotation,
+		TargetControlRotation,
+		DeltaSeconds,
+		FMath::Max(0.0f, DualHandleCameraYawAlignSpeed));
+
+	CharacterController->SetControlRotation(NewControlRotation);
+}
+
 void AAgentCharacter::ToggleConveyorPlacementMode()
 {
 	if (bConveyorPlacementModeActive)
@@ -1048,8 +1166,8 @@ void AAgentCharacter::TryPlaceConveyor()
 	case EAgentFactoryPlacementType::StorageBin:
 		BuildableClass = StorageBinClass.Get() ? StorageBinClass.Get() : AStorageBin::StaticClass();
 		break;
-	case EAgentFactoryPlacementType::ResourceSpawner:
-		BuildableClass = ResourceSpawnerMachineClass.Get() ? ResourceSpawnerMachineClass.Get() : AResourceSpawnerMachine::StaticClass();
+	case EAgentFactoryPlacementType::Machine:
+		BuildableClass = MachineClass.Get() ? MachineClass.Get() : AMachineActor::StaticClass();
 		break;
 	case EAgentFactoryPlacementType::Conveyor:
 	default:
@@ -1067,13 +1185,11 @@ void AAgentCharacter::TryPlaceConveyor()
 	SpawnParameters.Instigator = this;
 	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
-	AActor* SpawnedActor = World->SpawnActor<AActor>(
+	World->SpawnActor<AActor>(
 		BuildableClass,
 		SpawnLocation,
 		SpawnRotation,
 		SpawnParameters);
-
-	ApplyFactoryBuildableDefaults(SpawnedActor);
 
 	UpdateConveyorPlacementPreview();
 }
@@ -1260,7 +1376,7 @@ bool AAgentCharacter::TryGetFactoryBuildableFaceSnapLocation(const FHitResult& A
 
 	const bool bIsSupportedBuildable = HitActor->IsA<AConveyorBeltStraight>()
 		|| HitActor->IsA<AStorageBin>()
-		|| HitActor->IsA<AResourceSpawnerMachine>();
+		|| HitActor->IsA<AMachineActor>();
 	if (!bIsSupportedBuildable)
 	{
 		return false;
@@ -1310,22 +1426,6 @@ void AAgentCharacter::SelectFactoryPlacementType(EAgentFactoryPlacementType NewT
 	UpdateConveyorPlacementPreview();
 }
 
-void AAgentCharacter::ApplyFactoryBuildableDefaults(AActor* SpawnedActor) const
-{
-	if (!SpawnedActor)
-	{
-		return;
-	}
-
-	if (AResourceSpawnerMachine* ResourceSpawner = Cast<AResourceSpawnerMachine>(SpawnedActor))
-	{
-		if (DefaultFactoryPayloadClass.Get())
-		{
-			ResourceSpawner->PayloadActorClass = DefaultFactoryPayloadClass;
-		}
-	}
-}
-
 bool AAgentCharacter::CanUsePickupInteraction() const
 {
 	if (bMiniMapModeActive || bConveyorPlacementModeActive)
@@ -1367,20 +1467,29 @@ bool AAgentCharacter::CanMaintainHeldPickup() const
 
 bool AAgentCharacter::CanUseDroneLiftAssist() const
 {
-	return DroneCompanion
-		&& CurrentViewMode == EAgentViewMode::FirstPerson
-		&& !bMapModeActive
-		&& !bMiniMapModeActive
-		&& !bConveyorPlacementModeActive;
+	if (!DroneCompanion || bMiniMapModeActive || bConveyorPlacementModeActive)
+	{
+		return false;
+	}
+
+	if (bMapModeActive)
+	{
+		return true;
+	}
+
+	return CurrentViewMode == EAgentViewMode::FirstPerson;
 }
 
 bool AAgentCharacter::CanMaintainDroneLiftAssist() const
 {
-	return DroneCompanion
-		&& CurrentViewMode == EAgentViewMode::FirstPerson
-		&& !bMapModeActive
-		&& !bMiniMapModeActive
-		&& !bConveyorPlacementModeActive;
+	if (!DroneCompanion || bMiniMapModeActive || bConveyorPlacementModeActive)
+	{
+		return false;
+	}
+
+	return bMapModeActive
+		|| CurrentViewMode == EAgentViewMode::FirstPerson
+		|| CurrentViewMode == EAgentViewMode::DronePilot;
 }
 
 bool AAgentCharacter::CanUseMapModeDronePickup() const
@@ -2583,6 +2692,12 @@ void AAgentCharacter::DoMove(float Right, float Forward)
 		return;
 	}
 
+	if (ADragCubeDedicatedActor* ActiveDragCube = ResolveActiveDrivenDragCube(this))
+	{
+		ActiveDragCube->SetDriveInput(Forward, Right);
+		return;
+	}
+
 	if (GetController() == nullptr)
 	{
 		return;
@@ -2786,6 +2901,33 @@ void AAgentCharacter::OnDroneGamepadThrottleAxis(float Value)
 
 void AAgentCharacter::OnDroneGamepadRollAxis(float Value)
 {
+	if (GrabVehiclePushComponent && GrabVehiclePushComponent->IsPushing())
+	{
+		GrabVehiclePushComponent->SetSteerInput(Value);
+		DroneGamepadRollInput = 0.0f;
+		return;
+	}
+
+	if (DualHandleGrabComponent && DualHandleGrabComponent->IsGrabbing())
+	{
+		DualHandleGrabComponent->SetSteeringHorizontal(Value);
+		if (GetController())
+		{
+			const float DeltaSeconds = GetWorld() ? GetWorld()->GetDeltaSeconds() : (1.0f / 60.0f);
+			AddControllerYawInput(Value * DualHandleSteerYawRate * DeltaSeconds);
+		}
+
+		DroneGamepadRollInput = 0.0f;
+		return;
+	}
+
+	if (ADragCubeDedicatedActor* ActiveDragCube = ResolveActiveDrivenDragCube(this))
+	{
+		ActiveDragCube->SetSteerInput(Value);
+		DroneGamepadRollInput = 0.0f;
+		return;
+	}
+
 	if (bPickupRotationModeActive && bControllerPickupHeld && HeldPickupComponent.IsValid())
 	{
 		const float DeltaSeconds = GetWorld() ? GetWorld()->GetDeltaSeconds() : (1.0f / 60.0f);
@@ -2809,6 +2951,30 @@ void AAgentCharacter::OnDroneGamepadRollAxis(float Value)
 
 void AAgentCharacter::OnDroneGamepadPitchAxis(float Value)
 {
+	if (GrabVehiclePushComponent && GrabVehiclePushComponent->IsPushing())
+	{
+		const float LiftInput = bInvertDualHandleVerticalSteerInput ? -Value : Value;
+		GrabVehiclePushComponent->SetLiftInput(LiftInput);
+		DroneGamepadPitchInput = 0.0f;
+		return;
+	}
+
+	if (DualHandleGrabComponent && DualHandleGrabComponent->IsGrabbing())
+	{
+		const float SteeringValue = bInvertDualHandleVerticalSteerInput ? -Value : Value;
+		DualHandleGrabComponent->SetSteeringVertical(SteeringValue);
+		DroneGamepadPitchInput = 0.0f;
+		return;
+	}
+
+	if (ADragCubeDedicatedActor* ActiveDragCube = ResolveActiveDrivenDragCube(this))
+	{
+		const float LiftInput = bInvertDualHandleVerticalSteerInput ? -Value : Value;
+		ActiveDragCube->SetLiftInput(LiftInput);
+		DroneGamepadPitchInput = 0.0f;
+		return;
+	}
+
 	if (bPickupRotationModeActive && bControllerPickupHeld && HeldPickupComponent.IsValid())
 	{
 		const float DeltaSeconds = GetWorld() ? GetWorld()->GetDeltaSeconds() : (1.0f / 60.0f);
@@ -2994,13 +3160,24 @@ void AAgentCharacter::OnStorageBinPlacementModePressed()
 	SelectFactoryPlacementType(EAgentFactoryPlacementType::StorageBin, true);
 }
 
-void AAgentCharacter::OnResourceSpawnerPlacementModePressed()
+void AAgentCharacter::OnMachinePlacementModePressed()
 {
-	SelectFactoryPlacementType(EAgentFactoryPlacementType::ResourceSpawner, true);
+	SelectFactoryPlacementType(EAgentFactoryPlacementType::Machine, true);
 }
 
 void AAgentCharacter::OnFactoryPlacementTogglePressed()
 {
+	if (CanUseCharacterInteraction())
+	{
+		UAgentInteractorComponent* ActiveInteractorComponent = InteractorComponent
+			? InteractorComponent
+			: FindComponentByClass<UAgentInteractorComponent>();
+		if (ActiveInteractorComponent && ActiveInteractorComponent->ToggleInteraction())
+		{
+			return;
+		}
+	}
+
 	ToggleConveyorPlacementMode();
 }
 
@@ -3031,6 +3208,15 @@ void AAgentCharacter::OnConveyorRotateRightPressed()
 
 void AAgentCharacter::OnPickupOrDroneYawRightPressed()
 {
+	if (bMapModeActive && !bConveyorPlacementModeActive)
+	{
+		if (!TryToggleDroneLiftAssist() && IsDroneInputModeActive())
+		{
+			OnDroneYawRightPressed();
+		}
+		return;
+	}
+
 	if (CanUsePickupInteraction() && TryBeginPickup())
 	{
 		bKeyboardPickupHeld = true;
@@ -3060,6 +3246,13 @@ void AAgentCharacter::OnPickupOrPlacePressed()
 	if (bConveyorPlacementModeActive)
 	{
 		OnConveyorPlacePressed();
+		return;
+	}
+
+	if (bMapModeActive)
+	{
+		// In map mode, gamepad hook toggle stays on right shoulder.
+		// Right trigger is reserved for vertical axis input.
 		return;
 	}
 
@@ -3100,4 +3293,44 @@ void AAgentCharacter::OnPickupStrengthDecreasePressed()
 void AAgentCharacter::OnPickupStrengthIncreasePressed()
 {
 	AdjustPickupStrength(0.1f);
+}
+
+void AAgentCharacter::OnInteractPressed()
+{
+	if (CanUseCharacterInteraction())
+	{
+		bInteractKeyDrivingDroneThrottle = false;
+		UAgentInteractorComponent* ActiveInteractorComponent = InteractorComponent
+			? InteractorComponent
+			: FindComponentByClass<UAgentInteractorComponent>();
+		if (ActiveInteractorComponent)
+		{
+			ActiveInteractorComponent->ToggleInteraction();
+		}
+		return;
+	}
+
+	bInteractKeyDrivingDroneThrottle = true;
+	OnDroneThrottleDownPressed();
+}
+
+void AAgentCharacter::OnInteractReleased()
+{
+	if (!bInteractKeyDrivingDroneThrottle)
+	{
+		return;
+	}
+
+	bInteractKeyDrivingDroneThrottle = false;
+	OnDroneThrottleDownReleased();
+}
+
+void AAgentCharacter::OnVehicleInteractPressed()
+{
+	if (!VehicleInteractionComponent || !CanUseCharacterInteraction())
+	{
+		return;
+	}
+
+	VehicleInteractionComponent->TryEnterNearestVehicle();
 }

@@ -10,9 +10,12 @@
 class ADroneCompanion;
 class AConveyorBeltStraight;
 class AConveyorPlacementPreview;
-class AFactoryPayloadActor;
-class AResourceSpawnerMachine;
+class AMachineActor;
 class AStorageBin;
+class UAgentInteractorComponent;
+class UDualHandleGrabComponent;
+class UGrabVehiclePushComponent;
+class UVehicleInteractionComponent;
 class UCameraComponent;
 class UInputAction;
 class UPhysicsHandleComponent;
@@ -52,7 +55,7 @@ enum class EAgentFactoryPlacementType : uint8
 {
 	Conveyor,
 	StorageBin,
-	ResourceSpawner
+	Machine
 };
 
 /**
@@ -86,6 +89,30 @@ class AAgentCharacter : public ACharacter
 	/** Reusable physics handle used for picking up and dragging objects */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UPhysicsHandleComponent* PickupPhysicsHandle;
+
+	/** Overlap-volume interaction resolver for modular world interactions */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	UAgentInteractorComponent* InteractorComponent;
+
+	/** Dedicated vehicle entry interaction for possession-based vehicles */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	UVehicleInteractionComponent* VehicleInteractionComponent;
+
+	/** Left hand pivot for dual-handle cart grabs (place manually in Blueprint) */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	USceneComponent* LeftGrabHandPivot;
+
+	/** Right hand pivot for dual-handle cart grabs (place manually in Blueprint) */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	USceneComponent* RightGrabHandPivot;
+
+	/** Simple dual-handle grab system used by carts */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	UDualHandleGrabComponent* DualHandleGrabComponent;
+
+	/** Single-handle push system for grab vehicles */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	UGrabVehiclePushComponent* GrabVehiclePushComponent;
 
 protected:
 	UPROPERTY(EditAnywhere, Category="Input")
@@ -151,6 +178,8 @@ protected:
 	void SetThirdPersonProxyVisible(bool bVisible);
 	void AttachThirdPersonProxyToComponent(USceneComponent* AttachmentParent);
 	bool CanUseConveyorPlacementMode() const;
+	bool CanUseCharacterInteraction() const;
+	void UpdateDualHandleGrabCameraAlignment(float DeltaSeconds);
 	void ToggleConveyorPlacementMode();
 	void EnterConveyorPlacementMode();
 	void ExitConveyorPlacementMode();
@@ -162,7 +191,6 @@ protected:
 	bool EvaluateConveyorPlacement(FVector& OutLocation, FRotator& OutRotation, bool& bOutIsValid) const;
 	bool TryGetFactoryBuildableFaceSnapLocation(const FHitResult& AimHit, FVector& OutLocation) const;
 	void SelectFactoryPlacementType(EAgentFactoryPlacementType NewType, bool bToggleIfAlreadySelected);
-	void ApplyFactoryBuildableDefaults(AActor* SpawnedActor) const;
 	bool CanUsePickupInteraction() const;
 	bool CanMaintainHeldPickup() const;
 	bool CanUseDroneLiftAssist() const;
@@ -227,7 +255,7 @@ protected:
 	void OnControllerMapButtonReleased();
 	void OnConveyorPlacementModePressed();
 	void OnStorageBinPlacementModePressed();
-	void OnResourceSpawnerPlacementModePressed();
+	void OnMachinePlacementModePressed();
 	void OnFactoryPlacementTogglePressed();
 	void OnConveyorPlacePressed();
 	void OnConveyorCancelPressed();
@@ -239,6 +267,9 @@ protected:
 	void OnPickupOrPlaceReleased();
 	void OnPickupStrengthDecreasePressed();
 	void OnPickupStrengthIncreasePressed();
+	void OnInteractPressed();
+	void OnInteractReleased();
+	void OnVehicleInteractPressed();
 
 public:
 	UFUNCTION(BlueprintCallable, Category="Input")
@@ -326,7 +357,7 @@ public:
 	TSubclassOf<AStorageBin> StorageBinClass;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
-	TSubclassOf<AResourceSpawnerMachine> ResourceSpawnerMachineClass;
+	TSubclassOf<AMachineActor> MachineClass;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
 	float ConveyorPlacementTraceDistance = 2000.0f;
@@ -339,9 +370,6 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
 	FVector ConveyorPlacementClearanceExtents = FVector(48.0f, 48.0f, 12.0f);
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
-	TSubclassOf<AFactoryPayloadActor> DefaultFactoryPayloadClass;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
 	float PickupTraceDistance = 650.0f;
@@ -441,6 +469,15 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
 	bool bShowPickupDebug = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|DualHandle")
+	float DualHandleSteerYawRate = 115.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|DualHandle")
+	float DualHandleCameraYawAlignSpeed = 5.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|DualHandle")
+	bool bInvertDualHandleVerticalSteerInput = true;
 
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
@@ -553,6 +590,7 @@ protected:
 	bool bDroneYawRightHeld = false;
 	bool bDroneThrottleUpHeld = false;
 	bool bDroneThrottleDownHeld = false;
+	bool bInteractKeyDrivingDroneThrottle = false;
 
 public:
 	FORCEINLINE USpringArmComponent* GetCameraBoom() const { return CameraBoom; }

@@ -23,7 +23,7 @@ ADroneCompanion::ADroneCompanion()
 	DroneBody->SetCollisionObjectType(ECC_PhysicsBody);
 	DroneBody->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 	DroneBody->SetCollisionResponseToAllChannels(ECR_Block);
-	DroneBody->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+	DroneBody->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
 	DroneBody->SetSimulatePhysics(true);
 	DroneBody->SetEnableGravity(true);
 	DroneBody->SetNotifyRigidBodyCollision(true);
@@ -105,46 +105,56 @@ void ADroneCompanion::Tick(float DeltaSeconds)
 
 	if (!bCrashed)
 	{
-		if (CompanionMode == EDroneCompanionMode::PilotControlled)
+		if (bLiftAssistActive
+			&& (CompanionMode == EDroneCompanionMode::BuddyFollow
+				|| CompanionMode == EDroneCompanionMode::MapMode
+				|| CompanionMode == EDroneCompanionMode::PilotControlled))
 		{
-			if (bUseRollPilotControls)
-			{
-				UpdateRollFlight(DeltaSeconds);
-			}
-			else if (bUseSpectatorPilotControls)
-			{
-				UpdateSpectatorFlight(DeltaSeconds);
-			}
-			else if (bUseFreeFlyPilotControls)
-			{
-				UpdateFreeFlyFlight(DeltaSeconds);
-			}
-			else if (bUseSimplePilotControls)
-			{
-				UpdateSimpleFlight(DeltaSeconds);
-			}
-			else
-			{
-				UpdateComplexFlight(DeltaSeconds);
-			}
-		}
-		else if (CompanionMode == EDroneCompanionMode::MapMode)
-		{
-			UpdateMapFlight(DeltaSeconds);
-		}
-		else if (CompanionMode == EDroneCompanionMode::MiniMapFollow)
-		{
-			UpdateMiniMapFlight(DeltaSeconds);
+			UpdateLiftAssistFlight(DeltaSeconds);
 		}
 		else
 		{
-			if (bLiftAssistActive && CompanionMode == EDroneCompanionMode::BuddyFollow)
+			if (CompanionMode == EDroneCompanionMode::PilotControlled)
 			{
-				UpdateLiftAssistFlight(DeltaSeconds);
+				if (bUseRollPilotControls)
+				{
+					UpdateRollFlight(DeltaSeconds);
+				}
+				else if (bUseSpectatorPilotControls)
+				{
+					UpdateSpectatorFlight(DeltaSeconds);
+				}
+				else if (bUseFreeFlyPilotControls)
+				{
+					UpdateFreeFlyFlight(DeltaSeconds);
+				}
+				else if (bUseSimplePilotControls)
+				{
+					UpdateSimpleFlight(DeltaSeconds);
+				}
+				else
+				{
+					UpdateComplexFlight(DeltaSeconds);
+				}
+			}
+			else if (CompanionMode == EDroneCompanionMode::MapMode)
+			{
+				UpdateMapFlight(DeltaSeconds);
+			}
+			else if (CompanionMode == EDroneCompanionMode::MiniMapFollow)
+			{
+				UpdateMiniMapFlight(DeltaSeconds);
 			}
 			else
 			{
-				UpdateAutonomousFlight(DeltaSeconds);
+				if (bLiftAssistActive && CompanionMode == EDroneCompanionMode::BuddyFollow)
+				{
+					UpdateLiftAssistFlight(DeltaSeconds);
+				}
+				else
+				{
+					UpdateAutonomousFlight(DeltaSeconds);
+				}
 			}
 		}
 	}
@@ -204,7 +214,11 @@ void ADroneCompanion::SetCompanionMode(EDroneCompanionMode NewMode)
 {
 	const EDroneCompanionMode PreviousMode = CompanionMode;
 	CompanionMode = NewMode;
-	if (CompanionMode != EDroneCompanionMode::BuddyFollow)
+	const bool bModeSupportsLiftAssist =
+		CompanionMode == EDroneCompanionMode::BuddyFollow
+		|| CompanionMode == EDroneCompanionMode::MapMode
+		|| CompanionMode == EDroneCompanionMode::PilotControlled;
+	if (!bModeSupportsLiftAssist)
 	{
 		StopLiftAssist();
 	}
@@ -564,10 +578,14 @@ bool ADroneCompanion::StartLiftAssist(
 	UPrimitiveComponent* InTargetComponent,
 	const FVector& InGrabLocation)
 {
+	const bool bSupportsLiftAssistMode =
+		CompanionMode == EDroneCompanionMode::BuddyFollow
+		|| CompanionMode == EDroneCompanionMode::MapMode;
+
 	if (!DroneBody
 		|| !InTargetComponent
 		|| !InTargetComponent->IsSimulatingPhysics()
-		|| CompanionMode != EDroneCompanionMode::BuddyFollow)
+		|| !bSupportsLiftAssistMode)
 	{
 		return false;
 	}
