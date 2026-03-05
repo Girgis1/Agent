@@ -26,7 +26,7 @@ protected:
 	virtual bool TryProcessOverlappingActor(AActor* OverlappingActor) override;
 	virtual int32 GetCurrentStoredQuantityScaled() const override;
 
-	bool TryBuildRecoveredResources(const UResourceComponent* ResourceData, const UPrimitiveComponent* SourcePrimitive, TArray<FResourceAmount>& OutRecoveredResources) const;
+	bool TryBuildRecoveredResources(UResourceComponent* ResourceData, UPrimitiveComponent* SourcePrimitive, TArray<FResourceAmount>& OutRecoveredResources) const;
 	void CommitRecoveredResources(const TArray<FResourceAmount>& RecoveredResources);
 	void FlushBufferedResourcesToOutput();
 	UMachineOutputVolumeComponent* FindOutputVolume() const;

@@ -144,17 +144,37 @@ A plain Unreal-style dev fly camera with simple first-person fly controls.
 - Factory volumes are now blacklist-driven:
   - storage, shredder, and machine input accept anything unless its resource id is listed in `BlockedResourceIds`
   - there is no whitelist step for normal buckets
+- `UResourceDefinitionAsset` (`DA_Resource_*`) is the resource source of truth:
+  - `ResourceId`
+  - display data
+  - `MassPerUnitKg` for physical weight contribution
+- `UResourceComponent` now uses a materials array as the primary authoring path:
+  - each entry references a `DA_Resource_*`
+  - each entry can be fixed units or min/max range
+  - optional weighted random material selection for things like mixed trash bags
+  - optional total-units range normalization
+  - unit scaling by actor scale (`None`, `Linear`, `Volume`)
+  - generated material contents are resolved once per spawn and then stay stable
+- Resource mass now uses:
+  - `FinalMassKg = TotalMaterialWeightKg + (BaseMassKg * ResourceBaseMassMultiplier)`
+  - then multiplied by local `MassMultiplier`
+  - `ResourceBaseMassMultiplier` lives on `AFactoryWorldConfig`
+- New base salvage actor is `AResourceActor` (the old `AResourceSalvageActor` remains as a deprecated compatibility wrapper).
 
-### Simple Salvage Authoring
+### Resource Actor Authoring
 
-- For single-resource items, create a Blueprint from `AResourceSalvageActor`.
-- Put your mesh family in `MeshVariants` and enable `bRandomizeMeshOnSpawn` if you want one BP to choose from several static meshes.
-- On the built-in `ResourceData` component:
-  - set `PrimaryResource` to a `DA_Resource_*` asset such as `DA_Resource_IronOre`
-  - set `PrimaryResourceUnitsPerKg` to control yield from mass
-  - keep `bUsePhysicsMass` enabled for scale / weight driven output
-  - use `MassMultiplier` and `RecoveryMultiplier` as the main tuning knobs
-- For multi-output items, assign a `UResourceCompositionAsset` to `ResourceData.Composition` instead of using `PrimaryResource`.
+- Create a Blueprint from `AResourceActor`.
+- Assign one or many meshes:
+  - set `ItemMesh` directly for a single mesh, or
+  - use `MeshVariants` + `bRandomizeMeshOnSpawn` for mesh families
+- Optional random scale:
+  - enable `bRandomizeScaleOnSpawn`
+  - tune `ItemMinScale` and `ItemMaxScale`
+- On `ResourceData`:
+  - add entries to `Materials`
+  - per entry, choose fixed `Units` or a `MinUnits`/`MaxUnits` range
+  - optionally enable `bUseRandomizedContents` to pick a weighted subset each spawn
+  - tune `RecoveryMultiplier` for output yield scaling
 - If a physical object has no `UResourceComponent`, the shredder can still destroy it, but it yields no resources.
 
 ## Key Source Files
@@ -166,7 +186,7 @@ Character movement, camera mode switching, drone spawning, and player input rout
 Drone actor, physics, pilot logic, camera transitions, map mode, crash handling, and autonomous companion behavior.
 
 - `Source/Agent/Factory/*`
-Factory transport, modular machine volumes, resource definitions, salvage actors, and the first processor / shredder shells.
+Factory transport, modular machine volumes, resource definitions, resource actors, and the first processor / shredder shells.
 
 - `Agent.md`
 Internal running notes used to preserve design intent and implementation rules between sessions.

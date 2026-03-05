@@ -581,6 +581,7 @@ bool ADroneCompanion::StartLiftAssist(
 	bLiftAssistFollowEngaged = false;
 	LiftAssistStageTimeRemaining = 0.0f;
 	LiftAssistForceRampTime = 0.0f;
+	LiftAssistSmoothedDemandAlpha = 0.0f;
 	return true;
 }
 
@@ -593,6 +594,7 @@ void ADroneCompanion::StopLiftAssist()
 	bLiftAssistFollowEngaged = false;
 	LiftAssistStageTimeRemaining = 0.0f;
 	LiftAssistForceRampTime = 0.0f;
+	LiftAssistSmoothedDemandAlpha = 0.0f;
 	LiftAssistTargetComponent.Reset();
 	LiftAssistLocalGrabOffset = FVector::ZeroVector;
 }
@@ -1307,6 +1309,7 @@ void ADroneCompanion::UpdateLiftAssistFlight(float DeltaSeconds)
 	};
 
 	const float RopeRestLength = FMath::Max(1.0f, LiftAssistRopeLength);
+	const float RopeTautLength = RopeRestLength + FMath::Max(0.0f, LiftAssistRopeSlack);
 	FVector DesiredDroneLocation = AnchorLocation + FVector(0.0f, 0.0f, FMath::Max(0.0f, LiftAssistApproachHeight));
 	FVector DroneLocation = DroneBody->GetComponentLocation();
 	FVector DroneVelocity = DroneBody->GetPhysicsLinearVelocity();
@@ -1329,6 +1332,7 @@ void ADroneCompanion::UpdateLiftAssistFlight(float DeltaSeconds)
 	{
 		LiftAssistStageTimeRemaining = FMath::Max(0.0f, LiftAssistStageTimeRemaining - FMath::Max(0.0f, DeltaSeconds));
 		LiftAssistForceRampTime = 0.0f;
+		LiftAssistSmoothedDemandAlpha = 0.0f;
 		if (LiftAssistStageTimeRemaining <= KINDA_SMALL_NUMBER)
 		{
 			bLiftAssistRopeVisible = true;
@@ -1340,6 +1344,7 @@ void ADroneCompanion::UpdateLiftAssistFlight(float DeltaSeconds)
 	{
 		DesiredDroneLocation = AnchorLocation + FVector(0.0f, 0.0f, RopeRestLength);
 		LiftAssistForceRampTime = 0.0f;
+		LiftAssistSmoothedDemandAlpha = 0.0f;
 
 		LiftAssistStageTimeRemaining = FMath::Max(0.0f, LiftAssistStageTimeRemaining - FMath::Max(0.0f, DeltaSeconds));
 		if (LiftAssistStageTimeRemaining <= KINDA_SMALL_NUMBER)
@@ -1392,14 +1397,14 @@ void ADroneCompanion::UpdateLiftAssistFlight(float DeltaSeconds)
 	{
 		const FVector RopeVector = DroneLocation - AnchorLocation;
 		const float RopeDistance = RopeVector.Size();
-		if (RopeDistance >= RopeRestLength - 1.0f)
+		if (RopeDistance >= RopeTautLength - 1.0f)
 		{
 			const FVector RopeDirection = RopeDistance > KINDA_SMALL_NUMBER
 				? (RopeVector / RopeDistance)
 				: FVector::UpVector;
-			if (RopeDistance > RopeRestLength + KINDA_SMALL_NUMBER)
+			if (RopeDistance > RopeTautLength + KINDA_SMALL_NUMBER)
 			{
-				const FVector ClampedDroneLocation = AnchorLocation + (RopeDirection * RopeRestLength);
+				const FVector ClampedDroneLocation = AnchorLocation + (RopeDirection * RopeTautLength);
 				DroneBody->SetWorldLocation(ClampedDroneLocation, false, nullptr, ETeleportType::TeleportPhysics);
 				DroneLocation = ClampedDroneLocation;
 			}
@@ -1409,7 +1414,11 @@ void ADroneCompanion::UpdateLiftAssistFlight(float DeltaSeconds)
 			const float OutwardSpeed = FVector::DotProduct(RelativeVelocity, RopeDirection);
 			if (OutwardSpeed > 0.0f)
 			{
-				DroneVelocity -= RopeDirection * OutwardSpeed;
+				const float OutwardDampingAlpha = FMath::Clamp(
+					DeltaSeconds * FMath::Max(0.0f, LiftAssistRopeOutwardDamping),
+					0.0f,
+					1.0f);
+				DroneVelocity -= RopeDirection * (OutwardSpeed * OutwardDampingAlpha);
 				DroneBody->SetPhysicsLinearVelocity(DroneVelocity, false, NAME_None);
 			}
 		}
@@ -1447,12 +1456,19 @@ void ADroneCompanion::UpdateLiftAssistFlight(float DeltaSeconds)
 
 		const float HoverForce = DroneBodyMassKg * LiftAssistGravityAcceleration;
 		const float HeightError = DesiredAnchorLocation.Z - AnchorLocation.Z;
-		const float LiftDemandAlpha = HeightError > 0.0f
+		const float ClearanceTarget = FMath::Max(1.0f, LiftAssistDesiredClearance);
+		const float HeightErrorWithDeadband = HeightError - FMath::Max(0.0f, LiftAssistClearanceDeadband);
+		const float RawLiftDemandAlpha = HeightErrorWithDeadband > 0.0f
 			? FMath::Clamp(
-				(HeightError / FMath::Max(1.0f, LiftAssistDesiredClearance)) * FMath::Max(0.0f, LiftAssistClearanceResponse),
+				(HeightErrorWithDeadband / ClearanceTarget) * FMath::Max(0.0f, LiftAssistClearanceResponse),
 				0.0f,
 				1.0f)
 			: 0.0f;
+		const float LiftDemandResponse = FMath::Max(0.0f, LiftAssistDemandResponse);
+		LiftAssistSmoothedDemandAlpha = LiftDemandResponse > KINDA_SMALL_NUMBER
+			? FMath::FInterpTo(LiftAssistSmoothedDemandAlpha, RawLiftDemandAlpha, DeltaSeconds, LiftDemandResponse)
+			: RawLiftDemandAlpha;
+		const float LiftDemandAlpha = LiftAssistSmoothedDemandAlpha;
 		LiftAssistForceRampTime = FMath::Min(
 			LiftAssistForceRampTime + FMath::Max(0.0f, DeltaSeconds),
 			LiftRampDurationSeconds);
@@ -1462,15 +1478,18 @@ void ADroneCompanion::UpdateLiftAssistFlight(float DeltaSeconds)
 		const float SmoothedLiftRampAlpha = LiftRampAlpha * LiftRampAlpha * (3.0f - (2.0f * LiftRampAlpha));
 		const float LiftForceScale = FMath::Lerp(LiftRampStartScale, LiftRampEndScale, SmoothedLiftRampAlpha);
 		const FVector UpwardAssistForce = FVector::UpVector * (LiftAssistMaxPayloadForce * LiftDemandAlpha * LiftForceScale);
+		const float VerticalDampingAcceleration = -CurrentVelocity.Z * FMath::Max(0.0f, LiftAssistVerticalDamping);
+		const FVector VerticalDampingForce = FVector::UpVector * (DroneBodyMassKg * VerticalDampingAcceleration);
 		FVector DroneDriveForce = HorizontalDriveForce
 			+ FVector::UpVector * HoverForce
-			+ UpwardAssistForce;
+			+ UpwardAssistForce
+			+ VerticalDampingForce;
 
 		if (bLiftAssistRopeVisible)
 		{
 			const FVector RopeVector = DroneLocation - AnchorLocation;
 			const float RopeDistance = RopeVector.Size();
-			if (RopeDistance >= RopeRestLength - 1.0f)
+			if (RopeDistance >= RopeTautLength - 1.0f)
 			{
 				const FVector RopeDirection = RopeDistance > KINDA_SMALL_NUMBER
 					? (RopeVector / RopeDistance)
@@ -1521,7 +1540,7 @@ void ADroneCompanion::UpdateLiftAssistFlight(float DeltaSeconds)
 		{
 			const float RopeDistance = FVector::Dist(DroneLocation, AnchorLocation);
 			const FColor RopeColor = bLiftAssistLiftEngaged
-				? (RopeDistance > RopeRestLength ? FColor::Orange : FColor::Yellow)
+				? (RopeDistance > RopeTautLength ? FColor::Orange : FColor::Yellow)
 				: FColor::Cyan;
 			DrawDebugLine(World, DroneLocation, AnchorLocation, RopeColor, false, 0.0f, 0, 2.0f);
 		}

@@ -17,6 +17,9 @@ public:
 	UFUNCTION(BlueprintPure, Category="Factory|Resource")
 	FName GetResolvedResourceId() const;
 
+	UFUNCTION(BlueprintPure, Category="Factory|Resource")
+	float GetMassPerUnitKg() const { return FMath::Max(0.0f, MassPerUnitKg); }
+
 	virtual FPrimaryAssetId GetPrimaryAssetId() const override;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Factory|Resource")
@@ -24,6 +27,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Factory|Resource")
 	FText DisplayName;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Factory|Resource", meta=(ClampMin="0.0", UIMin="0.0"))
+	float MassPerUnitKg = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Factory|Resource")
 	FLinearColor DebugColor = FLinearColor::White;
