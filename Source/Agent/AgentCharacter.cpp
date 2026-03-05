@@ -2692,6 +2692,11 @@ void AAgentCharacter::DoMove(float Right, float Forward)
 		return;
 	}
 
+	if (VehicleInteractionComponent && VehicleInteractionComponent->ApplyVehicleMoveInput(Forward, Right))
+	{
+		return;
+	}
+
 	if (ADragCubeDedicatedActor* ActiveDragCube = ResolveActiveDrivenDragCube(this))
 	{
 		ActiveDragCube->SetDriveInput(Forward, Right);
@@ -2732,6 +2737,12 @@ void AAgentCharacter::DoLook(float Yaw, float Pitch)
 
 void AAgentCharacter::DoJumpStart()
 {
+	if (VehicleInteractionComponent && VehicleInteractionComponent->IsControllingVehicle())
+	{
+		VehicleInteractionComponent->SetVehicleHandbrakeInput(true);
+		return;
+	}
+
 	if (IsDronePilotMode() && DroneCompanion && !bMapModeActive && !bMiniMapModeActive)
 	{
 		if (!IsRollDronePilotMode())
@@ -2757,6 +2768,12 @@ void AAgentCharacter::DoJumpStart()
 
 void AAgentCharacter::DoJumpEnd()
 {
+	if (VehicleInteractionComponent && VehicleInteractionComponent->IsControllingVehicle())
+	{
+		VehicleInteractionComponent->SetVehicleHandbrakeInput(false);
+		return;
+	}
+
 	if (bRollModeJumpHeld)
 	{
 		const float HeldDuration = RollModeJumpHeldDuration;
@@ -3327,7 +3344,18 @@ void AAgentCharacter::OnInteractReleased()
 
 void AAgentCharacter::OnVehicleInteractPressed()
 {
-	if (!VehicleInteractionComponent || !CanUseCharacterInteraction())
+	if (!VehicleInteractionComponent)
+	{
+		return;
+	}
+
+	if (VehicleInteractionComponent->IsControllingVehicle())
+	{
+		VehicleInteractionComponent->TryExitCurrentVehicle();
+		return;
+	}
+
+	if (!CanUseCharacterInteraction())
 	{
 		return;
 	}

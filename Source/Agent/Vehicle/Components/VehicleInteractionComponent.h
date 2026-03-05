@@ -14,8 +14,28 @@ class AGENT_API UVehicleInteractionComponent : public UActorComponent
 public:
 	UVehicleInteractionComponent();
 
+	virtual void TickComponent(
+		float DeltaTime,
+		ELevelTick TickType,
+		FActorComponentTickFunction* ThisTickFunction) override;
+
 	UFUNCTION(BlueprintCallable, Category="Vehicle|Interaction")
 	bool TryEnterNearestVehicle();
+
+	UFUNCTION(BlueprintCallable, Category="Vehicle|Interaction")
+	bool TryExitCurrentVehicle();
+
+	UFUNCTION(BlueprintPure, Category="Vehicle|Interaction")
+	bool IsControllingVehicle() const;
+
+	UFUNCTION(BlueprintPure, Category="Vehicle|Interaction")
+	AActor* GetControlledVehicle() const;
+
+	UFUNCTION(BlueprintCallable, Category="Vehicle|Interaction")
+	bool ApplyVehicleMoveInput(float ForwardInput, float RightInput);
+
+	UFUNCTION(BlueprintCallable, Category="Vehicle|Interaction")
+	void SetVehicleHandbrakeInput(bool bHandbrakeActive);
 
 	UFUNCTION(BlueprintCallable, Category="Vehicle|Interaction")
 	AActor* FindBestVehicleActor(int32& OutCandidateCount) const;
@@ -42,9 +62,13 @@ public:
 	TEnumAsByte<ECollisionChannel> TraceChannel = ECC_Visibility;
 
 private:
+	bool IsVehicleStillControlled() const;
 	bool CanUseVehicleActor(AActor* VehicleActor) const;
 	AActor* ResolveVehicleActor(AActor* CandidateActor) const;
 
 	UPROPERTY(Transient)
 	int32 LastCandidateCount = 0;
+
+	UPROPERTY(Transient)
+	TWeakObjectPtr<AActor> ActiveVehicleActor;
 };
