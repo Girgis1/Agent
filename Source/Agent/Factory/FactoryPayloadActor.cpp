@@ -2,6 +2,7 @@
 
 #include "Factory/FactoryPayloadActor.h"
 #include "Components/StaticMeshComponent.h"
+#include "Factory/ResourceComponent.h"
 #include "Factory/ResourceTypes.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -18,7 +19,6 @@ AFactoryPayloadActor::AFactoryPayloadActor()
 	PayloadMesh->SetCollisionResponseToAllChannels(ECR_Block);
 	PayloadMesh->SetCanEverAffectNavigation(false);
 	PayloadMesh->SetGenerateOverlapEvents(true);
-	PayloadMesh->SetMassOverrideInKg(NAME_None, 12.0f, true);
 	PayloadMesh->SetLinearDamping(0.35f);
 	PayloadMesh->SetAngularDamping(2.0f);
 	PayloadMesh->SetRelativeScale3D(FVector(0.35f));
@@ -28,6 +28,8 @@ AFactoryPayloadActor::AFactoryPayloadActor()
 	{
 		PayloadMesh->SetStaticMesh(PayloadMeshAsset.Object);
 	}
+
+	ResourceData = CreateDefaultSubobject<UResourceComponent>(TEXT("ResourceData"));
 }
 
 void AFactoryPayloadActor::BeginPlay()

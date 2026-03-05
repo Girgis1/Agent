@@ -100,7 +100,7 @@
     - `1` / controller `X`: enter or exit conveyor placement mode
       - keyboard `1` also selects `Conveyor`
       - keyboard `2` selects `Storage Bin`
-      - keyboard `3` selects `Resource Spawner`
+      - keyboard `3` selects `Smelter`
       - controller `X` toggles placement using whichever factory buildable type is currently selected
     - `Left Mouse` / controller `RT`: place the currently selected factory buildable
     - `Right Mouse` / controller `B`: cancel placement mode
@@ -138,13 +138,13 @@
   - first non-conveyor factory actors are now added:
     - `AFactoryPayloadActor`: a dedicated simulating payload actor with a `PayloadType` name
     - `AStorageBin`: a counting storage endpoint that destroys incoming payload actors and stores counts by `PayloadType`
-    - `AResourceSpawnerMachine`: a feeder machine that periodically spawns `AFactoryPayloadActor` instances and ejects them from its output face
+    - `ASmelterMachine`: recipe-driven machine shell that consumes input resources and emits crafted output resources
   - storage follows the intended performance rule: payloads are destroyed on intake and converted into counts instead of being hidden / physically stored inside bins
   - `AFactoryPayloadActor` payload meshes must keep overlap events enabled so conveyors can detect and drive them through the belt overlap volume; if payloads sit still on a belt, check overlap generation before tuning speed
   - buildable face snapping now works for:
     - conveyors
     - storage bins
-    - resource spawner machines
+    - smelter machines
     - all current factory buildables are treated as `1x1` face-snappable tiles for placement
   - reserved collision channels:
     - `BuildPlacement` = `ECC_GameTraceChannel1`
@@ -172,7 +172,16 @@
     - `FinalMassKg = TotalMaterialWeightKg + (BaseMassKg * ResourceBaseMassMultiplier)`
     - `BaseMassKg` comes from the mesh/body physics mass settings on the actor component
   - global mass control lives in `AFactoryWorldConfig.ResourceBaseMassMultiplier`
+  - global machine craft speed control now lives in `AFactoryWorldConfig.FactoryCraftSpeedMultiplier`
+  - recipe authoring is now supported through `UFactoryRecipeAsset` (`DA_Recipe_*`):
+    - `Inputs` / `Outputs` in whole units
+    - `CraftTimeSeconds`
+    - `AllowedMachineTag`
   - `AResourceSalvageActor` is removed and redirected to `AResourceActor`
+  - outdated factory prototypes are removed from source:
+    - `AResourceSpawnerMachine`
+    - `AProcessorMachine`
+    - `UResourceCompositionAsset`
   - legacy simple/composition resource authoring is removed from `UResourceComponent`
   - modular factory volumes now exist as Blueprint-placeable `UBoxComponent` derivatives:
     - `UFactoryVolumeComponentBase`
@@ -182,7 +191,12 @@
     - `UMachineOutputVolumeComponent`
   - `AStorageBin` now uses `UStorageVolumeComponent` as its intake instead of a custom overlap handler
   - `AShredderMachine` is the first machine shell that pairs `UShredderVolumeComponent` with `UMachineOutputVolumeComponent`
-  - `AProcessorMachine` is the first generic processor shell with a simple timed `Input -> Output` conversion loop
+  - `ASmelterMachine` now uses `UFactoryRecipeProcessorComponent` for timed recipe crafting:
+    - atomic input consumption
+    - deterministic craft progress with pause/resume support
+    - machine-local output buffering before ejection
+    - runtime states: `Idle`, `WaitingForInput`, `Crafting`, `WaitingForOutputSpace`, `Paused`, `Error`
+    - machine tag defaults to `Smelter` for recipe compatibility
   - bucket-style factory volumes are blacklist-only now:
     - they accept any resource unless its id is listed in `BlockedResourceIds`
     - do not add allow-list filtering back into storage or generic input buckets
@@ -289,6 +303,9 @@
     - controller left stick moves, right stick looks, `RT` up, `LT` down
 - Pickup and interaction:
   - hold keyboard `E` or controller `RT` to grab and hold physics objects at the pinch point
+  - keyboard `F` now drives modular overlap-volume interactions in `First Person` and `Third Person` (for example `AShoppingCartActor` in `Source/Agent/Interact/Actors`)
+  - the character-side modular interaction target selection is now query-based (`UAgentInteractorComponent`): it performs a short camera-forward sweep and a nearby-radius overlap fallback each `F` press, then scores candidates by distance + facing, with optional line-of-sight checks
+  - when not in those character views, `F` continues to route to drone descend input
   - pickup works in `Third Person`, `First Person`, `Drone Pilot`, and `Map Mode`
   - map-mode pickup only starts while the drone camera is aimed nearly straight down
   - once held, a drone-held object stays drone-held across drone state changes until released
@@ -297,7 +314,7 @@
   - keyboard `[` / `]` adjust player pickup strength by `-0.1` / `+0.1` and resync drone pickup strength to `10%` of the player value
   - keyboard `E` remains context-sensitive: if no pickup starts, it falls back to the drone's right-side input
 - Factory placement:
-  - keyboard `1` / `2` / `3` toggle conveyor / storage bin / resource spawner placement
+  - keyboard `1` / `2` / `3` toggle conveyor / storage bin / smelter placement
   - controller `X` toggles the current factory placement mode
   - left mouse / controller `RT` place the current buildable
   - right mouse / controller `B` cancel placement

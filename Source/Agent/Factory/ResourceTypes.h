@@ -63,23 +63,3 @@ struct FResourceAmount
 		return AgentResource::ScaledToUnits(QuantityScaled);
 	}
 };
-
-USTRUCT(BlueprintType)
-struct FResourceCompositionEntry
-{
-	GENERATED_BODY()
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Resource")
-	TObjectPtr<UResourceDefinitionAsset> Resource = nullptr;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Resource", meta=(ClampMin="0.0", UIMin="0.0"))
-	float MassFraction = 1.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Resource", meta=(ClampMin="0.0", UIMin="0.0"))
-	float YieldScalar = 1.0f;
-
-	bool IsDefined() const
-	{
-		return Resource != nullptr && MassFraction > KINDA_SMALL_NUMBER && YieldScalar > 0.0f;
-	}
-};

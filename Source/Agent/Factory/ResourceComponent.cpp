@@ -7,6 +7,47 @@
 #include "Factory/FactoryWorldConfig.h"
 #include "Factory/ResourceDefinitionAsset.h"
 #include "Factory/ResourceTypes.h"
+#include "UObject/UObjectIterator.h"
+
+namespace
+{
+UPrimitiveComponent* ResolveOwnerSourcePrimitive(AActor* OwnerActor)
+{
+	if (!OwnerActor)
+	{
+		return nullptr;
+	}
+
+	if (UPrimitiveComponent* RootPrimitive = Cast<UPrimitiveComponent>(OwnerActor->GetRootComponent()))
+	{
+		return RootPrimitive;
+	}
+
+	TArray<UPrimitiveComponent*> PrimitiveComponents;
+	OwnerActor->GetComponents<UPrimitiveComponent>(PrimitiveComponents);
+
+	UPrimitiveComponent* FirstUsablePrimitive = nullptr;
+	for (UPrimitiveComponent* PrimitiveComponent : PrimitiveComponents)
+	{
+		if (!PrimitiveComponent || PrimitiveComponent->GetCollisionEnabled() == ECollisionEnabled::NoCollision)
+		{
+			continue;
+		}
+
+		if (!FirstUsablePrimitive)
+		{
+			FirstUsablePrimitive = PrimitiveComponent;
+		}
+
+		if (PrimitiveComponent->IsSimulatingPhysics())
+		{
+			return PrimitiveComponent;
+		}
+	}
+
+	return FirstUsablePrimitive;
+}
+}
 
 bool FResourceMaterialEntry::IsUsable() const
 {
@@ -44,6 +85,16 @@ float FResourceMaterialEntry::GetMaxPossibleUnits() const
 UResourceComponent::UResourceComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
+}
+
+void UResourceComponent::BeginPlay()
+{
+	Super::BeginPlay();
+
+	if (UPrimitiveComponent* RootPrimitive = Cast<UPrimitiveComponent>(GetOwner() ? GetOwner()->GetRootComponent() : nullptr))
+	{
+		InitializeRuntimeResourceState(RootPrimitive);
+	}
 }
 
 bool UResourceComponent::HasDefinedResources() const
@@ -91,6 +142,65 @@ bool UResourceComponent::BuildResolvedResourceQuantitiesScaled(UPrimitiveCompone
 	}
 
 	return OutQuantitiesScaled.Num() > 0;
+}
+
+bool UResourceComponent::ConfigureSingleResourceById(FName ResourceId, int32 QuantityScaled)
+{
+	const FName SafeResourceId = ResourceId;
+	const int32 SafeQuantityScaled = FMath::Max(0, QuantityScaled);
+	if (SafeResourceId.IsNone() || SafeQuantityScaled <= 0)
+	{
+		return false;
+	}
+
+	UResourceDefinitionAsset* MatchedResource = nullptr;
+	for (TObjectIterator<UResourceDefinitionAsset> It; It; ++It)
+	{
+		UResourceDefinitionAsset* Candidate = *It;
+		if (Candidate && Candidate->GetResolvedResourceId() == SafeResourceId)
+		{
+			MatchedResource = Candidate;
+			break;
+		}
+	}
+
+	if (!MatchedResource)
+	{
+		return false;
+	}
+
+	const float QuantityUnits = AgentResource::ScaledToUnits(SafeQuantityScaled);
+	if (QuantityUnits <= KINDA_SMALL_NUMBER)
+	{
+		return false;
+	}
+
+	FResourceMaterialEntry ResourceEntry;
+	ResourceEntry.Resource = MatchedResource;
+	ResourceEntry.bUseRange = false;
+	ResourceEntry.Units = QuantityUnits;
+	ResourceEntry.MinUnits = QuantityUnits;
+	ResourceEntry.MaxUnits = QuantityUnits;
+
+	Materials.Reset();
+	Materials.Add(ResourceEntry);
+	bUseRandomizedContents = false;
+	ChosenMaterialCountMin = 1;
+	ChosenMaterialCountMax = 1;
+	TotalUnitsMin = 0.0f;
+	TotalUnitsMax = 0.0f;
+
+	ResetGeneratedContents();
+	if (UPrimitiveComponent* SourcePrimitive = ResolveOwnerSourcePrimitive(GetOwner()))
+	{
+		InitializeRuntimeResourceState(SourcePrimitive);
+	}
+	else
+	{
+		ResolveGeneratedContents(nullptr);
+	}
+
+	return true;
 }
 
 float UResourceComponent::CalculateAndApplyFinalMassKg(UPrimitiveComponent* SourcePrimitive)

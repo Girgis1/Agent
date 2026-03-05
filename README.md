@@ -70,6 +70,8 @@ A plain Unreal-style dev fly camera with simple first-person fly controls.
 
 - Character locomotion still uses the project's Enhanced Input mappings (default template bindings are `WASD`, mouse look, and `Space`, plus left stick / right stick / `Gamepad A`).
 - `E`: hold a physics object from the exact pinch point if one is in range; otherwise it falls back to the drone's context-sensitive right-side input.
+- `F`: toggle nearby modular world interactions (for example shopping carts) in `First Person` and `Third Person`.
+- Interaction targeting is query-based (camera view sweep + nearby radius fallback), so it does not rely on overlap begin/end timing.
 - `[` / `]`: decrease / increase player pickup strength by `0.1` (drone pickup strength stays synced to `10%` of the player value).
 - `Gamepad RT`: hold to pick up a physics object, or place a buildable while factory placement mode is active.
 - `Gamepad LT` while holding an object: enable loose pickup rotation; right stick guides the held object relative to the active camera.
@@ -123,7 +125,7 @@ A plain Unreal-style dev fly camera with simple first-person fly controls.
 
 - `1`: toggle conveyor placement.
 - `2`: toggle storage bin placement.
-- `3`: toggle resource spawner placement.
+- `3`: toggle smelter placement.
 - `Gamepad X`: toggle the current factory placement mode.
 - `Left Mouse Button` / `Gamepad RT`: place the current buildable.
 - `Right Mouse Button` / `Gamepad B`: cancel placement.
@@ -137,10 +139,14 @@ A plain Unreal-style dev fly camera with simple first-person fly controls.
 - `AShredderMachine` is the new placeable shredder shell:
   - `UShredderVolumeComponent` intake destroys physical objects and converts them into resource output
   - `UMachineOutputVolumeComponent` emits those resources back into the world as physical chunks
-- `AProcessorMachine` is the new placeable processing shell:
+- `ASmelterMachine` is the new placeable smelter shell:
   - `UMachineInputVolumeComponent` buffers incoming chunks
   - `UMachineOutputVolumeComponent` ejects processed chunks
-  - the current built-in loop is a simple timed `Input -> Output` conversion, not the final recipe system
+  - `UFactoryRecipeProcessorComponent` now drives recipe crafting with a real timed state machine
+  - smelter runtime states: `Idle`, `WaitingForInput`, `Crafting`, `WaitingForOutputSpace`, `Paused`, `Error`
+  - inputs are consumed atomically at craft start
+  - outputs are buffered on the machine until output volume capacity is available
+  - machine tag defaults to `Smelter` for recipe gating
 - Factory volumes are now blacklist-driven:
   - storage, shredder, and machine input accept anything unless its resource id is listed in `BlockedResourceIds`
   - there is no whitelist step for normal buckets
@@ -150,6 +156,11 @@ A plain Unreal-style dev fly camera with simple first-person fly controls.
   - `MassPerUnitKg` for physical weight contribution
   - batch creation/update script: `Tools/Factory/generate_resource_definitions.py`
   - preset list: `Tools/Factory/resource_definitions_v1.json`
+- Recipes are authored in `UFactoryRecipeAsset` (`DA_Recipe_*`):
+  - `Inputs` and `Outputs` as whole editor units
+  - `CraftTimeSeconds`
+  - `AllowedMachineTag`
+  - runtime conversion uses the shared `x1000` scaled integer system
 - `UResourceComponent` now uses a materials array as the primary authoring path:
   - each entry references a `DA_Resource_*`
   - each entry can be fixed units or min/max range
@@ -188,7 +199,10 @@ Character movement, camera mode switching, drone spawning, and player input rout
 Drone actor, physics, pilot logic, camera transitions, map mode, crash handling, and autonomous companion behavior.
 
 - `Source/Agent/Factory/*`
-Factory transport, modular machine volumes, resource definitions, resource actors, and the first processor / shredder shells.
+Factory transport, modular machine volumes, resource definitions, resource actors, and the first smelter / shredder shells.
+
+- `Source/Agent/Interact/*`
+Modular interaction framework (interact volumes, interactor component, physics drag follow, upright stabilization, tilt safety, and shopping cart actor).
 
 - `Agent.md`
 Internal running notes used to preserve design intent and implementation rules between sessions.

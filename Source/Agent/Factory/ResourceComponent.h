@@ -60,30 +60,35 @@ public:
 	bool BuildResolvedResourceQuantitiesScaled(UPrimitiveComponent* SourcePrimitive, TMap<FName, int32>& OutQuantitiesScaled);
 
 	UFUNCTION(BlueprintCallable, Category="Factory|Materials")
+	bool ConfigureSingleResourceById(FName ResourceId, int32 QuantityScaled);
+
+	UFUNCTION(BlueprintCallable, Category="Factory|Materials")
 	float CalculateAndApplyFinalMassKg(UPrimitiveComponent* SourcePrimitive);
 
 	UFUNCTION(BlueprintCallable, Category="Factory|Materials")
 	void ResetGeneratedContents();
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Factory|Materials")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Materials")
 	TArray<FResourceMaterialEntry> Materials;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Factory|Materials|Random")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Materials|Random")
 	bool bUseRandomizedContents = false;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Factory|Materials|Random", meta=(ClampMin="1", UIMin="1", EditCondition="bUseRandomizedContents"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Materials|Random", meta=(ClampMin="1", UIMin="1", EditCondition="bUseRandomizedContents"))
 	int32 ChosenMaterialCountMin = 1;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Factory|Materials|Random", meta=(ClampMin="1", UIMin="1", EditCondition="bUseRandomizedContents"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Materials|Random", meta=(ClampMin="1", UIMin="1", EditCondition="bUseRandomizedContents"))
 	int32 ChosenMaterialCountMax = 3;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Factory|Materials|Random", meta=(ClampMin="0.0", UIMin="0.0", EditCondition="bUseRandomizedContents"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Materials|Random", meta=(ClampMin="0.0", UIMin="0.0", EditCondition="bUseRandomizedContents"))
 	float TotalUnitsMin = 0.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Factory|Materials|Random", meta=(ClampMin="0.0", UIMin="0.0", EditCondition="bUseRandomizedContents"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Materials|Random", meta=(ClampMin="0.0", UIMin="0.0", EditCondition="bUseRandomizedContents"))
 	float TotalUnitsMax = 0.0f;
 
 protected:
+	virtual void BeginPlay() override;
+
 	void ResolveGeneratedContents(UPrimitiveComponent* SourcePrimitive);
 	void BuildFixedContents(UPrimitiveComponent* SourcePrimitive);
 	void BuildRandomizedContents(UPrimitiveComponent* SourcePrimitive);
