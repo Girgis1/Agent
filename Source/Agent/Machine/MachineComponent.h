@@ -159,4 +159,37 @@ protected:
 	void FlushPendingOutput();
 	void SetRuntimeState(EMachineRuntimeState NewState, const TCHAR* Message);
 	void RebuildResourceMassLookup();
-	void RegisterResourceMass(const UResourceDefinitionAsset* ResourceDefiniti
+	void RegisterResourceMass(const UResourceDefinitionAsset* ResourceDefinition);
+	float ResolveResourceMassPerUnitKg(FName ResourceId) const;
+	void ApplyStoredMassToOwner();
+	float ComputeStoredMassKg() const;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UInputVolume> InputVolume = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UOutputVolume> OutputVolume = nullptr;
+
+	UPROPERTY(Transient)
+	mutable TMap<FName, float> ResourceMassPerUnitKgById;
+
+	UPROPERTY(Transient)
+	mutable TMap<FName, TObjectPtr<UResourceDefinitionAsset>> ResourceDefinitionById;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UPrimitiveComponent> CachedOwnerPrimitive = nullptr;
+
+	UPROPERTY(Transient)
+	float CachedOwnerBaseMassKg = 0.0f;
+
+	FRecipeView CurrentCraftRecipe;
+
+	UPROPERTY(Transient)
+	TMap<FName, int32> CurrentCraftByproductsScaled;
+
+	UPROPERTY(Transient)
+	float CurrentCraftElapsedSeconds = 0.0f;
+
+	UPROPERTY(Transient)
+	float CurrentCraftDurationSeconds = 0.0f;
+};
