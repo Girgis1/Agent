@@ -9,11 +9,28 @@
 
 UVehicleInteractionComponent::UVehicleInteractionComponent()
 {
-	PrimaryComponentTick.bCanEverTick = false;
+	PrimaryComponentTick.bCanEverTick = true;
+}
+
+void UVehicleInteractionComponent::TickComponent(
+	float DeltaTime,
+	ELevelTick TickType,
+	FActorComponentTickFunction* ThisTickFunction)
+{
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	if (!IsVehicleStillControlled())
+	{
+		ActiveVehicleActor.Reset();
+	}
 }
 
 bool UVehicleInteractionComponent::TryEnterNearestVehicle()
 {
+	if (IsVehicleStillControlled())
+	{
+		return true;
+	}
+
 	int32 CandidateCount = 0;
 	AActor* VehicleActor = FindBestVehicleActor(CandidateCount);
 	LastCandidateCount = CandidateCount;
@@ -28,7 +45,73 @@ bool UVehicleInteractionComponent::TryEnterNearestVehicle()
 		return false;
 	}
 
-	return IVehicleInteractable::Execute_EnterVehicle(VehicleActor, OwnerActor);
+	const bool bEnteredVehicle = IVehicleInteractable::Execute_EnterVehicle(VehicleActor, OwnerActor);
+	if (bEnteredVehicle)
+	{
+		ActiveVehicleActor = VehicleActor;
+	}
+
+	return bEnteredVehicle;
+}
+
+bool UVehicleInteractionComponent::TryExitCurrentVehicle()
+{
+	AActor* OwnerActor = GetOwner();
+	AActor* VehicleActor = ActiveVehicleActor.Get();
+	if (!OwnerActor || !VehicleActor)
+	{
+		ActiveVehicleActor.Reset();
+		return false;
+	}
+
+	if (!VehicleActor->GetClass()->ImplementsInterface(UVehicleInteractable::StaticClass()))
+	{
+		ActiveVehicleActor.Reset();
+		return false;
+	}
+
+	const bool bExitedVehicle = IVehicleInteractable::Execute_ExitVehicle(VehicleActor, OwnerActor);
+	if (bExitedVehicle || !IsVehicleStillControlled())
+	{
+		ActiveVehicleActor.Reset();
+	}
+
+	return bExitedVehicle;
+}
+
+bool UVehicleInteractionComponent::IsControllingVehicle() const
+{
+	return IsVehicleStillControlled();
+}
+
+AActor* UVehicleInteractionComponent::GetControlledVehicle() const
+{
+	return IsVehicleStillControlled() ? ActiveVehicleActor.Get() : nullptr;
+}
+
+bool UVehicleInteractionComponent::ApplyVehicleMoveInput(float ForwardInput, float RightInput)
+{
+	AActor* OwnerActor = GetOwner();
+	AActor* VehicleActor = ActiveVehicleActor.Get();
+	if (!OwnerActor || !VehicleActor || !IsVehicleStillControlled())
+	{
+		return false;
+	}
+
+	IVehicleInteractable::Execute_SetVehicleMoveInput(VehicleActor, OwnerActor, ForwardInput, RightInput);
+	return true;
+}
+
+void UVehicleInteractionComponent::SetVehicleHandbrakeInput(bool bHandbrakeActive)
+{
+	AActor* OwnerActor = GetOwner();
+	AActor* VehicleActor = ActiveVehicleActor.Get();
+	if (!OwnerActor || !VehicleActor || !IsVehicleStillControlled())
+	{
+		return;
+	}
+
+	IVehicleInteractable::Execute_SetVehicleHandbrakeInput(VehicleActor, OwnerActor, bHandbrakeActive);
 }
 
 AActor* UVehicleInteractionComponent::FindBestVehicleActor(int32& OutCandidateCount) const
@@ -164,6 +247,23 @@ AActor* UVehicleInteractionComponent::FindBestVehicleActor(int32& OutCandidateCo
 int32 UVehicleInteractionComponent::GetLastCandidateCount() const
 {
 	return LastCandidateCount;
+}
+
+bool UVehicleInteractionComponent::IsVehicleStillControlled() const
+{
+	AActor* OwnerActor = GetOwner();
+	AActor* VehicleActor = ActiveVehicleActor.Get();
+	if (!OwnerActor || !VehicleActor)
+	{
+		return false;
+	}
+
+	if (!VehicleActor->GetClass()->ImplementsInterface(UVehicleInteractable::StaticClass()))
+	{
+		return false;
+	}
+
+	return IVehicleInteractable::Execute_IsVehicleControlledBy(VehicleActor, OwnerActor);
 }
 
 bool UVehicleInteractionComponent::CanUseVehicleActor(AActor* VehicleActor) const

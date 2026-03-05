@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Vehicle/Components/TrolleyMovementComponent.h"
+#include "Factory/ConveyorSurfaceVelocityComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "GameFramework/Actor.h"
 
@@ -21,14 +22,38 @@ void UTrolleyMovementComponent::TickComponent(
 		return;
 	}
 
-	const float MaxForward = FMath::Max(0.0f, MaxForwardSpeed);
-	const float MaxReverse = FMath::Max(0.0f, MaxReverseSpeed);
+	const float StrengthMultiplier = FMath::Max(0.0f, this->StrengthSpeedMultiplier);
+	const float MaxForward = FMath::Max(0.0f, MaxForwardSpeed) * StrengthMultiplier;
+	const float MaxReverse = FMath::Max(0.0f, MaxReverseSpeed) * StrengthMultiplier;
 	const float Input = FMath::Clamp(ThrottleInput, -1.0f, 1.0f);
 	const float ClampedSteering = FMath::Clamp(SteeringInput, -1.0f, 1.0f);
+	const float EffectivePayloadMassKg = FMath::Max(0.0f, PayloadMassKg) * FMath::Max(0.0f, PayloadMassInfluence);
+	FVector ConveyorVelocity = FVector::ZeroVector;
+	if (const AActor* OwnerActor = GetOwner())
+	{
+		if (const UConveyorSurfaceVelocityComponent* SurfaceVelocityComponent = OwnerActor->FindComponentByClass<UConveyorSurfaceVelocityComponent>())
+		{
+			ConveyorVelocity = SurfaceVelocityComponent->GetConveyorSurfaceVelocity();
+		}
+	}
 
 	UPrimitiveComponent* SimulatedPrimitive = Cast<UPrimitiveComponent>(UpdatedComponent);
 	if (SimulatedPrimitive && SimulatedPrimitive->IsSimulatingPhysics())
 	{
+		const float BaseBodyMassKg = FMath::Max(1.0f, SimulatedPrimitive->GetMass());
+		const float LoadRatio = 1.0f + (EffectivePayloadMassKg / BaseBodyMassKg);
+		const float LoadDriveScale = FMath::Clamp(
+			FMath::Pow(LoadRatio, -FMath::Max(0.0f, LoadDriveExponent)),
+			FMath::Clamp(MinLoadDriveScale, 0.0f, 1.0f),
+			1.0f);
+		const float StrengthCargoScale = FMath::Clamp(StrengthToCargoScale, 0.0f, 1.0f);
+		const float StrengthLoadFactor = FMath::Pow(FMath::Max(0.01f, StrengthMultiplier), StrengthCargoScale);
+		const float DriveScale = FMath::Max(0.0f, LoadDriveScale * StrengthLoadFactor);
+		const float SteeringScale = FMath::Lerp(
+			1.0f,
+			DriveScale,
+			FMath::Clamp(LoadAffectsSteering, 0.0f, 1.0f));
+
 		const FVector Forward = UpdatedComponent->GetForwardVector();
 		const FVector Right = UpdatedComponent->GetRightVector();
 		const FVector LinearVelocity = SimulatedPrimitive->GetPhysicsLinearVelocity();
@@ -41,7 +66,7 @@ void UTrolleyMovementComponent::TickComponent(
 		const float SpeedAlpha = MaxForward > KINDA_SMALL_NUMBER
 			? FMath::Clamp(FMath::Abs(ForwardSpeed) / MaxForward, 0.0f, 1.0f)
 			: 0.0f;
-		const float DriveLimitScale = FMath::Max(0.05f, 1.0f - SpeedAlpha);
+		const float DriveLimitScale = FMath::Max(0.05f, 1.0f - SpeedAlpha) * DriveScale;
 		const FVector RearDriveLocation = SimulatedPrimitive->GetCenterOfMass() + (Forward * RearDriveOffset);
 
 		if (Input > KINDA_SMALL_NUMBER && ForwardSpeed < MaxForward)
@@ -66,26 +91,71 @@ void UTrolleyMovementComponent::TickComponent(
 			SimulatedPrimitive->AddForce(-(Forward * ForwardSpeed) * FMath::Max(0.0f, HandbrakeDrag) * Mass);
 		}
 
-		if (!FMath::IsNearlyZero(ClampedSteering, 0.01f) && !FMath::IsNearlyZero(ForwardSpeed, 4.0f))
+		if (!ConveyorVelocity.IsNearlyZero())
 		{
-			const float SteeringTorque = FMath::Lerp(
-				FMath::Max(0.0f, SteeringTorqueAtLowSpeed),
-				FMath::Max(0.0f, SteeringTorqueAtHighSpeed),
-				SpeedAlpha);
+			const FVector ConveyorPlanarVelocity(ConveyorVelocity.X, ConveyorVelocity.Y, 0.0f);
+			const FVector CurrentPlanarVelocity(LinearVelocity.X, LinearVelocity.Y, 0.0f);
+			const FVector ConveyorVelocityDelta = ConveyorPlanarVelocity - CurrentPlanarVelocity;
+			SimulatedPrimitive->AddForce(ConveyorVelocityDelta * Mass * FMath::Max(0.0f, ConveyorCarryForceScale));
+
+			if (ConveyorVelocityAssist > 0.0f)
+			{
+				FVector AssistedVelocity = LinearVelocity;
+				AssistedVelocity += ConveyorPlanarVelocity * (ConveyorVelocityAssist * DeltaTime);
+				SimulatedPrimitive->SetPhysicsLinearVelocity(AssistedVelocity, false);
+			}
+		}
+
+		if (!FMath::IsNearlyZero(ClampedSteering, 0.01f)
+			&& FMath::Abs(ForwardSpeed) >= FMath::Max(0.0f, MinSteerSpeed))
+		{
+			const float SteeringForce = FMath::Lerp(
+				FMath::Max(0.0f, SteeringForceAtLowSpeed),
+				FMath::Max(0.0f, SteeringForceAtHighSpeed),
+				SpeedAlpha) * SteeringScale;
 			const float DirectionScale = ForwardSpeed >= 0.0f ? 1.0f : -1.0f;
-			SimulatedPrimitive->AddTorqueInRadians(
-				FVector::UpVector * (ClampedSteering * SteeringTorque * DirectionScale),
-				NAME_None,
-				true);
+			const FVector FrontSteerLocation = SimulatedPrimitive->GetCenterOfMass() + (Forward * FrontSteerOffset);
+			const FVector SteeringVector = Right * (ClampedSteering * SteeringForce * DirectionScale);
+			SimulatedPrimitive->AddForceAtLocation(SteeringVector, FrontSteerLocation);
+		}
+
+		{
+			FVector AngularVelocityDeg = SimulatedPrimitive->GetPhysicsAngularVelocityInDegrees();
+			const FVector OriginalAngularVelocityDeg = AngularVelocityDeg;
+			AngularVelocityDeg.X = FMath::Clamp(
+				AngularVelocityDeg.X,
+				-MaxPitchRollAngularSpeedDeg,
+				MaxPitchRollAngularSpeedDeg);
+			AngularVelocityDeg.Y = FMath::Clamp(
+				AngularVelocityDeg.Y,
+				-MaxPitchRollAngularSpeedDeg,
+				MaxPitchRollAngularSpeedDeg);
+			AngularVelocityDeg.Z = FMath::Clamp(
+				AngularVelocityDeg.Z,
+				-MaxYawAngularSpeedDeg,
+				MaxYawAngularSpeedDeg);
+			if (!AngularVelocityDeg.Equals(OriginalAngularVelocityDeg, KINDA_SMALL_NUMBER))
+			{
+				SimulatedPrimitive->SetPhysicsAngularVelocityInDegrees(AngularVelocityDeg, false);
+			}
 		}
 		return;
 	}
 
 	const bool bHasInput = !FMath::IsNearlyZero(Input, KINDA_SMALL_NUMBER);
+	const float KinematicBaseMassKg = 250.0f;
+	const float KinematicLoadRatio = 1.0f + (EffectivePayloadMassKg / KinematicBaseMassKg);
+	const float KinematicLoadScale = FMath::Clamp(
+		FMath::Pow(KinematicLoadRatio, -FMath::Max(0.0f, LoadDriveExponent)),
+		FMath::Clamp(MinLoadDriveScale, 0.0f, 1.0f),
+		1.0f);
+	const float StrengthCargoScale = FMath::Clamp(StrengthToCargoScale, 0.0f, 1.0f);
+	const float KinematicStrengthLoadFactor = FMath::Pow(FMath::Max(0.01f, StrengthMultiplier), StrengthCargoScale);
+	const float KinematicDriveScale = FMath::Max(0.0f, KinematicLoadScale * KinematicStrengthLoadFactor);
 	if (bHasInput)
 	{
 		const float Direction = FMath::Sign(Input);
-		CurrentForwardSpeed += Direction * FMath::Max(0.0f, KinematicAcceleration) * DeltaTime;
+		CurrentForwardSpeed += Direction * FMath::Max(0.0f, KinematicAcceleration) * KinematicDriveScale * DeltaTime;
 	}
 	else
 	{
@@ -112,7 +182,8 @@ void UTrolleyMovementComponent::TickComponent(
 		const float SpeedAlpha = MaxForward > KINDA_SMALL_NUMBER
 			? FMath::Clamp(FMath::Abs(CurrentForwardSpeed) / MaxForward, 0.0f, 1.0f)
 			: 0.0f;
-		const float TurnRate = FMath::Lerp(KinematicTurnRateAtLowSpeed, KinematicTurnRateAtHighSpeed, SpeedAlpha);
+		const float TurnRate = FMath::Lerp(KinematicTurnRateAtLowSpeed, KinematicTurnRateAtHighSpeed, SpeedAlpha)
+			* FMath::Lerp(1.0f, KinematicDriveScale, FMath::Clamp(LoadAffectsSteering, 0.0f, 1.0f));
 		const float ReverseSteerScale = CurrentForwardSpeed >= 0.0f ? 1.0f : -1.0f;
 		const float YawDelta = ClampedSteering * TurnRate * ReverseSteerScale * DeltaTime;
 		if (!FMath::IsNearlyZero(YawDelta))
@@ -121,13 +192,28 @@ void UTrolleyMovementComponent::TickComponent(
 			MoveUpdatedComponent(FVector::ZeroVector, NewRotation, true);
 		}
 	}
+
+	if (!ConveyorVelocity.IsNearlyZero())
+	{
+		const FVector ConveyorDelta = ConveyorVelocity * DeltaTime * FMath::Max(0.0f, ConveyorVelocityAssist);
+		if (!ConveyorDelta.IsNearlyZero())
+		{
+			FHitResult Hit;
+			SafeMoveUpdatedComponent(ConveyorDelta, UpdatedComponent->GetComponentQuat(), true, Hit);
+			if (Hit.IsValidBlockingHit())
+			{
+				SlideAlongSurface(ConveyorDelta, 1.0f - Hit.Time, Hit.Normal, Hit, true);
+			}
+		}
+	}
 }
 
 float UTrolleyMovementComponent::GetMaxSpeed() const
 {
+	const float StrengthMultiplier = FMath::Max(0.0f, this->StrengthSpeedMultiplier);
 	return CurrentForwardSpeed >= 0.0f
-		? FMath::Max(0.0f, MaxForwardSpeed)
-		: FMath::Max(0.0f, MaxReverseSpeed);
+		? FMath::Max(0.0f, MaxForwardSpeed) * StrengthMultiplier
+		: FMath::Max(0.0f, MaxReverseSpeed) * StrengthMultiplier;
 }
 
 void UTrolleyMovementComponent::StopMovementImmediately()
@@ -159,6 +245,16 @@ void UTrolleyMovementComponent::SetSteeringInput(float Value)
 void UTrolleyMovementComponent::SetHandbrakeInput(bool bNewHandbrakeActive)
 {
 	bHandbrakeActive = bNewHandbrakeActive;
+}
+
+void UTrolleyMovementComponent::SetPayloadMassKg(float NewPayloadMassKg)
+{
+	PayloadMassKg = FMath::Max(0.0f, NewPayloadMassKg);
+}
+
+void UTrolleyMovementComponent::SetDriverStrengthSpeedMultiplier(float NewDriverStrengthSpeedMultiplier)
+{
+	StrengthSpeedMultiplier = FMath::Max(0.0f, NewDriverStrengthSpeedMultiplier);
 }
 
 float UTrolleyMovementComponent::GetForwardSpeed() const

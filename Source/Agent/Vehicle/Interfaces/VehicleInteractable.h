@@ -32,8 +32,17 @@ public:
 	bool IsVehicleOccupied() const;
 
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="Vehicle")
+	bool IsVehicleControlledBy(AActor* Interactor) const;
+
+	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="Vehicle")
 	FVector GetVehicleInteractionLocation(AActor* Interactor) const;
 
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="Vehicle")
 	FText GetVehicleInteractionPrompt() const;
+
+	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="Vehicle")
+	void SetVehicleMoveInput(AActor* Interactor, float ForwardInput, float RightInput);
+
+	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="Vehicle")
+	void SetVehicleHandbrakeInput(AActor* Interactor, bool bHandbrakeActive);
 };

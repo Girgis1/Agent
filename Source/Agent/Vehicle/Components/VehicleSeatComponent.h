@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "VehicleSeatComponent.generated.h"
 
 class APlayerController;
@@ -49,6 +50,9 @@ public:
 	TObjectPtr<USceneComponent> ExitPoint = nullptr;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Seat")
+	TObjectPtr<USceneComponent> DriverAttachPoint = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Seat")
 	float ExitForwardDistance = 140.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Seat")
@@ -58,10 +62,30 @@ public:
 	float ExitVerticalOffset = 20.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Seat")
+	bool bUsePossessionFlow = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Seat")
+	bool bAttachDriverToVehicle = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Seat")
+	bool bKeepDriverUprightWhileSeated = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Seat")
+	bool bDisableDriverMovementWhileSeated = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Seat")
 	bool bHideDriverWhileSeated = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Seat")
 	bool bDisableDriverCollisionWhileSeated = true;
+
+	// Keeps exit seamless by default: detach exactly where the driver currently is.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Seat|Exit")
+	bool bExitAtCurrentLocation = true;
+
+	// Optional safety mode: if current location is blocked, try to relocate to a safe candidate.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Seat|Exit")
+	bool bUseSafeFallbackIfCurrentExitBlocked = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Seat|Emergency")
 	float EmergencyExitDistance = 180.0f;
@@ -90,4 +114,16 @@ private:
 
 	UPROPERTY(Transient)
 	bool bDriverCollisionWasEnabled = true;
+
+	UPROPERTY(Transient)
+	bool bDriverMovementWasEnabled = true;
+
+	UPROPERTY(Transient)
+	TEnumAsByte<EMovementMode> DriverPreviousMovementMode = MOVE_Walking;
+
+	UPROPERTY(Transient)
+	bool bDriverAttachedToVehicle = false;
+
+	UPROPERTY(Transient)
+	bool bDriverRootUsedAbsoluteRotation = false;
 };

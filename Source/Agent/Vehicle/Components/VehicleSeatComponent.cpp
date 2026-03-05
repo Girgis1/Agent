@@ -5,12 +5,21 @@
 #include "Components/SceneComponent.h"
 #include "Engine/World.h"
 #include "GameFramework/Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 
 UVehicleSeatComponent::UVehicleSeatComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
+	bUsePossessionFlow = false;
+	bAttachDriverToVehicle = true;
+	bKeepDriverUprightWhileSeated = true;
+	bDisableDriverMovementWhileSeated = true;
+	bHideDriverWhileSeated = false;
+	bDisableDriverCollisionWhileSeated = true;
+	bExitAtCurrentLocation = true;
+	bUseSafeFallbackIfCurrentExitBlocked = false;
 }
 
 void UVehicleSeatComponent::BeginPlay()
@@ -40,11 +49,20 @@ bool UVehicleSeatComponent::TryEnter(AActor* Interactor)
 		return false;
 	}
 
-	const FVector SeatLocation = GetInteractionLocation();
-	DriverPawn->SetActorLocation(SeatLocation);
+	ACharacter* DriverCharacter = Cast<ACharacter>(DriverPawn);
+	UCharacterMovementComponent* DriverMovement = DriverCharacter
+		? DriverCharacter->GetCharacterMovement()
+		: nullptr;
 
 	bDriverWasHiddenInGame = DriverPawn->IsHidden();
 	bDriverCollisionWasEnabled = DriverPawn->GetActorEnableCollision();
+	bDriverAttachedToVehicle = false;
+	bDriverRootUsedAbsoluteRotation = false;
+	if (DriverMovement)
+	{
+		bDriverMovementWasEnabled = DriverMovement->MovementMode != MOVE_None;
+		DriverPreviousMovementMode = DriverMovement->MovementMode;
+	}
 	if (bHideDriverWhileSeated)
 	{
 		DriverPawn->SetActorHiddenInGame(true);
@@ -55,18 +73,71 @@ bool UVehicleSeatComponent::TryEnter(AActor* Interactor)
 		DriverPawn->SetActorEnableCollision(false);
 	}
 
-	DriverController->Possess(VehiclePawn);
-	if (DriverController->GetPawn() != VehiclePawn)
+	if (bDisableDriverMovementWhileSeated && DriverMovement)
 	{
-		if (bHideDriverWhileSeated)
+		DriverMovement->StopMovementImmediately();
+		DriverMovement->DisableMovement();
+	}
+
+	const FVector SeatLocation = GetInteractionLocation();
+	DriverPawn->SetActorLocation(SeatLocation);
+
+	USceneComponent* AttachTarget = DriverAttachPoint
+		? DriverAttachPoint.Get()
+		: (SeatPoint ? SeatPoint.Get() : VehiclePawn->GetRootComponent());
+	if (bAttachDriverToVehicle && AttachTarget)
+	{
+		DriverPawn->AttachToComponent(AttachTarget, FAttachmentTransformRules::SnapToTargetNotIncludingScale);
+		bDriverAttachedToVehicle = true;
+		if (bKeepDriverUprightWhileSeated)
 		{
-			DriverPawn->SetActorHiddenInGame(bDriverWasHiddenInGame);
+			if (USceneComponent* DriverRootComponent = DriverPawn->GetRootComponent())
+			{
+				bDriverRootUsedAbsoluteRotation = DriverRootComponent->IsUsingAbsoluteRotation();
+				DriverRootComponent->SetAbsolute(false, true, false);
+			}
+
+			const FRotator ControlRotation = DriverController->GetControlRotation();
+			DriverPawn->SetActorRotation(FRotator(0.0f, ControlRotation.Yaw, 0.0f));
 		}
-		if (bDisableDriverCollisionWhileSeated)
+	}
+
+	if (bUsePossessionFlow)
+	{
+		DriverController->Possess(VehiclePawn);
+		if (DriverController->GetPawn() != VehiclePawn)
 		{
-			DriverPawn->SetActorEnableCollision(bDriverCollisionWasEnabled);
+			if (bDriverAttachedToVehicle)
+			{
+				if (USceneComponent* DriverRootComponent = DriverPawn->GetRootComponent())
+				{
+					DriverRootComponent->SetAbsolute(false, bDriverRootUsedAbsoluteRotation, false);
+				}
+				DriverPawn->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+				bDriverAttachedToVehicle = false;
+			}
+			if (bHideDriverWhileSeated)
+			{
+				DriverPawn->SetActorHiddenInGame(bDriverWasHiddenInGame);
+			}
+			if (bDisableDriverCollisionWhileSeated)
+			{
+				DriverPawn->SetActorEnableCollision(bDriverCollisionWasEnabled);
+			}
+			if (bDisableDriverMovementWhileSeated && DriverMovement)
+			{
+				if (bDriverMovementWasEnabled)
+				{
+					EMovementMode RestoredMode = static_cast<EMovementMode>(DriverPreviousMovementMode.GetValue());
+					if (RestoredMode == MOVE_None)
+					{
+						RestoredMode = MOVE_Walking;
+					}
+					DriverMovement->SetMovementMode(RestoredMode);
+				}
+			}
+			return false;
 		}
-		return false;
 	}
 
 	ActiveDriverPawn = DriverPawn;
@@ -104,8 +175,69 @@ bool UVehicleSeatComponent::TryExitInternal(AActor* Interactor, bool bAllowUnsaf
 		return false;
 	}
 
+	ACharacter* DriverCharacter = Cast<ACharacter>(DriverPawn);
+	UCharacterMovementComponent* DriverMovement = DriverCharacter
+		? DriverCharacter->GetCharacterMovement()
+		: nullptr;
+
 	FTransform ExitTransform;
-	if (!FindSafeExitTransform(DriverPawn, ExitTransform))
+	const FVector CurrentDriverLocation = DriverPawn->GetActorLocation();
+	const FRotator CurrentDriverRotation = DriverPawn->GetActorRotation();
+	const auto IsDriverLocationClear = [&](const FVector& TestLocation) -> bool
+	{
+		UWorld* World = GetWorld();
+		if (!World)
+		{
+			return true;
+		}
+
+		float CapsuleRadius = 34.0f;
+		float CapsuleHalfHeight = 88.0f;
+		if (const ACharacter* DriverCharacterForCapsule = Cast<ACharacter>(DriverPawn))
+		{
+			if (const UCapsuleComponent* CapsuleComponent = DriverCharacterForCapsule->GetCapsuleComponent())
+			{
+				CapsuleRadius = CapsuleComponent->GetScaledCapsuleRadius();
+				CapsuleHalfHeight = CapsuleComponent->GetScaledCapsuleHalfHeight();
+			}
+		}
+
+		FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(VehicleExitCurrent), false, DriverPawn);
+		if (const AActor* OwnerActor = GetOwner())
+		{
+			QueryParams.AddIgnoredActor(OwnerActor);
+		}
+
+		FHitResult BlockingHit;
+		const bool bBlocked = World->SweepSingleByChannel(
+			BlockingHit,
+			TestLocation,
+			TestLocation,
+			FQuat::Identity,
+			ECC_Pawn,
+			FCollisionShape::MakeCapsule(CapsuleRadius, CapsuleHalfHeight),
+			QueryParams);
+		return !bBlocked;
+	};
+
+	bool bHasExitTransform = false;
+	if (bExitAtCurrentLocation)
+	{
+		ExitTransform = FTransform(FRotator(0.0f, CurrentDriverRotation.Yaw, 0.0f), CurrentDriverLocation);
+		bHasExitTransform = true;
+	}
+
+	if (bHasExitTransform && bUseSafeFallbackIfCurrentExitBlocked && !IsDriverLocationClear(CurrentDriverLocation))
+	{
+		bHasExitTransform = false;
+	}
+
+	if (!bHasExitTransform && FindSafeExitTransform(DriverPawn, ExitTransform))
+	{
+		bHasExitTransform = true;
+	}
+
+	if (!bHasExitTransform)
 	{
 		if (!bAllowUnsafeFallback)
 		{
@@ -118,17 +250,36 @@ bool UVehicleSeatComponent::TryExitInternal(AActor* Interactor, bool bAllowUnsaf
 				+ (OwnerActor->GetActorRightVector() * EmergencyExitDistance)
 				+ FVector(0.0f, 0.0f, EmergencyExitVerticalOffset)
 			: DriverPawn->GetActorLocation() + FVector(EmergencyExitDistance, 0.0f, EmergencyExitVerticalOffset);
-		const FRotator ExitRotation = OwnerActor ? OwnerActor->GetActorRotation() : DriverPawn->GetActorRotation();
+		const float ExitYaw = OwnerActor ? OwnerActor->GetActorRotation().Yaw : DriverPawn->GetActorRotation().Yaw;
+		const FRotator ExitRotation(0.0f, ExitYaw, 0.0f);
 		ExitTransform = FTransform(ExitRotation, BaseExitLocation);
 	}
 
-	DriverPawn->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
-	DriverPawn->SetActorLocationAndRotation(
-		ExitTransform.GetLocation(),
-		ExitTransform.GetRotation().Rotator(),
-		false,
-		nullptr,
-		ETeleportType::TeleportPhysics);
+	if (bDriverAttachedToVehicle)
+	{
+		if (USceneComponent* DriverRootComponent = DriverPawn->GetRootComponent())
+		{
+			DriverRootComponent->SetAbsolute(false, bDriverRootUsedAbsoluteRotation, false);
+		}
+		DriverPawn->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+		bDriverAttachedToVehicle = false;
+	}
+	const FRotator UprightExitRotation(0.0f, ExitTransform.GetRotation().Rotator().Yaw, 0.0f);
+	const bool bNeedsReposition =
+		!DriverPawn->GetActorLocation().Equals(ExitTransform.GetLocation(), 1.0f)
+		|| !FMath::IsNearlyEqual(
+			FMath::Abs(FRotator::NormalizeAxis(DriverPawn->GetActorRotation().Yaw - UprightExitRotation.Yaw)),
+			0.0f,
+			1.0f);
+	if (bNeedsReposition)
+	{
+		DriverPawn->SetActorLocationAndRotation(
+			ExitTransform.GetLocation(),
+			UprightExitRotation,
+			false,
+			nullptr,
+			ETeleportType::TeleportPhysics);
+	}
 
 	if (bHideDriverWhileSeated)
 	{
@@ -139,13 +290,32 @@ bool UVehicleSeatComponent::TryExitInternal(AActor* Interactor, bool bAllowUnsaf
 		DriverPawn->SetActorEnableCollision(bDriverCollisionWasEnabled);
 	}
 
-	DriverController->Possess(DriverPawn);
-	if (DriverController->GetPawn() != DriverPawn)
+	if (bDisableDriverMovementWhileSeated && DriverMovement)
 	{
-		return false;
+		if (bDriverMovementWasEnabled)
+		{
+			EMovementMode RestoredMode = static_cast<EMovementMode>(DriverPreviousMovementMode.GetValue());
+			if (RestoredMode == MOVE_None)
+			{
+				RestoredMode = MOVE_Walking;
+			}
+			DriverMovement->SetMovementMode(RestoredMode);
+		}
 	}
 
-	DriverController->SetControlRotation(ExitTransform.GetRotation().Rotator());
+	if (bUsePossessionFlow)
+	{
+		DriverController->Possess(DriverPawn);
+		if (DriverController->GetPawn() != DriverPawn)
+		{
+			return false;
+		}
+	}
+
+	FRotator ExitControlRotation = DriverController->GetControlRotation();
+	ExitControlRotation.Yaw = UprightExitRotation.Yaw;
+	ExitControlRotation.Roll = 0.0f;
+	DriverController->SetControlRotation(ExitControlRotation);
 	ActiveDriverPawn.Reset();
 	ActiveDriverController.Reset();
 	return true;
@@ -209,7 +379,7 @@ bool UVehicleSeatComponent::FindSafeExitTransform(APawn* DriverPawn, FTransform&
 		return false;
 	}
 
-	const FRotator ExitRotation = OwnerActor->GetActorRotation();
+	const FRotator ExitRotation(0.0f, OwnerActor->GetActorRotation().Yaw, 0.0f);
 	TArray<FVector> CandidateLocations;
 	if (ExitPoint)
 	{
