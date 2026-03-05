@@ -2863,7 +2863,7 @@ void AAgentCharacter::OnDroneCameraTiltUpPressed()
 {
 	if (DroneCompanion && (DroneCompanion->IsLiftAssistActive() || CanUseDroneLiftAssist()))
 	{
-		AdjustDroneLiftAssistStrength(0.1f);
+		AdjustDroneLiftAssistStrength(0.01f);
 		return;
 	}
 
@@ -2877,7 +2877,7 @@ void AAgentCharacter::OnDroneCameraTiltDownPressed()
 {
 	if (DroneCompanion && (DroneCompanion->IsLiftAssistActive() || CanUseDroneLiftAssist()))
 	{
-		AdjustDroneLiftAssistStrength(-0.1f);
+		AdjustDroneLiftAssistStrength(-0.01f);
 		return;
 	}
 

@@ -1498,9 +1498,15 @@ void ADroneCompanion::UpdateLiftAssistFlight(float DeltaSeconds)
 		CurrentHoverLiftDot = 1.0f;
 
 		const float PayloadMassKg = FMath::Max(0.01f, TargetComponent->GetMass());
-		const float DesiredPayloadSupportForce = PayloadMassKg * FMath::Max(
+		const float HoverSupportForce = PayloadMassKg * LiftAssistGravityAcceleration;
+		const float RawDesiredPayloadSupportForce = PayloadMassKg * FMath::Max(
 			0.0f,
 			LiftAssistGravityAcceleration + ControllerVerticalAcceleration);
+		const float MaxControllerSupportForce = HoverSupportForce * (1.0f + FMath::Max(0.0f, LiftAssistControlLiftOverhead));
+		const float DesiredPayloadSupportForce = FMath::Clamp(
+			RawDesiredPayloadSupportForce,
+			0.0f,
+			FMath::Max(HoverSupportForce, MaxControllerSupportForce));
 		LiftAssistForceRampTime = FMath::Min(
 			LiftAssistForceRampTime + FMath::Max(0.0f, DeltaSeconds),
 			LiftRampDurationSeconds);

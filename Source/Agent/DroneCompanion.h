@@ -389,6 +389,9 @@ public:
 	float LiftAssistPDMaxVerticalAcceleration = 650.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
+	float LiftAssistControlLiftOverhead = 0.35f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")
 	float LiftAssistVerticalDamping = 3.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|LiftAssist")

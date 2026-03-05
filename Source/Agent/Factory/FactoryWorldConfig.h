@@ -18,5 +18,5 @@ public:
 	float ConveyorMasterBeltSpeed = 60.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Resources", meta=(ClampMin="0.0", UIMin="0.0"))
-	float ResourceBaseMassMultiplier = 0.5f;
+	float ResourceBaseMassMultiplier = 1.5f;
 };
