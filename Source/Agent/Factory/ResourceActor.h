@@ -18,25 +18,25 @@ class AResourceActor : public AActor
 public:
 	AResourceActor();
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Resource")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|ResourceActor")
 	TObjectPtr<UStaticMeshComponent> ItemMesh = nullptr;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Resource")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|ResourceActor")
 	TObjectPtr<UResourceComponent> ResourceData = nullptr;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Resource")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|ResourceActor")
 	bool bRandomizeMeshOnSpawn = false;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Resource")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|ResourceActor")
 	TArray<TObjectPtr<UStaticMesh>> MeshVariants;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Resource")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|ResourceActor")
 	bool bRandomizeScaleOnSpawn = false;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Resource", meta=(ClampMin="0.05"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|ResourceActor", meta=(ClampMin="0.05"))
 	float ItemMinScale = 0.75f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Resource", meta=(ClampMin="0.05"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|ResourceActor", meta=(ClampMin="0.05"))
 	float ItemMaxScale = 1.25f;
 
 protected:

@@ -151,15 +151,15 @@ A plain Unreal-style dev fly camera with simple first-person fly controls.
 - `UResourceComponent` now uses a materials array as the primary authoring path:
   - each entry references a `DA_Resource_*`
   - each entry can be fixed units or min/max range
-  - optional weighted random material selection for things like mixed trash bags
+  - optional randomized material selection (uniform pick from defined entries) for things like mixed trash bags
   - optional total-units range normalization
-  - unit scaling by actor scale (`None`, `Linear`, `Volume`)
+  - unit scaling is always linear with actor scale
   - generated material contents are resolved once per spawn and then stay stable
 - Resource mass now uses:
   - `FinalMassKg = TotalMaterialWeightKg + (BaseMassKg * ResourceBaseMassMultiplier)`
-  - then multiplied by local `MassMultiplier`
+  - `BaseMassKg` comes from the mesh/body mass settings already available on the Blueprint physics component
   - `ResourceBaseMassMultiplier` lives on `AFactoryWorldConfig`
-- New base salvage actor is `AResourceActor` (the old `AResourceSalvageActor` remains as a deprecated compatibility wrapper).
+- `AResourceActor` is the single resource actor base class.
 
 ### Resource Actor Authoring
 
@@ -173,8 +173,8 @@ A plain Unreal-style dev fly camera with simple first-person fly controls.
 - On `ResourceData`:
   - add entries to `Materials`
   - per entry, choose fixed `Units` or a `MinUnits`/`MaxUnits` range
-  - optionally enable `bUseRandomizedContents` to pick a weighted subset each spawn
-  - tune `RecoveryMultiplier` for output yield scaling
+  - optionally enable `bUseRandomizedContents` to pick a random subset each spawn
+  - resource mass per unit is defined only in each `DA_Resource_*` (`MassPerUnitKg`)
 - If a physical object has no `UResourceComponent`, the shredder can still destroy it, but it yields no resources.
 
 ## Key Source Files
