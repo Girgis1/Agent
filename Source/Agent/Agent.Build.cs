@@ -27,10 +27,6 @@ public class Agent : ModuleRules
 		PublicIncludePaths.AddRange(new string[] {
 			"Agent",
 			"Agent/Factory",
-			"Agent/Interact",
-			"Agent/Interact/Actors",
-			"Agent/Interact/Components",
-			"Agent/Interact/Interfaces",
 			"Agent/Machine",
 			"Agent/Vehicle",
 			"Agent/Vehicle/Actors",

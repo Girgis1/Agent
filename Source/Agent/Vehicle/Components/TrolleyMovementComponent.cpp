@@ -1,8 +1,10 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Vehicle/Components/TrolleyMovementComponent.h"
+#include "Vehicle/Components/VehicleSeatComponent.h"
 #include "Factory/ConveyorSurfaceVelocityComponent.h"
 #include "Components/PrimitiveComponent.h"
+#include "Components/SceneComponent.h"
 #include "GameFramework/Actor.h"
 
 UTrolleyMovementComponent::UTrolleyMovementComponent()
@@ -23,7 +25,8 @@ void UTrolleyMovementComponent::TickComponent(
 	}
 
 	const float StrengthMultiplier = FMath::Max(0.0f, this->StrengthSpeedMultiplier);
-	const float MaxForward = FMath::Max(0.0f, MaxForwardSpeed) * StrengthMultiplier;
+	const float BaseMaxForward = FMath::Max(0.0f, MaxForwardSpeed);
+	const float MaxForward = BaseMaxForward * StrengthMultiplier;
 	const float MaxReverse = FMath::Max(0.0f, MaxReverseSpeed) * StrengthMultiplier;
 	const float Input = FMath::Clamp(ThrottleInput, -1.0f, 1.0f);
 	const float ClampedSteering = FMath::Clamp(SteeringInput, -1.0f, 1.0f);
@@ -59,8 +62,10 @@ void UTrolleyMovementComponent::TickComponent(
 		const FVector LinearVelocity = SimulatedPrimitive->GetPhysicsLinearVelocity();
 		const float ForwardSpeed = FVector::DotProduct(LinearVelocity, Forward);
 		const float SideSpeed = FVector::DotProduct(LinearVelocity, Right);
+		const float LowSpeedStrafeBlend = ComputeLowSpeedStrafeBlend(FMath::Abs(ForwardSpeed));
 
 		CurrentForwardSpeed = ForwardSpeed;
+		CurrentLateralSpeed = SideSpeed;
 		Velocity = LinearVelocity;
 
 		const float SpeedAlpha = MaxForward > KINDA_SMALL_NUMBER
@@ -85,6 +90,35 @@ void UTrolleyMovementComponent::TickComponent(
 
 		const float LateralGripStrength = FMath::Max(0.0f, bHandbrakeActive ? HandbrakeLateralGrip : LateralGrip);
 		SimulatedPrimitive->AddForce(-(Right * SideSpeed) * LateralGripStrength * Mass);
+
+			const float MaxStrafeSpeed = BaseMaxForward
+				* FMath::Max(0.0f, LowSpeedStrafeSlowFactor)
+				* LowSpeedStrafeBlend;
+			const float StrafeSpeedAlpha = MaxStrafeSpeed > KINDA_SMALL_NUMBER
+				? FMath::Clamp(FMath::Abs(SideSpeed) / MaxStrafeSpeed, 0.0f, 1.0f)
+				: 1.0f;
+			const float StrafeDriveLimitScale = FMath::Max(0.05f, 1.0f - StrafeSpeedAlpha) * FMath::Max(0.0f, LoadDriveScale);
+		if (MaxStrafeSpeed > KINDA_SMALL_NUMBER && !FMath::IsNearlyZero(ClampedSteering, 0.01f))
+		{
+			const float StrafeForce = FMath::Max(0.0f, LowSpeedStrafeForce)
+				* StrafeDriveLimitScale;
+			FVector StrafeForceLocation = RearDriveLocation;
+			if (const AActor* OwnerActor = GetOwner())
+			{
+				if (const UVehicleSeatComponent* SeatComponent = OwnerActor->FindComponentByClass<UVehicleSeatComponent>())
+				{
+					if (const USceneComponent* AttachPoint = SeatComponent->DriverAttachPoint.Get())
+					{
+						const float ForwardOffset = LowSpeedStrafeBlend * LowSpeedStrafeForcePointForwardOffset;
+						StrafeForceLocation = AttachPoint->GetComponentLocation()
+							+ (AttachPoint->GetForwardVector() * ForwardOffset);
+					}
+				}
+			}
+			SimulatedPrimitive->AddForceAtLocation(
+				Right * (ClampedSteering * StrafeForce),
+				StrafeForceLocation);
+		}
 
 		if (bHandbrakeActive)
 		{
@@ -152,6 +186,7 @@ void UTrolleyMovementComponent::TickComponent(
 	const float StrengthCargoScale = FMath::Clamp(StrengthToCargoScale, 0.0f, 1.0f);
 	const float KinematicStrengthLoadFactor = FMath::Pow(FMath::Max(0.01f, StrengthMultiplier), StrengthCargoScale);
 	const float KinematicDriveScale = FMath::Max(0.0f, KinematicLoadScale * KinematicStrengthLoadFactor);
+	const float KinematicStrafeScale = FMath::Max(0.0f, KinematicLoadScale);
 	if (bHasInput)
 	{
 		const float Direction = FMath::Sign(Input);
@@ -164,7 +199,24 @@ void UTrolleyMovementComponent::TickComponent(
 	}
 
 	CurrentForwardSpeed = FMath::Clamp(CurrentForwardSpeed, -MaxReverse, MaxForward);
-	Velocity = UpdatedComponent->GetForwardVector() * CurrentForwardSpeed;
+	const float LowSpeedStrafeBlend = ComputeLowSpeedStrafeBlend(FMath::Abs(CurrentForwardSpeed));
+	const float KinematicMaxStrafeSpeed = BaseMaxForward
+		* FMath::Max(0.0f, LowSpeedStrafeSlowFactor)
+		* LowSpeedStrafeBlend;
+	const bool bHasStrafeInput = !FMath::IsNearlyZero(ClampedSteering, KINDA_SMALL_NUMBER);
+	if (bHasStrafeInput && KinematicMaxStrafeSpeed > KINDA_SMALL_NUMBER)
+	{
+		const float Direction = FMath::Sign(ClampedSteering);
+		CurrentLateralSpeed += Direction * FMath::Max(0.0f, KinematicAcceleration) * KinematicStrafeScale * DeltaTime;
+	}
+	else
+	{
+		const float LateralSlowdown = FMath::Max(0.0f, bHandbrakeActive ? KinematicBrakeDeceleration : KinematicDeceleration);
+		CurrentLateralSpeed = FMath::FInterpConstantTo(CurrentLateralSpeed, 0.0f, DeltaTime, LateralSlowdown);
+	}
+	CurrentLateralSpeed = FMath::Clamp(CurrentLateralSpeed, -KinematicMaxStrafeSpeed, KinematicMaxStrafeSpeed);
+	Velocity = (UpdatedComponent->GetForwardVector() * CurrentForwardSpeed)
+		+ (UpdatedComponent->GetRightVector() * CurrentLateralSpeed);
 
 	const FVector DeltaLocation = Velocity * DeltaTime;
 	if (!DeltaLocation.IsNearlyZero())
@@ -229,6 +281,7 @@ void UTrolleyMovementComponent::StopMovementImmediately()
 	}
 
 	CurrentForwardSpeed = 0.0f;
+	CurrentLateralSpeed = 0.0f;
 	Velocity = FVector::ZeroVector;
 }
 
@@ -260,4 +313,20 @@ void UTrolleyMovementComponent::SetDriverStrengthSpeedMultiplier(float NewDriver
 float UTrolleyMovementComponent::GetForwardSpeed() const
 {
 	return CurrentForwardSpeed;
+}
+
+float UTrolleyMovementComponent::ComputeLowSpeedStrafeBlend(float AbsForwardSpeed) const
+{
+	const float Threshold = FMath::Max(0.0f, LowSpeedStrafeThreshold);
+	if (Threshold <= KINDA_SMALL_NUMBER)
+	{
+		return 0.0f;
+	}
+
+	const float NormalizedSpeed = FMath::Clamp(AbsForwardSpeed / Threshold, 0.0f, 1.0f);
+	const float Smoothed = NormalizedSpeed * NormalizedSpeed * (3.0f - (2.0f * NormalizedSpeed));
+	const float Blend = 1.0f - Smoothed;
+	return FMath::Pow(
+		FMath::Clamp(Blend, 0.0f, 1.0f),
+		FMath::Max(0.01f, LowSpeedStrafeBlendExponent));
 }

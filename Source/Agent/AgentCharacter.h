@@ -12,9 +12,6 @@ class AConveyorBeltStraight;
 class AConveyorPlacementPreview;
 class AMachineActor;
 class AStorageBin;
-class UAgentInteractorComponent;
-class UDualHandleGrabComponent;
-class UGrabVehiclePushComponent;
 class UVehicleInteractionComponent;
 class UCameraComponent;
 class UInputAction;
@@ -90,29 +87,9 @@ class AAgentCharacter : public ACharacter
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UPhysicsHandleComponent* PickupPhysicsHandle;
 
-	/** Overlap-volume interaction resolver for modular world interactions */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
-	UAgentInteractorComponent* InteractorComponent;
-
 	/** Dedicated vehicle entry interaction for possession-based vehicles */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UVehicleInteractionComponent* VehicleInteractionComponent;
-
-	/** Left hand pivot for dual-handle cart grabs (place manually in Blueprint) */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
-	USceneComponent* LeftGrabHandPivot;
-
-	/** Right hand pivot for dual-handle cart grabs (place manually in Blueprint) */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
-	USceneComponent* RightGrabHandPivot;
-
-	/** Simple dual-handle grab system used by carts */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
-	UDualHandleGrabComponent* DualHandleGrabComponent;
-
-	/** Single-handle push system for grab vehicles */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
-	UGrabVehiclePushComponent* GrabVehiclePushComponent;
 
 protected:
 	UPROPERTY(EditAnywhere, Category="Input")
@@ -179,7 +156,6 @@ protected:
 	void AttachThirdPersonProxyToComponent(USceneComponent* AttachmentParent);
 	bool CanUseConveyorPlacementMode() const;
 	bool CanUseCharacterInteraction() const;
-	void UpdateDualHandleGrabCameraAlignment(float DeltaSeconds);
 	void ToggleConveyorPlacementMode();
 	void EnterConveyorPlacementMode();
 	void ExitConveyorPlacementMode();
@@ -469,15 +445,6 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
 	bool bShowPickupDebug = true;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|DualHandle")
-	float DualHandleSteerYawRate = 115.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|DualHandle")
-	float DualHandleCameraYawAlignSpeed = 5.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|DualHandle")
-	bool bInvertDualHandleVerticalSteerInput = true;
 
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))

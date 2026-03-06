@@ -97,6 +97,27 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Movement|Steering", meta=(ClampMin="0.0"))
 	float MinSteerSpeed = 40.0f;
 
+	// Sideways assist fades from full at 0 speed to none at this forward speed.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Movement|Strafe", meta=(ClampMin="0.0"))
+	float LowSpeedStrafeThreshold = 100.0f;
+
+	// 0.7 means 30% slower than main movement scaling.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Movement|Strafe", meta=(ClampMin="0.0", ClampMax="1.0"))
+	float LowSpeedStrafeSlowFactor = 0.7f;
+
+	// Lateral drive force; use same order of magnitude as DriveForce for forward-equivalent feel.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Movement|Strafe", meta=(ClampMin="0.0"))
+	float LowSpeedStrafeForce = 140000.0f;
+
+	// Lateral force starts at DriverAttachPoint + this local X/forward offset at low speed,
+	// then ramps back to DriverAttachPoint as speed approaches LowSpeedStrafeThreshold.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Movement|Strafe")
+	float LowSpeedStrafeForcePointForwardOffset = 100.0f;
+
+	// Shape control for how fast sideways assist fades out to the threshold.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Movement|Strafe", meta=(ClampMin="0.01"))
+	float LowSpeedStrafeBlendExponent = 1.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Movement|Stability", meta=(ClampMin="0.0"))
 	float MaxYawAngularSpeedDeg = 180.0f;
 
@@ -149,9 +170,12 @@ public:
 	float KinematicTurnRateAtHighSpeed = 58.0f;
 
 private:
+	float ComputeLowSpeedStrafeBlend(float AbsForwardSpeed) const;
+
 	float ThrottleInput = 0.0f;
 	float SteeringInput = 0.0f;
 	float CurrentForwardSpeed = 0.0f;
+	float CurrentLateralSpeed = 0.0f;
 	bool bHandbrakeActive = false;
 	float PayloadMassKg = 0.0f;
 };
