@@ -9,10 +9,6 @@
 #include "Factory/FactoryPlacementHelpers.h"
 #include "Machine/MachineActor.h"
 #include "Factory/StorageBin.h"
-#include "Interact/Actors/DragCubeDedicatedActor.h"
-#include "Interact/Components/AgentInteractorComponent.h"
-#include "Interact/Components/DualHandleGrabComponent.h"
-#include "Interact/Components/GrabVehiclePushComponent.h"
 #include "Vehicle/Components/VehicleInteractionComponent.h"
 #include "Camera/CameraComponent.h"
 #include "CollisionShape.h"
@@ -36,27 +32,6 @@
 #include "InputCoreTypes.h"
 #include "UObject/ConstructorHelpers.h"
 #include "Agent.h"
-
-namespace
-{
-	ADragCubeDedicatedActor* ResolveActiveDrivenDragCube(const AAgentCharacter* Character)
-	{
-		if (!Character)
-		{
-			return nullptr;
-		}
-
-		const UAgentInteractorComponent* InteractorComponent = Character->FindComponentByClass<UAgentInteractorComponent>();
-		AActor* ActiveInteractable = InteractorComponent ? InteractorComponent->GetActiveInteractable() : nullptr;
-		ADragCubeDedicatedActor* ActiveDragCube = Cast<ADragCubeDedicatedActor>(ActiveInteractable);
-		if (!ActiveDragCube || !ActiveDragCube->IsDrivenBy(Character))
-		{
-			return nullptr;
-		}
-
-		return ActiveDragCube;
-	}
-}
 
 AAgentCharacter::AAgentCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer.SetDefaultSubobjectClass<UConveyorCharacterMovementComponent>(ACharacter::CharacterMovementComponentName))
@@ -106,17 +81,7 @@ AAgentCharacter::AAgentCharacter(const FObjectInitializer& ObjectInitializer)
 	ThirdPersonTransitionCamera->SetActive(false);
 
 	PickupPhysicsHandle = CreateDefaultSubobject<UPhysicsHandleComponent>(TEXT("PickupPhysicsHandle"));
-	InteractorComponent = CreateDefaultSubobject<UAgentInteractorComponent>(TEXT("InteractorComponent"));
 	VehicleInteractionComponent = CreateDefaultSubobject<UVehicleInteractionComponent>(TEXT("VehicleInteractionComponent"));
-	LeftGrabHandPivot = CreateDefaultSubobject<USceneComponent>(TEXT("LeftGrabHandPivot"));
-	RightGrabHandPivot = CreateDefaultSubobject<USceneComponent>(TEXT("RightGrabHandPivot"));
-	DualHandleGrabComponent = CreateDefaultSubobject<UDualHandleGrabComponent>(TEXT("DualHandleGrabComponent"));
-	GrabVehiclePushComponent = CreateDefaultSubobject<UGrabVehiclePushComponent>(TEXT("GrabVehiclePushComponent"));
-
-	LeftGrabHandPivot->SetupAttachment(GetCapsuleComponent());
-	LeftGrabHandPivot->SetRelativeLocation(FVector(42.0f, -22.0f, 64.0f));
-	RightGrabHandPivot->SetupAttachment(GetCapsuleComponent());
-	RightGrabHandPivot->SetRelativeLocation(FVector(42.0f, 22.0f, 64.0f));
 
 	ThirdPersonDroneProxyMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ThirdPersonDroneProxyMesh"));
 	ThirdPersonDroneProxyMesh->SetupAttachment(FollowCamera);
@@ -179,17 +144,6 @@ void AAgentCharacter::BeginPlay()
 		ThirdPersonDroneProxyMesh->SetRelativeScale3D(FVector(FMath::Max(0.01f, ThirdPersonDroneProxyScale)));
 	}
 
-	if (DualHandleGrabComponent)
-	{
-		DualHandleGrabComponent->SetHandPivots(LeftGrabHandPivot, RightGrabHandPivot);
-		DualHandleGrabComponent->DebugSphereRadius = FMath::Max(0.1f, PickupTraceRadius);
-	}
-
-	if (GrabVehiclePushComponent)
-	{
-		GrabVehiclePushComponent->DebugSphereRadius = FMath::Max(0.1f, PickupTraceRadius);
-	}
-
 	FVector InitialThirdPersonLocation = FVector::ZeroVector;
 	FRotator InitialThirdPersonRotation = FRotator::ZeroRotator;
 	if (GetThirdPersonDroneTarget(InitialThirdPersonLocation, InitialThirdPersonRotation))
@@ -221,28 +175,6 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 		{
 			UpdateConveyorPlacementPreview();
 		}
-	}
-
-	if (InteractorComponent && InteractorComponent->IsInteracting() && !CanUseCharacterInteraction())
-	{
-		InteractorComponent->EndCurrentInteraction();
-	}
-
-	if (DualHandleGrabComponent && DualHandleGrabComponent->IsGrabbing())
-	{
-		if (!CanUseCharacterInteraction())
-		{
-			DualHandleGrabComponent->EndGrab();
-		}
-		else
-		{
-			UpdateDualHandleGrabCameraAlignment(DeltaSeconds);
-		}
-	}
-
-	if (GrabVehiclePushComponent && GrabVehiclePushComponent->IsPushing() && !CanUseCharacterInteraction())
-	{
-		GrabVehiclePushComponent->EndPush();
 	}
 
 	if (DroneCompanion && DroneCompanion->IsLiftAssistActive() && !CanMaintainDroneLiftAssist())
@@ -377,21 +309,6 @@ void AAgentCharacter::StopMove(const FInputActionValue& Value)
 
 void AAgentCharacter::Look(const FInputActionValue& Value)
 {
-	if (ResolveActiveDrivenDragCube(this))
-	{
-		return;
-	}
-
-	if (GrabVehiclePushComponent && GrabVehiclePushComponent->IsPushing())
-	{
-		return;
-	}
-
-	if (DualHandleGrabComponent && DualHandleGrabComponent->IsGrabbing())
-	{
-		return;
-	}
-
 	if (bPickupRotationModeActive && bControllerPickupHeld && HeldPickupComponent.IsValid())
 	{
 		return;
@@ -935,30 +852,6 @@ bool AAgentCharacter::CanUseCharacterInteraction() const
 		&& !bMiniMapModeActive
 		&& !bConveyorPlacementModeActive
 		&& (CurrentViewMode == EAgentViewMode::ThirdPerson || CurrentViewMode == EAgentViewMode::FirstPerson);
-}
-
-void AAgentCharacter::UpdateDualHandleGrabCameraAlignment(float DeltaSeconds)
-{
-	if (!DualHandleGrabComponent || !DualHandleGrabComponent->IsGrabbing())
-	{
-		return;
-	}
-
-	AController* CharacterController = GetController();
-	if (!CharacterController)
-	{
-		return;
-	}
-
-	const FRotator CurrentControlRotation = CharacterController->GetControlRotation();
-	const FRotator TargetControlRotation(CurrentControlRotation.Pitch, GetActorRotation().Yaw, CurrentControlRotation.Roll);
-	const FRotator NewControlRotation = FMath::RInterpTo(
-		CurrentControlRotation,
-		TargetControlRotation,
-		DeltaSeconds,
-		FMath::Max(0.0f, DualHandleCameraYawAlignSpeed));
-
-	CharacterController->SetControlRotation(NewControlRotation);
 }
 
 void AAgentCharacter::ToggleConveyorPlacementMode()
@@ -2697,12 +2590,6 @@ void AAgentCharacter::DoMove(float Right, float Forward)
 		return;
 	}
 
-	if (ADragCubeDedicatedActor* ActiveDragCube = ResolveActiveDrivenDragCube(this))
-	{
-		ActiveDragCube->SetDriveInput(Forward, Right);
-		return;
-	}
-
 	if (GetController() == nullptr)
 	{
 		return;
@@ -2918,33 +2805,6 @@ void AAgentCharacter::OnDroneGamepadThrottleAxis(float Value)
 
 void AAgentCharacter::OnDroneGamepadRollAxis(float Value)
 {
-	if (GrabVehiclePushComponent && GrabVehiclePushComponent->IsPushing())
-	{
-		GrabVehiclePushComponent->SetSteerInput(Value);
-		DroneGamepadRollInput = 0.0f;
-		return;
-	}
-
-	if (DualHandleGrabComponent && DualHandleGrabComponent->IsGrabbing())
-	{
-		DualHandleGrabComponent->SetSteeringHorizontal(Value);
-		if (GetController())
-		{
-			const float DeltaSeconds = GetWorld() ? GetWorld()->GetDeltaSeconds() : (1.0f / 60.0f);
-			AddControllerYawInput(Value * DualHandleSteerYawRate * DeltaSeconds);
-		}
-
-		DroneGamepadRollInput = 0.0f;
-		return;
-	}
-
-	if (ADragCubeDedicatedActor* ActiveDragCube = ResolveActiveDrivenDragCube(this))
-	{
-		ActiveDragCube->SetSteerInput(Value);
-		DroneGamepadRollInput = 0.0f;
-		return;
-	}
-
 	if (bPickupRotationModeActive && bControllerPickupHeld && HeldPickupComponent.IsValid())
 	{
 		const float DeltaSeconds = GetWorld() ? GetWorld()->GetDeltaSeconds() : (1.0f / 60.0f);
@@ -2968,30 +2828,6 @@ void AAgentCharacter::OnDroneGamepadRollAxis(float Value)
 
 void AAgentCharacter::OnDroneGamepadPitchAxis(float Value)
 {
-	if (GrabVehiclePushComponent && GrabVehiclePushComponent->IsPushing())
-	{
-		const float LiftInput = bInvertDualHandleVerticalSteerInput ? -Value : Value;
-		GrabVehiclePushComponent->SetLiftInput(LiftInput);
-		DroneGamepadPitchInput = 0.0f;
-		return;
-	}
-
-	if (DualHandleGrabComponent && DualHandleGrabComponent->IsGrabbing())
-	{
-		const float SteeringValue = bInvertDualHandleVerticalSteerInput ? -Value : Value;
-		DualHandleGrabComponent->SetSteeringVertical(SteeringValue);
-		DroneGamepadPitchInput = 0.0f;
-		return;
-	}
-
-	if (ADragCubeDedicatedActor* ActiveDragCube = ResolveActiveDrivenDragCube(this))
-	{
-		const float LiftInput = bInvertDualHandleVerticalSteerInput ? -Value : Value;
-		ActiveDragCube->SetLiftInput(LiftInput);
-		DroneGamepadPitchInput = 0.0f;
-		return;
-	}
-
 	if (bPickupRotationModeActive && bControllerPickupHeld && HeldPickupComponent.IsValid())
 	{
 		const float DeltaSeconds = GetWorld() ? GetWorld()->GetDeltaSeconds() : (1.0f / 60.0f);
@@ -3184,17 +3020,6 @@ void AAgentCharacter::OnMachinePlacementModePressed()
 
 void AAgentCharacter::OnFactoryPlacementTogglePressed()
 {
-	if (CanUseCharacterInteraction())
-	{
-		UAgentInteractorComponent* ActiveInteractorComponent = InteractorComponent
-			? InteractorComponent
-			: FindComponentByClass<UAgentInteractorComponent>();
-		if (ActiveInteractorComponent && ActiveInteractorComponent->ToggleInteraction())
-		{
-			return;
-		}
-	}
-
 	ToggleConveyorPlacementMode();
 }
 
@@ -3317,13 +3142,6 @@ void AAgentCharacter::OnInteractPressed()
 	if (CanUseCharacterInteraction())
 	{
 		bInteractKeyDrivingDroneThrottle = false;
-		UAgentInteractorComponent* ActiveInteractorComponent = InteractorComponent
-			? InteractorComponent
-			: FindComponentByClass<UAgentInteractorComponent>();
-		if (ActiveInteractorComponent)
-		{
-			ActiveInteractorComponent->ToggleInteraction();
-		}
 		return;
 	}
 
