@@ -5,7 +5,10 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Factory/FactoryPayloadActor.h"
+#include "Material/MaterialComponent.h"
+#include "Material/MaterialDefinitionAsset.h"
 #include "Material/MaterialTypes.h"
+#include "UObject/UObjectIterator.h"
 
 UMachineOutputVolumeComponent::UMachineOutputVolumeComponent()
 {
@@ -133,6 +136,63 @@ bool UMachineOutputVolumeComponent::CanSpawnPayload() const
 		QueryParams);
 }
 
+TSubclassOf<AActor> UMachineOutputVolumeComponent::ResolveSpawnClassForResource(FName ResourceId)
+{
+	if (!bPreferMaterialOutputActorClass || ResourceId.IsNone())
+	{
+		return nullptr;
+	}
+
+	if (const TSubclassOf<AActor>* FoundClass = ResourceOutputActorClassById.Find(ResourceId))
+	{
+		return *FoundClass;
+	}
+
+	for (TObjectIterator<UMaterialDefinitionAsset> It; It; ++It)
+	{
+		const UMaterialDefinitionAsset* MaterialDefinition = *It;
+		if (!MaterialDefinition || MaterialDefinition->GetResolvedResourceId() != ResourceId)
+		{
+			continue;
+		}
+
+		if (const TSubclassOf<AActor> OutputActorClass = MaterialDefinition->ResolveOutputActorClass())
+		{
+			ResourceOutputActorClassById.Add(ResourceId, OutputActorClass);
+			return OutputActorClass;
+		}
+
+		break;
+	}
+
+	return nullptr;
+}
+
+void UMachineOutputVolumeComponent::RebuildResourceOutputClassLookup()
+{
+	ResourceOutputActorClassById.Reset();
+
+	for (TObjectIterator<UMaterialDefinitionAsset> It; It; ++It)
+	{
+		const UMaterialDefinitionAsset* MaterialDefinition = *It;
+		if (!MaterialDefinition)
+		{
+			continue;
+		}
+
+		const FName ResourceId = MaterialDefinition->GetResolvedResourceId();
+		if (ResourceId.IsNone())
+		{
+			continue;
+		}
+
+		if (const TSubclassOf<AActor> OutputActorClass = MaterialDefinition->ResolveOutputActorClass())
+		{
+			ResourceOutputActorClassById.Add(ResourceId, OutputActorClass);
+		}
+	}
+}
+
 bool UMachineOutputVolumeComponent::TryEmitOnePayload()
 {
 	if (!CanSpawnPayload())
@@ -175,23 +235,29 @@ bool UMachineOutputVolumeComponent::TryEmitOnePayload()
 			return false;
 		}
 
-		UClass* PayloadClass = PayloadActorClass.Get();
-		if (!PayloadClass)
+		TSubclassOf<AActor> SpawnClassType = ResolveSpawnClassForResource(ResourceId);
+		UClass* SpawnClass = SpawnClassType.Get();
+		if (!SpawnClass)
 		{
-			PayloadClass = AFactoryPayloadActor::StaticClass();
+			SpawnClass = PayloadActorClass.Get();
+		}
+
+		if (!SpawnClass)
+		{
+			SpawnClass = AFactoryPayloadActor::StaticClass();
 		}
 
 		FActorSpawnParameters SpawnParameters{};
 		SpawnParameters.Owner = GetOwner();
 		SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::DontSpawnIfColliding;
 
-		AFactoryPayloadActor* PayloadActor = World->SpawnActor<AFactoryPayloadActor>(
-			PayloadClass,
+		AActor* SpawnedActor = World->SpawnActor<AActor>(
+			SpawnClass,
 			GetComponentLocation(),
 			GetComponentRotation(),
 			SpawnParameters);
 
-		if (!PayloadActor)
+		if (!SpawnedActor)
 		{
 			return false;
 		}
@@ -199,9 +265,54 @@ bool UMachineOutputVolumeComponent::TryEmitOnePayload()
 		FResourceAmount SpawnedAmount;
 		SpawnedAmount.ResourceId = ResourceId;
 		SpawnedAmount.SetScaledQuantity(EmitQuantityScaled);
-		PayloadActor->SetPayloadResource(SpawnedAmount);
 
-		if (UPrimitiveComponent* PayloadPrimitive = Cast<UPrimitiveComponent>(PayloadActor->GetRootComponent()))
+		bool bConfiguredResource = false;
+		if (AFactoryPayloadActor* PayloadActor = Cast<AFactoryPayloadActor>(SpawnedActor))
+		{
+			PayloadActor->SetPayloadResource(SpawnedAmount);
+			bConfiguredResource = true;
+		}
+
+		if (!bConfiguredResource)
+		{
+			if (UMaterialComponent* MaterialComponent = SpawnedActor->FindComponentByClass<UMaterialComponent>())
+			{
+				bConfiguredResource = MaterialComponent->ConfigureSingleResourceById(ResourceId, EmitQuantityScaled);
+			}
+		}
+
+		if (!bConfiguredResource && SpawnClassType.Get() && bTreatMaterialOutputClassAsSelfContained)
+		{
+			// Some output blueprints carry their own baked-in material definitions.
+			bConfiguredResource = true;
+		}
+
+		if (!bConfiguredResource)
+		{
+			SpawnedActor->Destroy();
+
+			UClass* FallbackPayloadClass = PayloadActorClass.Get();
+			if (!FallbackPayloadClass)
+			{
+				FallbackPayloadClass = AFactoryPayloadActor::StaticClass();
+			}
+
+			AFactoryPayloadActor* FallbackPayloadActor = World->SpawnActor<AFactoryPayloadActor>(
+				FallbackPayloadClass,
+				GetComponentLocation(),
+				GetComponentRotation(),
+				SpawnParameters);
+
+			if (!FallbackPayloadActor)
+			{
+				return false;
+			}
+
+			FallbackPayloadActor->SetPayloadResource(SpawnedAmount);
+			SpawnedActor = FallbackPayloadActor;
+		}
+
+		if (UPrimitiveComponent* PayloadPrimitive = Cast<UPrimitiveComponent>(SpawnedActor->GetRootComponent()))
 		{
 			PayloadPrimitive->AddImpulse(GetForwardVector() * FMath::Max(0.0f, OutputImpulse), NAME_None, true);
 		}

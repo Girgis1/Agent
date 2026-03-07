@@ -12,7 +12,7 @@
 
 namespace
 {
-const TCHAR* RecipeClassOutputPrefix = TEXT("__RecipeClassOutput__:");
+const TCHAR* OutputVolumeRecipeClassOutputPrefix = TEXT("__RecipeClassOutput__:");
 
 bool IsRecipeClassOnlyOutputKey(const FName& ResourceId)
 {
@@ -21,7 +21,7 @@ bool IsRecipeClassOnlyOutputKey(const FName& ResourceId)
 		return false;
 	}
 
-	return ResourceId.ToString().StartsWith(RecipeClassOutputPrefix);
+	return ResourceId.ToString().StartsWith(OutputVolumeRecipeClassOutputPrefix);
 }
 }
 

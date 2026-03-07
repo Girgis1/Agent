@@ -38,11 +38,25 @@ AShredderMachine::AShredderMachine()
 	IntakeVolume->SetupAttachment(SceneRoot);
 	IntakeVolume->SetBoxExtent(FVector(48.0f, 48.0f, 42.0f));
 	IntakeVolume->SetRelativeLocation(FVector(-55.0f, 0.0f, 55.0f));
+	IntakeVolume->bUseShredDelay = true;
+	IntakeVolume->ShredDelayMinSeconds = 1.0f;
+	IntakeVolume->ShredDelayMaxSeconds = 5.0f;
+
+	BottomIntakeVolume = CreateDefaultSubobject<UShredderVolumeComponent>(TEXT("BottomIntakeVolume"));
+	BottomIntakeVolume->SetupAttachment(SceneRoot);
+	BottomIntakeVolume->SetBoxExtent(FVector(48.0f, 48.0f, 10.0f));
+	BottomIntakeVolume->SetRelativeLocation(FVector(-55.0f, 0.0f, 2.0f));
+	BottomIntakeVolume->bUseShredDelay = false;
+	BottomIntakeVolume->ShredDelayMinSeconds = 0.0f;
+	BottomIntakeVolume->ShredDelayMaxSeconds = 0.0f;
+	BottomIntakeVolume->ProcessingInterval = 0.0f;
 
 	OutputVolume = CreateDefaultSubobject<UMachineOutputVolumeComponent>(TEXT("OutputVolume"));
 	OutputVolume->SetupAttachment(SceneRoot);
 	OutputVolume->SetBoxExtent(FVector(24.0f, 24.0f, 24.0f));
 	OutputVolume->SetRelativeLocation(FVector(75.0f, 0.0f, 55.0f));
+	OutputVolume->bPreferMaterialOutputActorClass = true;
+	OutputVolume->bTreatMaterialOutputClassAsSelfContained = true;
 
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> MachineMeshAsset(TEXT("/Engine/BasicShapes/Cube.Cube"));
 	if (MachineMeshAsset.Succeeded())

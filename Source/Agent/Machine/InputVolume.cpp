@@ -9,6 +9,23 @@
 
 namespace
 {
+FResourceAmount GetResolvedMachineInputPayloadAmount(const AFactoryPayloadActor* PayloadActor)
+{
+	if (!PayloadActor)
+	{
+		return FResourceAmount{};
+	}
+
+	FResourceAmount PayloadAmount = PayloadActor->GetPayloadResource();
+	if (!PayloadAmount.HasQuantity())
+	{
+		PayloadAmount.ResourceId = PayloadActor->GetPayloadType();
+		PayloadAmount.SetWholeUnits(1);
+	}
+
+	return PayloadAmount;
+}
+
 UPrimitiveComponent* ResolveResourceSourcePrimitive(AActor* Actor)
 {
 	if (!Actor)
@@ -133,7 +150,7 @@ bool UInputVolume::TryConsumeOverlappingActor(AActor* OverlappingActor)
 
 	if (AFactoryPayloadActor* PayloadActor = Cast<AFactoryPayloadActor>(OverlappingActor))
 	{
-		FResourceAmount PayloadResource = PayloadActor->GetPayloadResource();
+		FResourceAmount PayloadResource = GetResolvedMachineInputPayloadAmount(PayloadActor);
 		if (!PayloadResource.HasQuantity())
 		{
 			return false;

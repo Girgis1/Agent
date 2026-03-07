@@ -33,5 +33,8 @@ public:
 	TObjectPtr<UShredderVolumeComponent> IntakeVolume = nullptr;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Machine")
+	TObjectPtr<UShredderVolumeComponent> BottomIntakeVolume = nullptr;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Machine")
 	TObjectPtr<UMachineOutputVolumeComponent> OutputVolume = nullptr;
 };
