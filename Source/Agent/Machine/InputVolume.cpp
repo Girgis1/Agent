@@ -3,8 +3,8 @@
 #include "Machine/InputVolume.h"
 #include "Components/PrimitiveComponent.h"
 #include "Factory/FactoryPayloadActor.h"
-#include "Factory/ResourceComponent.h"
-#include "Factory/ResourceTypes.h"
+#include "Material/MaterialComponent.h"
+#include "Material/MaterialTypes.h"
 #include "Machine/MachineComponent.h"
 
 namespace
@@ -166,7 +166,7 @@ bool UInputVolume::TryConsumeOverlappingActor(AActor* OverlappingActor)
 		return true;
 	}
 
-	UResourceComponent* ResourceComponent = OverlappingActor->FindComponentByClass<UResourceComponent>();
+	UMaterialComponent* ResourceComponent = OverlappingActor->FindComponentByClass<UMaterialComponent>();
 	if (!ResourceComponent)
 	{
 		return false;
@@ -189,3 +189,4 @@ bool UInputVolume::TryConsumeOverlappingActor(AActor* OverlappingActor)
 	OverlappingActor->Destroy();
 	return true;
 }
+

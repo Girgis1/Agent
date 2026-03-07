@@ -24,6 +24,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Machine|Output")
 	void SetOutputArrow(UArrowComponent* InOutputArrow);
 
+	int32 QueueResourceScaled(FName ResourceId, int32 QuantityScaled, TSubclassOf<AActor> OutputActorClassOverride);
 	int32 QueueResourceScaled(FName ResourceId, int32 QuantityScaled);
 
 	UFUNCTION(BlueprintCallable, Category="Machine|Output")
@@ -47,6 +48,9 @@ protected:
 
 	UPROPERTY(Transient)
 	TMap<FName, TSubclassOf<AActor>> ResourceOutputActorClassById;
+
+	UPROPERTY(Transient)
+	TMap<FName, TSubclassOf<AActor>> PendingOutputActorClassOverrideById;
 
 public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Output")

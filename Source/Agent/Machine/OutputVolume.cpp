@@ -5,10 +5,25 @@
 #include "Components/PrimitiveComponent.h"
 #include "Engine/World.h"
 #include "Factory/FactoryPayloadActor.h"
-#include "Factory/ResourceComponent.h"
-#include "Factory/ResourceDefinitionAsset.h"
-#include "Factory/ResourceTypes.h"
+#include "Material/MaterialComponent.h"
+#include "Material/MaterialDefinitionAsset.h"
+#include "Material/MaterialTypes.h"
 #include "UObject/UObjectIterator.h"
+
+namespace
+{
+const TCHAR* RecipeClassOutputPrefix = TEXT("__RecipeClassOutput__:");
+
+bool IsRecipeClassOnlyOutputKey(const FName& ResourceId)
+{
+	if (ResourceId.IsNone())
+	{
+		return false;
+	}
+
+	return ResourceId.ToString().StartsWith(RecipeClassOutputPrefix);
+}
+}
 
 UOutputVolume::UOutputVolume()
 {
@@ -56,7 +71,7 @@ void UOutputVolume::SetOutputArrow(UArrowComponent* InOutputArrow)
 	OutputArrow = InOutputArrow;
 }
 
-int32 UOutputVolume::QueueResourceScaled(FName ResourceId, int32 QuantityScaled)
+int32 UOutputVolume::QueueResourceScaled(FName ResourceId, int32 QuantityScaled, TSubclassOf<AActor> OutputActorClassOverride)
 {
 	if (ResourceId.IsNone() || QuantityScaled <= 0)
 	{
@@ -65,7 +80,17 @@ int32 UOutputVolume::QueueResourceScaled(FName ResourceId, int32 QuantityScaled)
 
 	const int32 SafeQuantityScaled = FMath::Max(0, QuantityScaled);
 	PendingOutputScaled.FindOrAdd(ResourceId) += SafeQuantityScaled;
+	if (OutputActorClassOverride.Get())
+	{
+		PendingOutputActorClassOverrideById.FindOrAdd(ResourceId) = OutputActorClassOverride;
+	}
+
 	return SafeQuantityScaled;
+}
+
+int32 UOutputVolume::QueueResourceScaled(FName ResourceId, int32 QuantityScaled)
+{
+	return QueueResourceScaled(ResourceId, QuantityScaled, nullptr);
 }
 
 void UOutputVolume::QueueResourceUnits(FName ResourceId, int32 QuantityUnits)
@@ -141,6 +166,11 @@ FRotator UOutputVolume::GetSpawnRotation() const
 
 TSubclassOf<AActor> UOutputVolume::ResolveSpawnClassForResource(FName ResourceId)
 {
+	if (IsRecipeClassOnlyOutputKey(ResourceId))
+	{
+		return nullptr;
+	}
+
 	if (!ResourceId.IsNone())
 	{
 		if (const TSubclassOf<AActor>* FoundClass = ResourceOutputActorClassById.Find(ResourceId))
@@ -148,9 +178,9 @@ TSubclassOf<AActor> UOutputVolume::ResolveSpawnClassForResource(FName ResourceId
 			return *FoundClass;
 		}
 
-		for (TObjectIterator<UResourceDefinitionAsset> It; It; ++It)
+		for (TObjectIterator<UMaterialDefinitionAsset> It; It; ++It)
 		{
-			const UResourceDefinitionAsset* ResourceDefinition = *It;
+			const UMaterialDefinitionAsset* ResourceDefinition = *It;
 			if (!ResourceDefinition || ResourceDefinition->GetResolvedResourceId() != ResourceId)
 			{
 				continue;
@@ -173,9 +203,9 @@ void UOutputVolume::RebuildResourceOutputClassLookup()
 {
 	ResourceOutputActorClassById.Reset();
 
-	for (TObjectIterator<UResourceDefinitionAsset> It; It; ++It)
+	for (TObjectIterator<UMaterialDefinitionAsset> It; It; ++It)
 	{
-		const UResourceDefinitionAsset* ResourceDefinition = *It;
+		const UMaterialDefinitionAsset* ResourceDefinition = *It;
 		if (!ResourceDefinition)
 		{
 			continue;
@@ -225,11 +255,17 @@ bool UOutputVolume::TrySpawnOnePayload()
 		if (PendingScaled <= 0)
 		{
 			PendingOutputScaled.Remove(ResourceId);
+			PendingOutputActorClassOverrideById.Remove(ResourceId);
 			continue;
 		}
 
 		const int32 SpawnQuantityScaled = FMath::Min(PendingScaled, FMath::Max(1, ChunkSizeScaled));
-		const TSubclassOf<AActor> SpawnClassType = ResolveSpawnClassForResource(ResourceId);
+		TSubclassOf<AActor> SpawnClassType = PendingOutputActorClassOverrideById.FindRef(ResourceId);
+		if (!SpawnClassType.Get())
+		{
+			SpawnClassType = ResolveSpawnClassForResource(ResourceId);
+		}
+
 		UClass* SpawnClass = SpawnClassType.Get() ? SpawnClassType.Get() : (PayloadActorClass.Get() ? PayloadActorClass.Get() : AFactoryPayloadActor::StaticClass());
 
 		FActorSpawnParameters SpawnParameters;
@@ -247,19 +283,22 @@ bool UOutputVolume::TrySpawnOnePayload()
 			return false;
 		}
 
-		bool bConfiguredResource = false;
-		if (AFactoryPayloadActor* SpawnedPayloadActor = Cast<AFactoryPayloadActor>(SpawnedActor))
+		bool bConfiguredResource = IsRecipeClassOnlyOutputKey(ResourceId);
+		if (!bConfiguredResource)
 		{
-			FResourceAmount PayloadResource;
-			PayloadResource.ResourceId = ResourceId;
-			PayloadResource.SetScaledQuantity(SpawnQuantityScaled);
-			SpawnedPayloadActor->SetPayloadResource(PayloadResource);
-			bConfiguredResource = true;
+			if (AFactoryPayloadActor* SpawnedPayloadActor = Cast<AFactoryPayloadActor>(SpawnedActor))
+			{
+				FResourceAmount PayloadResource;
+				PayloadResource.ResourceId = ResourceId;
+				PayloadResource.SetScaledQuantity(SpawnQuantityScaled);
+				SpawnedPayloadActor->SetPayloadResource(PayloadResource);
+				bConfiguredResource = true;
+			}
 		}
 
 		if (!bConfiguredResource)
 		{
-			if (UResourceComponent* ResourceComponent = SpawnedActor->FindComponentByClass<UResourceComponent>())
+			if (UMaterialComponent* ResourceComponent = SpawnedActor->FindComponentByClass<UMaterialComponent>())
 			{
 				bConfiguredResource = ResourceComponent->ConfigureSingleResourceById(ResourceId, SpawnQuantityScaled);
 			}
@@ -297,6 +336,7 @@ bool UOutputVolume::TrySpawnOnePayload()
 		if (*FoundQuantityScaled == 0)
 		{
 			PendingOutputScaled.Remove(ResourceId);
+			PendingOutputActorClassOverrideById.Remove(ResourceId);
 		}
 
 		return true;
@@ -304,3 +344,4 @@ bool UOutputVolume::TrySpawnOnePayload()
 
 	return false;
 }
+

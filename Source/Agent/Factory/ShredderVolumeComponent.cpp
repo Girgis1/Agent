@@ -5,8 +5,8 @@
 #include "Engine/Engine.h"
 #include "Factory/FactoryPayloadActor.h"
 #include "Factory/MachineOutputVolumeComponent.h"
-#include "Factory/ResourceComponent.h"
-#include "Factory/ResourceTypes.h"
+#include "Material/MaterialComponent.h"
+#include "Material/MaterialTypes.h"
 
 namespace
 {
@@ -105,7 +105,7 @@ bool UShredderVolumeComponent::TryProcessOverlappingActor(AActor* OverlappingAct
 		return false;
 	}
 
-	UResourceComponent* ResourceData = OverlappingActor->FindComponentByClass<UResourceComponent>();
+	UMaterialComponent* ResourceData = OverlappingActor->FindComponentByClass<UMaterialComponent>();
 	if (!ResourceData)
 	{
 		if (bDestroyWithoutResourceComponent)
@@ -151,7 +151,7 @@ int32 UShredderVolumeComponent::GetCurrentStoredQuantityScaled() const
 	return TotalQuantityScaled;
 }
 
-bool UShredderVolumeComponent::TryBuildRecoveredResources(UResourceComponent* ResourceData, UPrimitiveComponent* SourcePrimitive, TArray<FResourceAmount>& OutRecoveredResources) const
+bool UShredderVolumeComponent::TryBuildRecoveredResources(UMaterialComponent* ResourceData, UPrimitiveComponent* SourcePrimitive, TArray<FResourceAmount>& OutRecoveredResources) const
 {
 	OutRecoveredResources.Reset();
 	if (!ResourceData || !SourcePrimitive)
@@ -254,3 +254,4 @@ UMachineOutputVolumeComponent* UShredderVolumeComponent::FindOutputVolume() cons
 {
 	return GetOwner() ? GetOwner()->FindComponentByClass<UMachineOutputVolumeComponent>() : nullptr;
 }
+

@@ -10,7 +10,8 @@ class UInputVolume;
 class UOutputVolume;
 class UPrimitiveComponent;
 class URecipeAsset;
-class UResourceDefinitionAsset;
+class UMaterialDefinitionAsset;
+class AActor;
 
 UENUM(BlueprintType)
 enum class EMachineRuntimeState : uint8
@@ -93,13 +94,13 @@ public:
 	bool bUseWhitelist = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Input", meta=(EditCondition="bUseWhitelist"))
-	TArray<TObjectPtr<UResourceDefinitionAsset>> WhitelistResources;
+	TArray<TObjectPtr<UMaterialDefinitionAsset>> WhitelistResources;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Input")
 	bool bUseBlacklist = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Input", meta=(EditCondition="bUseBlacklist"))
-	TArray<TObjectPtr<UResourceDefinitionAsset>> BlacklistResources;
+	TArray<TObjectPtr<UMaterialDefinitionAsset>> BlacklistResources;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine")
 	FName MachineTag = TEXT("Machine");
@@ -129,13 +130,10 @@ protected:
 	struct FRecipeView
 	{
 		const URecipeAsset* Asset = nullptr;
-		FName AllowedMachineTag = NAME_None;
 		float CraftTimeSeconds = 0.0f;
 		TMap<FName, int32> InputScaled;
-		TMap<FName, int32> InputGroupsScaled;
 		TMap<FName, int32> OutputScaled;
-		bool bConvertOtherInputsToScrap = false;
-		float ScrapRecoveryScalar = 1.0f;
+		TMap<FName, TSubclassOf<AActor>> OutputActorClassByResourceId;
 		bool bIsValid = false;
 	};
 
@@ -144,13 +142,7 @@ protected:
 	int32 GetRemainingCapacityScaled() const;
 	bool ConsumeResourceScaled(FName ResourceId, int32 QuantityScaled);
 	bool BuildRecipeView(const URecipeAsset* RecipeAsset, FRecipeView& OutRecipeView) const;
-	const UResourceDefinitionAsset* ResolveResourceDefinition(FName ResourceId) const;
-	float GetResourceEquivalentPerUnit(FName ResourceId) const;
-	FName GetResourceRefiningGroup(FName ResourceId) const;
-	double GetAvailableEquivalentUnitsForGroup(FName GroupId) const;
-	bool CanSatisfyGroupRequirements(const TMap<FName, int32>& GroupRequirementsScaled) const;
-	bool ConsumeGroupRequirements(const TMap<FName, int32>& GroupRequirementsScaled);
-	void ExtractOtherResourcesAsScrap(const FRecipeView& RecipeView, TMap<FName, int32>& OutScrapByproductScaled);
+	const UMaterialDefinitionAsset* ResolveResourceDefinition(FName ResourceId) const;
 	bool CanCraftRecipe(const FRecipeView& RecipeView) const;
 	bool SelectCraftableRecipe(FRecipeView& OutRecipeView) const;
 	bool TryStartCraft(const FRecipeView& RecipeView);
@@ -159,7 +151,7 @@ protected:
 	void FlushPendingOutput();
 	void SetRuntimeState(EMachineRuntimeState NewState, const TCHAR* Message);
 	void RebuildResourceMassLookup();
-	void RegisterResourceMass(const UResourceDefinitionAsset* ResourceDefinition);
+	void RegisterResourceMass(const UMaterialDefinitionAsset* ResourceDefinition);
 	float ResolveResourceMassPerUnitKg(FName ResourceId) const;
 	void ApplyStoredMassToOwner();
 	float ComputeStoredMassKg() const;
@@ -174,7 +166,7 @@ protected:
 	mutable TMap<FName, float> ResourceMassPerUnitKgById;
 
 	UPROPERTY(Transient)
-	mutable TMap<FName, TObjectPtr<UResourceDefinitionAsset>> ResourceDefinitionById;
+	mutable TMap<FName, TObjectPtr<UMaterialDefinitionAsset>> ResourceDefinitionById;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UPrimitiveComponent> CachedOwnerPrimitive = nullptr;
@@ -185,7 +177,7 @@ protected:
 	FRecipeView CurrentCraftRecipe;
 
 	UPROPERTY(Transient)
-	TMap<FName, int32> CurrentCraftByproductsScaled;
+	TMap<FName, TSubclassOf<AActor>> PendingOutputActorClassByResourceId;
 
 	UPROPERTY(Transient)
 	float CurrentCraftElapsedSeconds = 0.0f;
@@ -193,3 +185,4 @@ protected:
 	UPROPERTY(Transient)
 	float CurrentCraftDurationSeconds = 0.0f;
 };
+

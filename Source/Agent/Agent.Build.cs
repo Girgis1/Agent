@@ -24,9 +24,24 @@ public class Agent : ModuleRules
 
 		PrivateDependencyModuleNames.AddRange(new string[] { });
 
+		if (Target.bBuildEditor)
+		{
+			PrivateDependencyModuleNames.AddRange(new string[]
+			{
+				"AnimGraph",
+				"BlueprintGraph",
+				"ControlRig",
+				"ControlRigDeveloper",
+				"UnrealEd"
+			});
+		}
+
 		PublicIncludePaths.AddRange(new string[] {
 			"Agent",
+			"Agent/Animation",
+			"Agent/Editor",
 			"Agent/Factory",
+			"Agent/Material",
 			"Agent/Machine",
 			"Agent/Vehicle",
 			"Agent/Vehicle/Actors",
