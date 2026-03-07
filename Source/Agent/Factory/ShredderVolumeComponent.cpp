@@ -5,6 +5,7 @@
 #include "Engine/Engine.h"
 #include "Factory/FactoryPayloadActor.h"
 #include "Factory/MachineOutputVolumeComponent.h"
+#include "GameFramework/Pawn.h"
 #include "Material/MaterialComponent.h"
 #include "Material/MaterialTypes.h"
 
@@ -58,6 +59,12 @@ UShredderVolumeComponent::UShredderVolumeComponent()
 	DebugName = TEXT("Shredder");
 }
 
+void UShredderVolumeComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+{
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	CleanupTrackedActors();
+}
+
 float UShredderVolumeComponent::GetBufferedUnits(FName ResourceId) const
 {
 	if (ResourceId.IsNone())
@@ -75,7 +82,15 @@ float UShredderVolumeComponent::GetBufferedUnits(FName ResourceId) const
 
 bool UShredderVolumeComponent::TryProcessOverlappingActor(AActor* OverlappingActor)
 {
-	if (!IsValid(OverlappingActor) || OverlappingActor == GetOwner())
+	UPrimitiveComponent* SourcePrimitive = FindBestShredSourcePrimitive(OverlappingActor);
+	const TWeakObjectPtr<AActor> ActorKey(OverlappingActor);
+	if (!IsActorEligibleForShredding(OverlappingActor, SourcePrimitive))
+	{
+		PendingReadyTimeByActor.Remove(ActorKey);
+		return false;
+	}
+
+	if (!IsActorReadyForShredding(OverlappingActor))
 	{
 		return false;
 	}
@@ -96,10 +111,10 @@ bool UShredderVolumeComponent::TryProcessOverlappingActor(AActor* OverlappingAct
 		InternalResourceBufferScaled.FindOrAdd(PayloadAmount.ResourceId) += PayloadAmount.GetScaledQuantity();
 		FlushBufferedResourcesToOutput();
 		PayloadActor->Destroy();
+		PendingReadyTimeByActor.Remove(ActorKey);
 		return true;
 	}
 
-	UPrimitiveComponent* SourcePrimitive = FindBestShredSourcePrimitive(OverlappingActor);
 	if (!SourcePrimitive)
 	{
 		return false;
@@ -111,6 +126,7 @@ bool UShredderVolumeComponent::TryProcessOverlappingActor(AActor* OverlappingAct
 		if (bDestroyWithoutResourceComponent)
 		{
 			OverlappingActor->Destroy();
+			PendingReadyTimeByActor.Remove(ActorKey);
 			return true;
 		}
 
@@ -137,6 +153,7 @@ bool UShredderVolumeComponent::TryProcessOverlappingActor(AActor* OverlappingAct
 	CommitRecoveredResources(RecoveredResources);
 	FlushBufferedResourcesToOutput();
 	OverlappingActor->Destroy();
+	PendingReadyTimeByActor.Remove(ActorKey);
 	return true;
 }
 
@@ -253,5 +270,77 @@ void UShredderVolumeComponent::FlushBufferedResourcesToOutput()
 UMachineOutputVolumeComponent* UShredderVolumeComponent::FindOutputVolume() const
 {
 	return GetOwner() ? GetOwner()->FindComponentByClass<UMachineOutputVolumeComponent>() : nullptr;
+}
+
+bool UShredderVolumeComponent::IsActorEligibleForShredding(const AActor* OverlappingActor, const UPrimitiveComponent* SourcePrimitive) const
+{
+	if (!IsValid(OverlappingActor) || OverlappingActor == GetOwner())
+	{
+		return false;
+	}
+
+	if (bIgnorePawns && OverlappingActor->IsA<APawn>())
+	{
+		return false;
+	}
+
+	if (!bOnlyShredMovableActors)
+	{
+		return true;
+	}
+
+	return SourcePrimitive && SourcePrimitive->Mobility == EComponentMobility::Movable;
+}
+
+bool UShredderVolumeComponent::IsActorReadyForShredding(AActor* OverlappingActor)
+{
+	if (!IsValid(OverlappingActor))
+	{
+		return false;
+	}
+
+	const TWeakObjectPtr<AActor> ActorKey(OverlappingActor);
+	if (!bUseShredDelay)
+	{
+		PendingReadyTimeByActor.Remove(ActorKey);
+		return true;
+	}
+
+	const float MinDelay = FMath::Max(0.0f, ShredDelayMinSeconds);
+	const float MaxDelay = FMath::Max(MinDelay, ShredDelayMaxSeconds);
+	if (MaxDelay <= KINDA_SMALL_NUMBER)
+	{
+		PendingReadyTimeByActor.Remove(ActorKey);
+		return true;
+	}
+
+	const float NowSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
+	if (const float* FoundReadyTime = PendingReadyTimeByActor.Find(ActorKey))
+	{
+		return NowSeconds >= *FoundReadyTime;
+	}
+
+	const float DelaySeconds = FMath::IsNearlyEqual(MinDelay, MaxDelay)
+		? MinDelay
+		: FMath::FRandRange(MinDelay, MaxDelay);
+	PendingReadyTimeByActor.Add(ActorKey, NowSeconds + DelaySeconds);
+	return false;
+}
+
+void UShredderVolumeComponent::CleanupTrackedActors()
+{
+	if (PendingReadyTimeByActor.Num() == 0)
+	{
+		return;
+	}
+
+	for (auto It = PendingReadyTimeByActor.CreateIterator(); It; ++It)
+	{
+		AActor* TrackedActor = It.Key().Get();
+		if (!IsValid(TrackedActor) || !IsOverlappingActor(TrackedActor))
+		{
+			It.RemoveCurrent();
+		}
+	}
 }
 

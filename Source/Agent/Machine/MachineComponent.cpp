@@ -12,7 +12,7 @@
 
 namespace
 {
-const TCHAR* RecipeClassOutputPrefix = TEXT("__RecipeClassOutput__:");
+const TCHAR* MachineRecipeClassOutputPrefix = TEXT("__RecipeClassOutput__:");
 
 FString FormatUnitsText(int32 QuantityScaled)
 {
@@ -32,7 +32,7 @@ FName BuildRecipeClassOutputKey(const UClass* OutputClass)
 		return NAME_None;
 	}
 
-	return FName(*FString::Printf(TEXT("%s%s"), RecipeClassOutputPrefix, *OutputClass->GetPathName()));
+	return FName(*FString::Printf(TEXT("%s%s"), MachineRecipeClassOutputPrefix, *OutputClass->GetPathName()));
 }
 }
 

@@ -7,6 +7,7 @@
 #include "MachineOutputVolumeComponent.generated.h"
 
 class AFactoryPayloadActor;
+class AActor;
 
 UCLASS(ClassGroup=(Factory), meta=(BlueprintSpawnableComponent))
 class UMachineOutputVolumeComponent : public UFactoryVolumeComponentBase
@@ -37,10 +38,18 @@ protected:
 
 	bool CanSpawnPayload() const;
 	bool TryEmitOnePayload();
+	TSubclassOf<AActor> ResolveSpawnClassForResource(FName ResourceId);
+	void RebuildResourceOutputClassLookup();
 
 public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Machine")
 	TSubclassOf<AFactoryPayloadActor> PayloadActorClass;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Machine")
+	bool bPreferMaterialOutputActorClass = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Machine")
+	bool bTreatMaterialOutputClassAsSelfContained = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Machine", meta=(ClampMin="1"))
 	int32 OutputChunkSizeUnits = 1;
@@ -56,4 +65,8 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Machine")
 	TMap<FName, int32> PendingOutputQuantitiesScaled;
+
+protected:
+	UPROPERTY(Transient)
+	TMap<FName, TSubclassOf<AActor>> ResourceOutputActorClassById;
 };
