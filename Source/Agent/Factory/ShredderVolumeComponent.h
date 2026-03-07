@@ -4,12 +4,12 @@
 
 #include "CoreMinimal.h"
 #include "Factory/FactoryVolumeComponentBase.h"
-#include "Factory/ResourceTypes.h"
+#include "Material/MaterialTypes.h"
 #include "ShredderVolumeComponent.generated.h"
 
 class UMachineOutputVolumeComponent;
 class UPrimitiveComponent;
-class UResourceComponent;
+class UMaterialComponent;
 
 UCLASS(ClassGroup=(Factory), meta=(BlueprintSpawnableComponent))
 class UShredderVolumeComponent : public UFactoryVolumeComponentBase
@@ -26,7 +26,7 @@ protected:
 	virtual bool TryProcessOverlappingActor(AActor* OverlappingActor) override;
 	virtual int32 GetCurrentStoredQuantityScaled() const override;
 
-	bool TryBuildRecoveredResources(UResourceComponent* ResourceData, UPrimitiveComponent* SourcePrimitive, TArray<FResourceAmount>& OutRecoveredResources) const;
+	bool TryBuildRecoveredResources(UMaterialComponent* ResourceData, UPrimitiveComponent* SourcePrimitive, TArray<FResourceAmount>& OutRecoveredResources) const;
 	void CommitRecoveredResources(const TArray<FResourceAmount>& RecoveredResources);
 	void FlushBufferedResourcesToOutput();
 	UMachineOutputVolumeComponent* FindOutputVolume() const;
@@ -41,3 +41,4 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Shredder")
 	TMap<FName, int32> InternalResourceBufferScaled;
 };
+

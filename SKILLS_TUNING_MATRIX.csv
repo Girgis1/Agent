@@ -1,0 +1,39 @@
+Category,NodeType,Name,Parent,TrainedBy,RaisesFloorOf,ImprovesOutputs,WorsenedBy,CurveAsset,Multiplier,Notes
+BaseSkill,Skill,Strength,,Lifting; carrying; pushing,GripStrength|CarryCapacity|HeavyHandling,PickupForce|CarryFeel|TrolleyPower,Fatigue|Injury,,1.0,Parent skill
+BaseSkill,Skill,Stamina,,Sprinting; prolonged effort,SprintEndurance|BreathHolding|SwimEndurance,SprintDuration|WorkCapacity,Exhaustion|Damage,,1.0,Parent skill
+BaseSkill,Skill,Agility,,Jumping; sprinting; balance recovery,WalkSpeed|SprintSpeed|JumpHeight|Dodge|Sliding|Clumsyness,MovementControl|Traversal,Fatigue|Fear,,1.0,Parent skill
+BaseSkill,Skill,Recovery,,Resting well; managing exhaustion,HealthRegen|StaminaRegen|FatigueClearRate,RecoverySpeed|Regen,Fear|Injury,,1.0,Parent skill
+ChildSkill,Skill,GripStrength,Strength,Carries without dropping,,DropResistance|WeaponRetention,Fatigue|Load,,1.0,Body/handling child
+ChildSkill,Skill,CarryCapacity,Strength,Lifting; carrying weight,,CarryWeight|LiftComfort,Fatigue|Load,,1.0,Strength child
+ChildSkill,Skill,HeavyHandling,Strength,Using heavy tools or weapons,,HeavyWeaponControl|SwingStability,Fatigue|Fear,,1.0,Strength child
+ChildSkill,Skill,PushPower,Strength,Pushing heavy objects,,PushForce|BumpForce,Fatigue|Load,,1.0,Strength child
+ChildSkill,Skill,LiftEndurance,Strength,Holding heavy objects over time,,HoldDuration|SustainedLift,Fatigue|Exhaustion,,1.0,Strength child
+ChildSkill,Skill,ClimbingPower,Strength,Climbing; hanging effort,,UpperBodyClimbForce,Fatigue|Load,,1.0,Strength child
+ChildSkill,Skill,WalkSpeed,Agility,General movement,,WalkSpeedOutput,Fatigue|Fear,,1.0,Can also be treated as output if desired
+ChildSkill,Skill,SprintSpeed,Agility,Sprinting,,"SprintSpeedOutput",Fatigue|Fear,,1.0,Parent raises floor
+ChildSkill,Skill,JumpHeight,Agility,Jumping; airtime,,JumpOutput,Fatigue|Load,,1.0,Parent raises floor
+ChildSkill,Skill,Dodge,Agility,Dodging; near misses,,DodgeResponse,Fatigue|Fear,,1.0,Future slice
+ChildSkill,Skill,Sliding,Agility,Sliding,,SlideControl,Fatigue|SurfaceState,,1.0,May also require tech
+ChildSkill,Skill,Clumsyness,Agility,Jumping; balance recovery; awkward movement,,TripResistance|DropResistance|RagdollResistance,Fatigue|Fear|BackwardSpeed|StepHeight|CloneDefects,,1.0,0 = most clumsy, 100 = least clumsy
+ChildSkill,Skill,SprintEndurance,Stamina,Sprinting,,SprintDuration,Exhaustion,,1.0,Child of stamina
+ChildSkill,Skill,BreathHolding,Stamina,Swimming; diving,,BreathTime,Exhaustion,,1.0,Child of stamina
+ChildSkill,Skill,SwimEndurance,Stamina,Swimming,,SwimControl,Exhaustion,,1.0,Child of stamina
+ChildSkill,Skill,HealthRegen,Recovery,Resting; surviving,,HealthRegenRate,Damage|Fear,,1.0,Could also be treated as output
+ChildSkill,Skill,StaminaRegen,Recovery,Resting; recovering,,StaminaRegenRate,Exhaustion|Fear,,1.0,Could also be treated as output
+ChildSkill,Skill,FatigueClearRate,Recovery,Recovering from exhaustion,,FatigueRecovery,Fear|CloneDefects,,1.0,Child of recovery
+State,Condition,Fatigue,,Overexertion,,TripChance|DropChance|ReloadMistakeChance,,,-1.0,Temporary state
+State,Condition,Exhaustion,,Severe fatigue,,MovementPenalty|TripChance,,,-1.0,Temporary state
+State,Condition,Fear,,Threat exposure,,MovementPenalty|HitPenalty|TripChance,,,-1.0,Temporary state
+State,Condition,Confidence,,Safety; equipment; allies,,Stability|Handling,,,-1.0,Temporary positive state
+Modifier,Context,BackwardSpeed,,Moving backward,,TripChance,,,-1.0,Context input
+Modifier,Context,StepHeight,,Terrain navigation,,TripChance,,,-1.0,Context input
+Modifier,Context,CarryLoad,,Heavy load,,DropChance|TripChance,,,-1.0,Context input
+Output,Derived,TripChance,,,"",TripChance,Fatigue|Fear|BackwardSpeed|StepHeight,,1.0,Final derived failure risk
+Output,Derived,DropChance,,,"",DropChance,Fatigue|CarryLoad|Fear,,1.0,Final derived failure risk
+Output,Derived,RagdollChance,,,"",RagdollChance,Fatigue|Fear|Impact,,1.0,Final derived failure risk
+Output,Derived,PickupForce,,Strength,PickupForceOutput,Fatigue,,1.0,Maps to current strength consumer
+Output,Derived,CarryDuration,,Strength,CarryDurationOutput,Fatigue|Exhaustion,,1.0,Future strength output
+Output,Derived,PushForce,,Strength,PushForceOutput,Fatigue|Load,,1.0,Can map to bumping / push-force style systems
+Output,Derived,TrolleyPower,,Strength,TrolleyPowerOutput,Fatigue|Load,,1.0,Strength-linked vehicle pushing
+Output,Derived,StaminaDrainWhileLifting,,Strength,LiftStaminaDrain,Fatigue|Exhaustion,,1.0,Usually inverse / efficiency style output
+Output,Derived,VisionLossChance,,Clumsyness,GlassesLoss|BlurEvents,SprintState|Falls,,1.0,For future glasses system

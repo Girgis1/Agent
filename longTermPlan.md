@@ -19,17 +19,65 @@
 □ Weight-based interaction gates
 ```
 
-## 📊 Experimental Design Space
-### Strength Progression Curves (Test in order)
-1. **Linear**: +1kg per 50kg lifted (simple)
-2. **Logarithmic**: Diminishing returns after 100kg
-3. **Realistic**: Human strength model validation
-4. **Chaotic**: Wild curves for emergent complexity
+## 📊 Character Variable System (0.1-100 → 10-10000 scale)
 
-### Movement Mechanics (Test modes)
-1. **Realistic physics** (literal human limits)
-2. **Game physics** (butter exacerbator fun)
-3. **Hybrid approach** (boundary sweet spots)
+### Core Variables (Integer 10-10000)
+```cpp
+float Strength = 100.0f;          // Base 10-10000 
+float Stamina = 100.0f;           // Energy pool
+float Speed = 100.0f;             // Movement velocity
+float JumpHeight = 100.0f;        // Vertical capacity
+float Clumsiness = 100.0f;        // Stability threshold
+float Recovery = 100.0f;          // Regeneration rate
+```
+
+### Interdependent Math Model
+**Strength ↔ All Stats:**
+```cpp
+Speed = max(Strength * 0.5f, Speed);          // Strength baseline for speed
+Stamina = max(Strength * 0.3f, Stamina);      // Endurance floor by strength
+JumpHeight = (Strength * JumpInfluence 0.2f) + JumpHeight;
+```
+
+### Progressive Influence Loops
+**Jump Cycles:**
+```cpp
+float jumpBonus = (TimeInAir * 0.001f) * JumpInfluence;  // Micro-strength gains
+JumpHeight += jumpBonus;
+Strength += jumpBonus * 0.1f;                            // Feedback loop
+```
+
+### Clumsiness & Recovery Dynamics
+**Movement Climate:**
+```cpp
+float startTripChance = min(Clumsiness * Velocity, 85.0f);   // Caps at 85%
+float stepHeightPenalty = StepHeight * 0.1f;                 // Elevation danger
+float totalTripChance = startTripChance + stepHeightPenalty;
+```
+
+### Recovery Spreadsheet
+```cpp
+float exhaustionLevel = Stamina / MaxStamina;
+RecoveryRate = min(10.0f, 100.0f - exhaustionLevel);          // Fast recovery when rest
+// Faster recovery when exhaustion > 70%
+```
+
+### UI Scale References
+```markdown
+Human Readings:
+- **Beginner**: 10 (clumsy, slow)
+- **Athletic**: 50 (quality baseline)
+- **Elite**: 100 (smooth, fast)
+- **World Record**: 10000 (absolute precision)
+```
+
+### Environment Physics
+**Surface Penalty:**
+- **Flat ground**: Trip 0.1% (extremely low)
+- **Uneven terrain**: Trip 25-50%  
+- **Backwards movement**: Trip probability += Velocity * 0.02
+- **Recovery time scales**: 1-10 seconds based on Stamina exhaustion
+```
 
 ## 🎯 Core Concepts Workshop
 ### Resource Strategy (Your choice)

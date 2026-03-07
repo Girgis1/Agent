@@ -3,7 +3,7 @@
 #include "Factory/StorageVolumeComponent.h"
 #include "Engine/Engine.h"
 #include "Factory/FactoryPayloadActor.h"
-#include "Factory/ResourceTypes.h"
+#include "Material/MaterialTypes.h"
 
 namespace
 {
@@ -114,3 +114,4 @@ int32 UStorageVolumeComponent::GetCurrentStoredQuantityScaled() const
 {
 	return TotalStoredQuantityScaled;
 }
+

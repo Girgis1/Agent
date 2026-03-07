@@ -5,7 +5,7 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Factory/FactoryPayloadActor.h"
-#include "Factory/ResourceTypes.h"
+#include "Material/MaterialTypes.h"
 
 UMachineOutputVolumeComponent::UMachineOutputVolumeComponent()
 {
@@ -228,3 +228,4 @@ bool UMachineOutputVolumeComponent::TryEmitOnePayload()
 
 	return false;
 }
+

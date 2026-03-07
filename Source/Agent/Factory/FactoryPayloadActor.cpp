@@ -2,8 +2,8 @@
 
 #include "Factory/FactoryPayloadActor.h"
 #include "Components/StaticMeshComponent.h"
-#include "Factory/ResourceComponent.h"
-#include "Factory/ResourceTypes.h"
+#include "Material/MaterialComponent.h"
+#include "Material/MaterialTypes.h"
 #include "UObject/ConstructorHelpers.h"
 
 AFactoryPayloadActor::AFactoryPayloadActor()
@@ -29,7 +29,7 @@ AFactoryPayloadActor::AFactoryPayloadActor()
 		PayloadMesh->SetStaticMesh(PayloadMeshAsset.Object);
 	}
 
-	ResourceData = CreateDefaultSubobject<UResourceComponent>(TEXT("ResourceData"));
+	ResourceData = CreateDefaultSubobject<UMaterialComponent>(TEXT("ResourceData"));
 }
 
 void AFactoryPayloadActor::BeginPlay()
@@ -96,3 +96,4 @@ void AFactoryPayloadActor::SetPayloadResource(const FResourceAmount& NewPayloadR
 		ResourcePayload.SetWholeUnits(DefaultPayloadUnits);
 	}
 }
+

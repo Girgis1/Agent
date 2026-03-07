@@ -58,6 +58,18 @@ ATrolleyVehiclePawn::ATrolleyVehiclePawn()
 	DriverAttachPoint->SetupAttachment(PhysicsBody);
 	DriverAttachPoint->SetRelativeLocation(FVector(-105.0f, 0.0f, 64.0f));
 
+	HandleLeftPoint = CreateDefaultSubobject<USceneComponent>(TEXT("HandleLeftPoint"));
+	HandleLeftPoint->SetupAttachment(PhysicsBody);
+	HandleLeftPoint->SetRelativeLocation(FVector(-52.0f, -24.0f, 96.0f));
+
+	HandleRightPoint = CreateDefaultSubobject<USceneComponent>(TEXT("HandleRightPoint"));
+	HandleRightPoint->SetupAttachment(PhysicsBody);
+	HandleRightPoint->SetRelativeLocation(FVector(-52.0f, 24.0f, 96.0f));
+
+	DriverChestTargetPoint = CreateDefaultSubobject<USceneComponent>(TEXT("DriverChestTargetPoint"));
+	DriverChestTargetPoint->SetupAttachment(PhysicsBody);
+	DriverChestTargetPoint->SetRelativeLocation(FVector(-72.0f, 0.0f, 96.0f));
+
 	CargoMassVolume = CreateDefaultSubobject<UBoxComponent>(TEXT("CargoMassVolume"));
 	CargoMassVolume->SetupAttachment(PhysicsBody);
 	CargoMassVolume->SetBoxExtent(CargoVolumeExtent);
@@ -81,9 +93,13 @@ ATrolleyVehiclePawn::ATrolleyVehiclePawn()
 	VehicleSeatComponent->DriverAttachPoint = DriverAttachPoint;
 	VehicleSeatComponent->bUsePossessionFlow = false;
 	VehicleSeatComponent->bAttachDriverToVehicle = true;
-	VehicleSeatComponent->bDisableDriverMovementWhileSeated = true;
+	VehicleSeatComponent->bDisableDriverMovementWhileSeated = false;
 	VehicleSeatComponent->bHideDriverWhileSeated = false;
-	VehicleSeatComponent->bDisableDriverCollisionWhileSeated = true;
+	VehicleSeatComponent->bDisableDriverCollisionWhileSeated = false;
+	VehicleSeatComponent->bUseCollisionAwareDriverSync = true;
+	VehicleSeatComponent->bFollowSeatVerticalAxis = false;
+	VehicleSeatComponent->bForceExitWhenDriverBlocked = true;
+	VehicleSeatComponent->DriverBlockedExitDistance = 45.0f;
 
 	CargoMassVolume->OnComponentBeginOverlap.AddDynamic(this, &ATrolleyVehiclePawn::OnCargoBeginOverlap);
 	CargoMassVolume->OnComponentEndOverlap.AddDynamic(this, &ATrolleyVehiclePawn::OnCargoEndOverlap);
@@ -92,6 +108,23 @@ ATrolleyVehiclePawn::ATrolleyVehiclePawn()
 void ATrolleyVehiclePawn::BeginPlay()
 {
 	Super::BeginPlay();
+
+	if (VehicleSeatComponent)
+	{
+		// Re-apply seat settings at runtime so placed BP instances cannot drift onto stale defaults.
+		VehicleSeatComponent->SeatPoint = SeatPoint;
+		VehicleSeatComponent->ExitPoint = ExitPoint;
+		VehicleSeatComponent->DriverAttachPoint = DriverAttachPoint;
+		VehicleSeatComponent->bUsePossessionFlow = false;
+		VehicleSeatComponent->bAttachDriverToVehicle = true;
+		VehicleSeatComponent->bDisableDriverMovementWhileSeated = false;
+		VehicleSeatComponent->bHideDriverWhileSeated = false;
+		VehicleSeatComponent->bDisableDriverCollisionWhileSeated = false;
+		VehicleSeatComponent->bUseCollisionAwareDriverSync = true;
+		VehicleSeatComponent->bFollowSeatVerticalAxis = false;
+		VehicleSeatComponent->bForceExitWhenDriverBlocked = true;
+		VehicleSeatComponent->DriverBlockedExitDistance = 45.0f;
+	}
 
 	TipOverElapsed = 0.0f;
 	TipOverRetryCooldownRemaining = 0.0f;
@@ -595,4 +628,76 @@ void ATrolleyVehiclePawn::OnSteeringAxis(float Value)
 {
 	SteeringAxisValue = FMath::Clamp(Value, -1.0f, 1.0f);
 	ApplyDriveInput();
+}
+
+FVector ATrolleyVehiclePawn::GetDriverAttachPointLocation() const
+{
+	return DriverAttachPoint ? DriverAttachPoint->GetComponentLocation() : GetActorLocation();
+}
+
+FTransform ATrolleyVehiclePawn::GetDriverAttachPointTransform() const
+{
+	return DriverAttachPoint ? DriverAttachPoint->GetComponentTransform() : GetActorTransform();
+}
+
+FVector ATrolleyVehiclePawn::GetHandleLeftPointLocation() const
+{
+	return HandleLeftPoint
+		? HandleLeftPoint->GetComponentLocation()
+		: (DriverAttachPoint ? DriverAttachPoint->GetComponentLocation() : GetActorLocation());
+}
+
+FTransform ATrolleyVehiclePawn::GetHandleLeftPointTransform() const
+{
+	return HandleLeftPoint
+		? HandleLeftPoint->GetComponentTransform()
+		: GetDriverAttachPointTransform();
+}
+
+FVector ATrolleyVehiclePawn::GetHandleRightPointLocation() const
+{
+	return HandleRightPoint
+		? HandleRightPoint->GetComponentLocation()
+		: (DriverAttachPoint ? DriverAttachPoint->GetComponentLocation() : GetActorLocation());
+}
+
+FTransform ATrolleyVehiclePawn::GetHandleRightPointTransform() const
+{
+	return HandleRightPoint
+		? HandleRightPoint->GetComponentTransform()
+		: GetDriverAttachPointTransform();
+}
+
+FVector ATrolleyVehiclePawn::GetDriverChestTargetLocation() const
+{
+	return DriverChestTargetPoint
+		? DriverChestTargetPoint->GetComponentLocation()
+		: (DriverAttachPoint ? DriverAttachPoint->GetComponentLocation() : GetActorLocation());
+}
+
+FTransform ATrolleyVehiclePawn::GetDriverChestTargetTransform() const
+{
+	return DriverChestTargetPoint
+		? DriverChestTargetPoint->GetComponentTransform()
+		: GetDriverAttachPointTransform();
+}
+
+FVector ATrolleyVehiclePawn::GetPhysicsBodyLinearVelocity() const
+{
+	if (PhysicsBody && PhysicsBody->IsSimulatingPhysics())
+	{
+		return PhysicsBody->GetPhysicsLinearVelocity();
+	}
+
+	return GetVelocity();
+}
+
+FVector ATrolleyVehiclePawn::GetPhysicsBodyAngularVelocityDeg() const
+{
+	if (PhysicsBody && PhysicsBody->IsSimulatingPhysics())
+	{
+		return PhysicsBody->GetPhysicsAngularVelocityInDegrees();
+	}
+
+	return FVector::ZeroVector;
 }

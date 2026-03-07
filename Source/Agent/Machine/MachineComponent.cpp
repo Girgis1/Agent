@@ -2,16 +2,18 @@
 
 #include "Machine/MachineComponent.h"
 #include "Components/PrimitiveComponent.h"
-#include "Factory/ResourceDefinitionAsset.h"
-#include "Factory/ResourceTypes.h"
+#include "Material/MaterialDefinitionAsset.h"
+#include "Material/MaterialTypes.h"
 #include "Machine/InputVolume.h"
 #include "Machine/OutputVolume.h"
-#include "Machine/RecipeAsset.h"
+#include "Material/RecipeAsset.h"
 #include "UObject/UObjectIterator.h"
 #include <limits>
 
 namespace
 {
+const TCHAR* RecipeClassOutputPrefix = TEXT("__RecipeClassOutput__:");
+
 FString FormatUnitsText(int32 QuantityScaled)
 {
 	const float Units = AgentResource::ScaledToUnits(FMath::Max(0, QuantityScaled));
@@ -23,24 +25,14 @@ FString FormatUnitsText(int32 QuantityScaled)
 	return FString::Printf(TEXT("%.2f"), Units);
 }
 
-bool IsGenericMachineTag(const FName& MachineTag)
+FName BuildRecipeClassOutputKey(const UClass* OutputClass)
 {
-	return MachineTag.IsNone() || MachineTag == TEXT("Machine");
-}
-
-bool IsRecipeAllowedForMachineTag(const FName& AllowedMachineTag, const FName& MachineTag)
-{
-	if (AllowedMachineTag.IsNone())
+	if (!OutputClass)
 	{
-		return true;
+		return NAME_None;
 	}
 
-	if (IsGenericMachineTag(MachineTag))
-	{
-		return true;
-	}
-
-	return AllowedMachineTag == MachineTag;
+	return FName(*FString::Printf(TEXT("%s%s"), RecipeClassOutputPrefix, *OutputClass->GetPathName()));
 }
 }
 
@@ -136,13 +128,8 @@ void UMachineComponent::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 		{
 			WaitingReason = TEXT("Recipe is invalid");
 		}
-		else if (!IsRecipeAllowedForMachineTag(PreviewRecipe.AllowedMachineTag, MachineTag))
-		{
-			WaitingReason = FString::Printf(TEXT("Tag mismatch (%s != %s)"), *PreviewRecipe.AllowedMachineTag.ToString(), *MachineTag.ToString());
-		}
 		else
 		{
-			bool bMissingExplicitInput = false;
 			for (const TPair<FName, int32>& RequiredPair : PreviewRecipe.InputScaled)
 			{
 				const int32 RequiredScaled = FMath::Max(0, RequiredPair.Value);
@@ -154,32 +141,7 @@ void UMachineComponent::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 
 				const int32 MissingScaled = RequiredScaled - HaveScaled;
 				WaitingReason = FString::Printf(TEXT("Need %s %s"), *FormatUnitsText(MissingScaled), *RequiredPair.Key.ToString());
-				bMissingExplicitInput = true;
 				break;
-			}
-
-			if (!bMissingExplicitInput)
-			{
-				for (const TPair<FName, int32>& GroupPair : PreviewRecipe.InputGroupsScaled)
-				{
-					const FName GroupId = GroupPair.Key;
-					const int32 RequiredScaled = FMath::Max(0, GroupPair.Value);
-					if (GroupId.IsNone() || RequiredScaled <= 0)
-					{
-						continue;
-					}
-
-					const double RequiredEquivalentUnits = static_cast<double>(AgentResource::ScaledToUnits(RequiredScaled));
-					const double AvailableEquivalentUnits = GetAvailableEquivalentUnitsForGroup(GroupId);
-					if (AvailableEquivalentUnits + KINDA_SMALL_NUMBER >= RequiredEquivalentUnits)
-					{
-						continue;
-					}
-
-					const double MissingEquivalentUnits = FMath::Max(0.0, RequiredEquivalentUnits - AvailableEquivalentUnits);
-					WaitingReason = FString::Printf(TEXT("Need %.2f %s equivalent"), MissingEquivalentUnits, *GroupId.ToString());
-					break;
-				}
 			}
 		}
 	}
@@ -337,7 +299,6 @@ void UMachineComponent::ClearStoredResources()
 {
 	StoredResourcesScaled.Reset();
 	TotalStoredScaled = 0;
-	CurrentCraftByproductsScaled.Reset();
 	ApplyStoredMassToOwner();
 }
 
@@ -382,7 +343,7 @@ bool UMachineComponent::IsResourceAllowed(FName ResourceId) const
 	if (bUseWhitelist)
 	{
 		bool bFoundInWhitelist = false;
-		for (const UResourceDefinitionAsset* Definition : WhitelistResources)
+		for (const UMaterialDefinitionAsset* Definition : WhitelistResources)
 		{
 			if (Definition && Definition->GetResolvedResourceId() == ResourceId)
 			{
@@ -399,7 +360,7 @@ bool UMachineComponent::IsResourceAllowed(FName ResourceId) const
 
 	if (bUseBlacklist)
 	{
-		for (const UResourceDefinitionAsset* Definition : BlacklistResources)
+		for (const UMaterialDefinitionAsset* Definition : BlacklistResources)
 		{
 			if (Definition && Definition->GetResolvedResourceId() == ResourceId)
 			{
@@ -459,14 +420,31 @@ bool UMachineComponent::BuildRecipeView(const URecipeAsset* RecipeAsset, FRecipe
 			return false;
 		}
 
-		OutRecipeView.AllowedMachineTag = Recipe->AllowedMachineTag;
 		OutRecipeView.CraftTimeSeconds = Recipe->GetResolvedCraftTimeSeconds();
 		Recipe->BuildInputRequirementsScaled(OutRecipeView.InputScaled);
-		Recipe->BuildInputGroupRequirementsScaled(OutRecipeView.InputGroupsScaled);
-		Recipe->BuildOutputAmountsScaled(OutRecipeView.OutputScaled);
-		OutRecipeView.bConvertOtherInputsToScrap = Recipe->bConvertOtherInputsToScrap;
-		OutRecipeView.ScrapRecoveryScalar = FMath::Max(0.0f, Recipe->ScrapRecoveryScalar);
-		const bool bHasRecipeInput = OutRecipeView.InputScaled.Num() > 0 || OutRecipeView.InputGroupsScaled.Num() > 0;
+		OutRecipeView.OutputScaled.Reset();
+		OutRecipeView.OutputActorClassByResourceId.Reset();
+		TArray<TSubclassOf<AActor>> ResolvedOutputActorClasses;
+		Recipe->BuildResolvedOutputs(ResolvedOutputActorClasses);
+
+		for (const TSubclassOf<AActor>& OutputActorClass : ResolvedOutputActorClasses)
+		{
+			if (!OutputActorClass.Get())
+			{
+				continue;
+			}
+
+			const FName OutputResourceId = BuildRecipeClassOutputKey(OutputActorClass.Get());
+			if (OutputResourceId.IsNone())
+			{
+				continue;
+			}
+
+			OutRecipeView.OutputScaled.FindOrAdd(OutputResourceId) += AgentResource::WholeUnitsToScaled(1);
+			OutRecipeView.OutputActorClassByResourceId.FindOrAdd(OutputResourceId) = OutputActorClass;
+		}
+
+		const bool bHasRecipeInput = OutRecipeView.InputScaled.Num() > 0;
 		OutRecipeView.bIsValid = bHasRecipeInput && OutRecipeView.OutputScaled.Num() > 0;
 		return OutRecipeView.bIsValid;
 	}
@@ -474,21 +452,21 @@ bool UMachineComponent::BuildRecipeView(const URecipeAsset* RecipeAsset, FRecipe
 	return false;
 }
 
-const UResourceDefinitionAsset* UMachineComponent::ResolveResourceDefinition(FName ResourceId) const
+const UMaterialDefinitionAsset* UMachineComponent::ResolveResourceDefinition(FName ResourceId) const
 {
 	if (ResourceId.IsNone())
 	{
 		return nullptr;
 	}
 
-	if (const TObjectPtr<UResourceDefinitionAsset>* FoundDefinition = ResourceDefinitionById.Find(ResourceId))
+	if (const TObjectPtr<UMaterialDefinitionAsset>* FoundDefinition = ResourceDefinitionById.Find(ResourceId))
 	{
 		return FoundDefinition->Get();
 	}
 
-	for (TObjectIterator<UResourceDefinitionAsset> It; It; ++It)
+	for (TObjectIterator<UMaterialDefinitionAsset> It; It; ++It)
 	{
-		UResourceDefinitionAsset* Definition = *It;
+		UMaterialDefinitionAsset* Definition = *It;
 		if (!Definition || Definition->GetResolvedResourceId() != ResourceId)
 		{
 			continue;
@@ -502,267 +480,9 @@ const UResourceDefinitionAsset* UMachineComponent::ResolveResourceDefinition(FNa
 	return nullptr;
 }
 
-float UMachineComponent::GetResourceEquivalentPerUnit(FName ResourceId) const
-{
-	if (const UResourceDefinitionAsset* Definition = ResolveResourceDefinition(ResourceId))
-	{
-		return Definition->GetRefiningEquivalentPerUnit();
-	}
-
-	return 0.0f;
-}
-
-FName UMachineComponent::GetResourceRefiningGroup(FName ResourceId) const
-{
-	if (const UResourceDefinitionAsset* Definition = ResolveResourceDefinition(ResourceId))
-	{
-		return Definition->GetRefiningGroup();
-	}
-
-	return NAME_None;
-}
-
-double UMachineComponent::GetAvailableEquivalentUnitsForGroup(FName GroupId) const
-{
-	if (GroupId.IsNone())
-	{
-		return 0.0;
-	}
-
-	double TotalEquivalentUnits = 0.0;
-	for (const TPair<FName, int32>& StoredPair : StoredResourcesScaled)
-	{
-		const FName ResourceId = StoredPair.Key;
-		const int32 QuantityScaled = FMath::Max(0, StoredPair.Value);
-		if (QuantityScaled <= 0)
-		{
-			continue;
-		}
-
-		if (GetResourceRefiningGroup(ResourceId) != GroupId)
-		{
-			continue;
-		}
-
-		const float EquivalentPerUnit = GetResourceEquivalentPerUnit(ResourceId);
-		if (EquivalentPerUnit <= KINDA_SMALL_NUMBER)
-		{
-			continue;
-		}
-
-		TotalEquivalentUnits += static_cast<double>(AgentResource::ScaledToUnits(QuantityScaled)) * static_cast<double>(EquivalentPerUnit);
-	}
-
-	return TotalEquivalentUnits;
-}
-
-bool UMachineComponent::CanSatisfyGroupRequirements(const TMap<FName, int32>& GroupRequirementsScaled) const
-{
-	for (const TPair<FName, int32>& GroupRequirement : GroupRequirementsScaled)
-	{
-		const FName GroupId = GroupRequirement.Key;
-		const int32 RequiredScaled = FMath::Max(0, GroupRequirement.Value);
-		if (GroupId.IsNone() || RequiredScaled <= 0)
-		{
-			continue;
-		}
-
-		const double RequiredEquivalentUnits = static_cast<double>(AgentResource::ScaledToUnits(RequiredScaled));
-		const double AvailableEquivalentUnits = GetAvailableEquivalentUnitsForGroup(GroupId);
-		if (AvailableEquivalentUnits + KINDA_SMALL_NUMBER < RequiredEquivalentUnits)
-		{
-			return false;
-		}
-	}
-
-	return true;
-}
-
-bool UMachineComponent::ConsumeGroupRequirements(const TMap<FName, int32>& GroupRequirementsScaled)
-{
-	TArray<FName> GroupIds;
-	GroupRequirementsScaled.GetKeys(GroupIds);
-	GroupIds.Sort([](const FName& Left, const FName& Right)
-	{
-		return Left.LexicalLess(Right);
-	});
-
-	for (const FName& GroupId : GroupIds)
-	{
-		const int32 RequiredScaled = FMath::Max(0, GroupRequirementsScaled.FindRef(GroupId));
-		if (GroupId.IsNone() || RequiredScaled <= 0)
-		{
-			continue;
-		}
-
-		double RemainingEquivalentUnits = static_cast<double>(AgentResource::ScaledToUnits(RequiredScaled));
-
-		struct FGroupCandidate
-		{
-			FName ResourceId = NAME_None;
-			float EquivalentPerUnit = 0.0f;
-		};
-
-		TArray<FGroupCandidate> Candidates;
-		for (const TPair<FName, int32>& StoredPair : StoredResourcesScaled)
-		{
-			const FName ResourceId = StoredPair.Key;
-			const int32 QuantityScaled = FMath::Max(0, StoredPair.Value);
-			if (QuantityScaled <= 0 || GetResourceRefiningGroup(ResourceId) != GroupId)
-			{
-				continue;
-			}
-
-			const float EquivalentPerUnit = GetResourceEquivalentPerUnit(ResourceId);
-			if (EquivalentPerUnit <= KINDA_SMALL_NUMBER)
-			{
-				continue;
-			}
-
-			FGroupCandidate Candidate;
-			Candidate.ResourceId = ResourceId;
-			Candidate.EquivalentPerUnit = EquivalentPerUnit;
-			Candidates.Add(Candidate);
-		}
-
-		Candidates.Sort([](const FGroupCandidate& Left, const FGroupCandidate& Right)
-		{
-			if (!FMath::IsNearlyEqual(Left.EquivalentPerUnit, Right.EquivalentPerUnit))
-			{
-				return Left.EquivalentPerUnit > Right.EquivalentPerUnit;
-			}
-
-			return Left.ResourceId.LexicalLess(Right.ResourceId);
-		});
-
-		for (const FGroupCandidate& Candidate : Candidates)
-		{
-			const int32 AvailableScaled = FMath::Max(0, StoredResourcesScaled.FindRef(Candidate.ResourceId));
-			if (AvailableScaled <= 0 || RemainingEquivalentUnits <= KINDA_SMALL_NUMBER)
-			{
-				continue;
-			}
-
-			const double AvailableUnits = static_cast<double>(AgentResource::ScaledToUnits(AvailableScaled));
-			const double UnitsNeeded = RemainingEquivalentUnits / static_cast<double>(Candidate.EquivalentPerUnit);
-			const double UnitsToConsume = FMath::Min(AvailableUnits, UnitsNeeded);
-
-			int32 ConsumeScaled = FMath::Min(AvailableScaled, AgentResource::UnitsToScaled(static_cast<float>(UnitsToConsume)));
-			if (ConsumeScaled <= 0 && AvailableScaled > 0)
-			{
-				ConsumeScaled = 1;
-			}
-
-			if (ConsumeScaled <= 0)
-			{
-				continue;
-			}
-
-			if (!ConsumeResourceScaled(Candidate.ResourceId, ConsumeScaled))
-			{
-				return false;
-			}
-
-			const double ConsumedUnits = static_cast<double>(AgentResource::ScaledToUnits(ConsumeScaled));
-			RemainingEquivalentUnits -= ConsumedUnits * static_cast<double>(Candidate.EquivalentPerUnit);
-		}
-
-		if (RemainingEquivalentUnits > 0.001)
-		{
-			return false;
-		}
-	}
-
-	return true;
-}
-
-void UMachineComponent::ExtractOtherResourcesAsScrap(const FRecipeView& RecipeView, TMap<FName, int32>& OutScrapByproductScaled)
-{
-	OutScrapByproductScaled.Reset();
-
-	TSet<FName> RecipeInputResources;
-	for (const TPair<FName, int32>& InputPair : RecipeView.InputScaled)
-	{
-		if (!InputPair.Key.IsNone())
-		{
-			RecipeInputResources.Add(InputPair.Key);
-		}
-	}
-
-	TSet<FName> RecipeInputGroups;
-	for (const TPair<FName, int32>& GroupPair : RecipeView.InputGroupsScaled)
-	{
-		if (!GroupPair.Key.IsNone())
-		{
-			RecipeInputGroups.Add(GroupPair.Key);
-		}
-	}
-
-	TArray<FName> StoredResourceIds;
-	StoredResourcesScaled.GetKeys(StoredResourceIds);
-	StoredResourceIds.Sort([](const FName& Left, const FName& Right)
-	{
-		return Left.LexicalLess(Right);
-	});
-
-	const float ScrapScalar = FMath::Max(0.0f, RecipeView.ScrapRecoveryScalar);
-	for (const FName& StoredResourceId : StoredResourceIds)
-	{
-		const int32 QuantityScaled = FMath::Max(0, StoredResourcesScaled.FindRef(StoredResourceId));
-		if (StoredResourceId.IsNone() || QuantityScaled <= 0)
-		{
-			continue;
-		}
-
-		if (RecipeInputResources.Contains(StoredResourceId))
-		{
-			continue;
-		}
-
-		const FName ResourceGroup = GetResourceRefiningGroup(StoredResourceId);
-		if (!ResourceGroup.IsNone() && RecipeInputGroups.Contains(ResourceGroup))
-		{
-			continue;
-		}
-
-		if (!ConsumeResourceScaled(StoredResourceId, QuantityScaled))
-		{
-			continue;
-		}
-
-		FName ScrapResourceId = StoredResourceId;
-		float ScrapUnitsPerUnit = 1.0f;
-		if (const UResourceDefinitionAsset* Definition = ResolveResourceDefinition(StoredResourceId))
-		{
-			ScrapResourceId = Definition->GetResolvedScrapResourceId();
-			ScrapUnitsPerUnit = Definition->GetScrapUnitsPerUnit();
-		}
-
-		if (ScrapResourceId.IsNone())
-		{
-			continue;
-		}
-
-		const float SourceUnits = AgentResource::ScaledToUnits(QuantityScaled);
-		const float ScrapUnits = SourceUnits * FMath::Max(0.0f, ScrapUnitsPerUnit) * ScrapScalar;
-		const int32 ScrapScaled = AgentResource::UnitsToScaled(ScrapUnits);
-		if (ScrapScaled <= 0)
-		{
-			continue;
-		}
-
-		OutScrapByproductScaled.FindOrAdd(ScrapResourceId) += ScrapScaled;
-	}
-}
-
 bool UMachineComponent::CanCraftRecipe(const FRecipeView& RecipeView) const
 {
 	if (!RecipeView.bIsValid)
-	{
-		return false;
-	}
-
-	if (!IsRecipeAllowedForMachineTag(RecipeView.AllowedMachineTag, MachineTag))
 	{
 		return false;
 	}
@@ -774,11 +494,6 @@ bool UMachineComponent::CanCraftRecipe(const FRecipeView& RecipeView) const
 		{
 			return false;
 		}
-	}
-
-	if (!CanSatisfyGroupRequirements(RecipeView.InputGroupsScaled))
-	{
-		return false;
 	}
 
 	return true;
@@ -844,18 +559,6 @@ bool UMachineComponent::TryStartCraft(const FRecipeView& RecipeView)
 		}
 	}
 
-	if (!ConsumeGroupRequirements(RecipeView.InputGroupsScaled))
-	{
-		SetRuntimeState(EMachineRuntimeState::Error, TEXT("Failed consuming grouped recipe input"));
-		return false;
-	}
-
-	CurrentCraftByproductsScaled.Reset();
-	if (RecipeView.bConvertOtherInputsToScrap)
-	{
-		ExtractOtherResourcesAsScrap(RecipeView, CurrentCraftByproductsScaled);
-	}
-
 	CurrentCraftRecipe = RecipeView;
 	CurrentCraftElapsedSeconds = 0.0f;
 	CurrentCraftDurationSeconds = FMath::Max(KINDA_SMALL_NUMBER, RecipeView.CraftTimeSeconds) / FMath::Max(0.01f, Speed);
@@ -890,22 +593,16 @@ void UMachineComponent::CompleteCraft()
 		}
 
 		PendingOutputScaled.FindOrAdd(ResourceId) += QuantityScaled;
-	}
-
-	for (const TPair<FName, int32>& ByproductPair : CurrentCraftByproductsScaled)
-	{
-		const FName ResourceId = ByproductPair.Key;
-		const int32 QuantityScaled = FMath::Max(0, ByproductPair.Value);
-		if (ResourceId.IsNone() || QuantityScaled <= 0)
+		if (const TSubclassOf<AActor>* OutputActorClass = CurrentCraftRecipe.OutputActorClassByResourceId.Find(ResourceId))
 		{
-			continue;
+			if (OutputActorClass->Get())
+			{
+				PendingOutputActorClassByResourceId.FindOrAdd(ResourceId) = *OutputActorClass;
+			}
 		}
-
-		PendingOutputScaled.FindOrAdd(ResourceId) += QuantityScaled;
 	}
 
 	CurrentCraftRecipe = {};
-	CurrentCraftByproductsScaled.Reset();
 	CurrentCraftElapsedSeconds = 0.0f;
 	CurrentCraftDurationSeconds = 0.0f;
 
@@ -946,14 +643,17 @@ void UMachineComponent::FlushPendingOutput()
 		if (QuantityScaled <= 0)
 		{
 			PendingOutputScaled.Remove(ResourceId);
+			PendingOutputActorClassByResourceId.Remove(ResourceId);
 			continue;
 		}
 
-		const int32 AcceptedScaled = OutputVolume->QueueResourceScaled(ResourceId, QuantityScaled);
+		const TSubclassOf<AActor> OutputActorClassOverride = PendingOutputActorClassByResourceId.FindRef(ResourceId);
+		const int32 AcceptedScaled = OutputVolume->QueueResourceScaled(ResourceId, QuantityScaled, OutputActorClassOverride);
 		*FoundQuantityScaled = FMath::Max(0, QuantityScaled - AcceptedScaled);
 		if (*FoundQuantityScaled == 0)
 		{
 			PendingOutputScaled.Remove(ResourceId);
+			PendingOutputActorClassByResourceId.Remove(ResourceId);
 		}
 	}
 }
@@ -969,12 +669,12 @@ void UMachineComponent::RebuildResourceMassLookup()
 	ResourceMassPerUnitKgById.Reset();
 	ResourceDefinitionById.Reset();
 
-	for (const UResourceDefinitionAsset* Definition : WhitelistResources)
+	for (const UMaterialDefinitionAsset* Definition : WhitelistResources)
 	{
 		RegisterResourceMass(Definition);
 	}
 
-	for (const UResourceDefinitionAsset* Definition : BlacklistResources)
+	for (const UMaterialDefinitionAsset* Definition : BlacklistResources)
 	{
 		RegisterResourceMass(Definition);
 	}
@@ -984,27 +684,22 @@ void UMachineComponent::RebuildResourceMassLookup()
 		const URecipeAsset* Recipe = RecipeAssetPtr.Get();
 		if (Recipe)
 		{
-			for (const FRecipeResourceEntry& Entry : Recipe->Inputs)
+			for (const FRecipeMaterialInputEntry& Entry : Recipe->Inputs)
 			{
-				RegisterResourceMass(Entry.Resource);
-			}
-
-			for (const FRecipeResourceEntry& Entry : Recipe->Outputs)
-			{
-				RegisterResourceMass(Entry.Resource);
+				RegisterResourceMass(Entry.Material);
 			}
 
 			continue;
 		}
 	}
 
-	for (TObjectIterator<UResourceDefinitionAsset> It; It; ++It)
+	for (TObjectIterator<UMaterialDefinitionAsset> It; It; ++It)
 	{
 		RegisterResourceMass(*It);
 	}
 }
 
-void UMachineComponent::RegisterResourceMass(const UResourceDefinitionAsset* ResourceDefinition)
+void UMachineComponent::RegisterResourceMass(const UMaterialDefinitionAsset* ResourceDefinition)
 {
 	if (!ResourceDefinition)
 	{
@@ -1017,7 +712,7 @@ void UMachineComponent::RegisterResourceMass(const UResourceDefinitionAsset* Res
 		return;
 	}
 
-	ResourceDefinitionById.Add(ResourceId, const_cast<UResourceDefinitionAsset*>(ResourceDefinition));
+	ResourceDefinitionById.Add(ResourceId, const_cast<UMaterialDefinitionAsset*>(ResourceDefinition));
 	ResourceMassPerUnitKgById.Add(ResourceId, ResourceDefinition->GetMassPerUnitKg());
 }
 
@@ -1033,7 +728,7 @@ float UMachineComponent::ResolveResourceMassPerUnitKg(FName ResourceId) const
 		return FMath::Max(0.0f, *FoundMass);
 	}
 
-	if (const UResourceDefinitionAsset* Definition = ResolveResourceDefinition(ResourceId))
+	if (const UMaterialDefinitionAsset* Definition = ResolveResourceDefinition(ResourceId))
 	{
 		const float MassPerUnitKg = Definition->GetMassPerUnitKg();
 		ResourceMassPerUnitKgById.Add(ResourceId, MassPerUnitKg);
@@ -1092,3 +787,4 @@ float UMachineComponent::ComputeStoredMassKg() const
 
 	return TotalMassKg;
 }
+

@@ -3,12 +3,12 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Factory/ResourceTypes.h"
+#include "Material/MaterialTypes.h"
 #include "GameFramework/Actor.h"
 #include "FactoryPayloadActor.generated.h"
 
 class UStaticMeshComponent;
-class UResourceComponent;
+class UMaterialComponent;
 
 UCLASS()
 class AFactoryPayloadActor : public AActor
@@ -39,7 +39,7 @@ public:
 	TObjectPtr<UStaticMeshComponent> PayloadMesh = nullptr;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Payload")
-	TObjectPtr<UResourceComponent> ResourceData = nullptr;
+	TObjectPtr<UMaterialComponent> ResourceData = nullptr;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Payload")
 	FName PayloadType = TEXT("Metal");
@@ -69,3 +69,4 @@ protected:
 	virtual void BeginPlay() override;
 	void ApplyRandomizedScaleAndMass();
 };
+

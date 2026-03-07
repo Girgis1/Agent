@@ -254,6 +254,323 @@
 - Guardrail for future edits: in any drone mode where character look input is locked (`Complex`, `Horizon`, `Horizon + Hover`, and `Simple`), never drive planar movement from `GetControlRotation()` / `ViewReferenceRotation`. That frame freezes when look is locked and makes the drone feel world-locked. Use the drone body's yaw (or the live drone camera yaw if camera yaw is ever decoupled) as the movement frame instead. `Free Fly` and `Map` are the exceptions because they intentionally use view-driven movement.
 - Speed rule for the main piloted modes: keep the user-facing max speed aligned at `2600` uu/s unless they explicitly ask for a different cap. That currently applies to the rigid-body clamp, `Simple`, `Free Fly`, and map translation speeds. `BuddyFollow` is intentionally exempt because it has its own slower return cap.
 
+## Planned Skills System
+- Long-term direction: build skills as a reusable gameplay module/component so the same system can be attached to the player, drone, enemies, or future actors instead of hard-coding progression into `AAgentCharacter`.
+- Working artifacts for this design now live in:
+  - `SKILLS_VISUAL_MAP.md`
+  - `SKILLS_TUNING_MATRIX.csv`
+- Skills should support both patterns:
+  - an actor can simply not have a given skill at all
+  - a defined skill can also be temporarily enabled / disabled if gameplay needs that later
+- Progression direction:
+  - all skill growth is earned through play
+  - no automatic "use it or lose it" decay
+  - death may apply a penalty later, but that penalty design is still open
+- Authoring scale:
+  - designer-facing values should stay human-readable in the `0.1` to `100.0` range
+  - runtime storage should likely use scaled integers in the `10` to `10000` range for deterministic math and easier save serialization
+- Draft skill value model per skill:
+  - preferred workshop model currently is:
+    - `SkillTotalMin`: absolute lower bound for that skill on the actor
+    - `SkillTotalMax`: absolute upper bound for that skill on the actor
+    - `SkillMin`: current minimum range value after progression, traits, equipment, and skill influences
+    - `SkillMax`: current maximum range value after progression, traits, equipment, and skill influences
+    - `SkillLevel`: current actual skill value inside the current min / max range
+  - naming note:
+    - the designer prefers `Min` / `Max` over `Floor` / `Ceiling`
+  - important workshop clarification:
+    - if authoring examples look like:
+      - `SkillTotalMin = 0.1`
+      - `SkillTotalMax = 100.0`
+      - `SkillLevel = 10`
+      - `SkillMin = -5`
+      - `SkillMax = +5`
+    - then `SkillMin` / `SkillMax` may really be acting like tunable range offsets or influence adjustments, not final resolved minimum / maximum values
+    - if that interpretation holds, the implementation may eventually need two layers:
+      - authored modifiers / offsets
+      - resolved current min / max values
+    - do not lock this distinction yet until the tuning workflow feels right
+  - likely resolved runtime rule once semantics are finalized:
+    - hard clamp against `SkillTotalMin` / `SkillTotalMax`
+    - resolve current `SkillMin` / `SkillMax`
+    - clamp `SkillLevel` inside that current range
+- Hierarchy clarification:
+  - the design is not a flat stat sheet
+  - base skills can have child skills underneath them
+  - gameplay actions can train both the directly-used child skill and its parent base skill
+  - parent base skills can raise the floor of their child skills without preventing the child skills from progressing higher on their own
+  - example intent:
+    - repeated jumping can train `JumpHeight`
+    - repeated jumping can also slowly train parent `Agility`
+    - higher `Agility` can raise the minimum floor of `SprintSpeed` and `JumpHeight`
+    - `SprintSpeed` and `JumpHeight` can still progress above that parent-provided floor through their own use and other influences
+- Starter skill list:
+  - `Strength`
+  - `Stamina`
+  - `Speed`
+  - `JumpHeight`
+  - `Clumsiness`
+  - `Recovery`
+- Older stat-map base from earlier design exploration should be preserved as source material:
+  - core stats:
+    - `Health`
+    - `Stamina`
+    - `Agility`
+    - `Strength`
+  - health-related:
+    - `RegenSpeed`
+    - `RegenAmount`
+    - `MaxHealth`
+  - stamina / exhaustion-related:
+    - `Exhaustion`
+    - `Fatigue`
+  - movement / traversal:
+    - `WalkSpeed`
+    - `SprintSpeed`
+    - `TopSpeed`
+    - `Climbing`
+    - `Swimming`
+    - `HoldingBreath`
+    - `Sliding`
+    - `Jumping`
+    - `Dodge`
+    - `SideStep`
+    - `Roll`
+  - combat / handling:
+    - `ReloadSkill`
+    - `WeaponsRanged`
+    - `WeaponSway`
+    - `ADSTime`
+    - `WeaponsHandHeld`
+    - `WeaponWeightHandling`
+    - `Unarmed`
+    - `Defence`
+    - `Blocking`
+  - body / stability / carry:
+    - `Clumsiness`
+    - `GripStrength`
+    - `Fatness`
+    - `Fitness`
+    - `StorageCapacity`
+- Recommended first-pass grouping of that older list:
+  - foundational trainable base skills:
+    - `Strength`
+    - `Stamina`
+    - `Agility`
+    - `Recovery`
+  - survivability attributes:
+    - `Health`
+    - `MaxHealth`
+    - `RegenSpeed`
+    - `RegenAmount`
+  - mobility child skills:
+    - `Speed`
+    - `WalkSpeed`
+    - `SprintSpeed`
+    - `TopSpeed`
+    - `JumpHeight`
+    - `Climbing`
+    - `Swimming`
+    - `HoldingBreath`
+    - `Sliding`
+    - `Dodge`
+    - `SideStep`
+    - `Roll`
+  - combat child skills:
+    - `ReloadSkill`
+    - `WeaponsRanged`
+    - `WeaponsHandHeld`
+    - `Unarmed`
+    - `Defence`
+    - `Blocking`
+  - body / handling child skills:
+    - `Clumsiness`
+    - `GripStrength`
+    - `StorageCapacity`
+  - temporary condition states:
+    - `Fatigue`
+    - `Exhaustion`
+  - derived output values:
+    - `WeaponSway`
+    - `ADSTime`
+    - `TripChance`
+  - body-composition / identity-style values that may be better as modifiers than trainable skills:
+    - `Fatness`
+    - `Fitness`
+    - `Weight`
+  - naming caution:
+    - `Clumsiness` is confirmed as a real trainable skill, but it behaves as a protective / competence skill
+    - higher `Clumsiness` skill level means less ragdoll chance, less drop chance, and fewer movement / handling failures
+    - because the name sounds negative while the progression is positive, the implementation should likely treat failure chance as an inverse function of `Clumsiness` skill level plus temporary modifiers
+- Current intended design philosophy:
+  - skills should influence each other instead of behaving like isolated stats
+  - the main structure is `base skill -> child skills -> final gameplay outputs`
+  - higher foundational stats can pull weaker related stats upward through floors or baseline boosts
+  - example intent: if `Strength` is high enough, `Speed` or `JumpHeight` should not be allowed to stay unrealistically low
+  - example intent: `JumpHeight` training and airtime can feed tiny gains back into `Strength`
+- Recommended direction for hierarchy:
+  - `Strength` as a parent base skill can support:
+    - `GripStrength`
+    - `CarryCapacity`
+    - `HeavyWeaponHandling`
+    - `ClimbingPower`
+  - `Stamina` as a parent base skill can support:
+    - `SprintEndurance`
+    - `BreathHolding`
+    - `SwimEndurance`
+    - `RecoveryResistance`
+  - `Agility` as a parent base skill can support:
+    - `JumpHeight`
+    - `SprintSpeed`
+    - `Dodge`
+    - `SideStep`
+    - `Roll`
+    - `Sliding`
+    - `Clumsiness`
+  - `Recovery` as a parent base skill can support:
+    - `HealthRegen`
+    - `StaminaRegen`
+    - `FatigueClearRate`
+    - `InjuryRecovery`
+- Early influence examples captured from design discussion:
+  - `Strength` can raise the minimum floor of `Speed`
+  - `Strength` can raise the minimum floor of `JumpHeight`
+  - `Agility` can raise the minimum floor of `SprintSpeed`
+  - `Agility` can raise the minimum floor of `JumpHeight`
+  - `Agility` can raise the minimum floor of `Clumsiness`
+  - `JumpHeight` activity can slowly improve `Strength`
+  - `JumpHeight` activity can slowly improve parent `Agility`
+  - repeated jumping, balance recovery, and movement exposure can slowly improve `Clumsiness`
+  - `Stamina` exhaustion should reduce effective stability and increase failure risk even if trained `Clumsiness` is high
+  - `Recovery` should improve how quickly exhaustion / tiredness clears
+  - moving backward should increase failure risk, especially at higher velocity
+  - stepping up onto taller ledges / obstacles should increase trip chance
+  - tripping should trigger ragdoll
+- Trip / clumsiness intent:
+  - flat ground should have a very small base trip chance
+  - larger step-up heights should ramp trip chance upward
+  - moving backward should be riskier than moving forward
+  - higher `Clumsiness` skill should reduce those risks
+  - temporary states such as fatigue, fear, heavy load, clone defects, or slippery conditions can still push the final failure chance back up
+- Tuning direction:
+  - each skill should eventually support Blueprint-authored influence curves
+  - each influence should expose a multiplier plus clamps / min / max
+  - prefer data-driven influence rules over baking formulas directly into one character class
+- Important implementation guardrail:
+  - separate permanent progression, temporary condition state, and final derived gameplay outputs
+  - example separation:
+    - permanent progression: learned `Strength`, learned `JumpHeight`
+    - temporary condition: fatigue / exhaustion
+    - derived outputs: actual move speed, actual jump Z, actual trip chance
+  - this separation should help avoid unstable circular stat recalculation
+  - in v1:
+    - temporary states should usually not change `SkillLevel`
+    - temporary states should usually not change long-term `SkillMin` / `SkillMax`
+    - temporary states should mostly affect final gameplay outputs after the skill's current range and effective level are resolved
+- Safe first-pass diagram:
+  - `SkillDefinition` -> authored defaults, display name, curves, clamps
+  - `SkillState` -> current level, total min/max, current min/max, progression data
+  - `SkillInfluenceRule` -> source skill, target skill or gameplay output, curve, multiplier, clamp
+  - `SkillComponent` -> owns skill states, applies influence rules, exposes final derived values
+  - `Actor` -> player, drone, enemy, machine, or anything else that should carry skills
+- Recommendation for the first implementation pass:
+  - start with one-way influences and floor-raising rules before allowing full bidirectional loops
+  - keep `Clumsiness` and `Recovery` in the design, but do not lock their exact formulas until the first playable skill slice feels good
+- Additional design notes imported from `C:\Users\danie\Downloads\Evolve Mind Map.csv` on 2026-03-07:
+  - important framing:
+    - not everything in the progression fantasy should be implemented as a skill
+    - several ideas in the mind map fit better as gear progression, tech unlocks, temporary condition systems, or respawn-meta systems that read skill values
+  - vision gear progression:
+    - stage 1: fragile glasses
+      - can slip down the face while sprinting
+      - can fall off when clumsy, exhausted, tripping, or ragdolling
+      - can become grubby and be wiped clean
+      - can scratch / crack
+      - cheap damaged lenses can lose shards and cause intermittent poor vision
+      - player can squint / lean in while holding ADS for a temporary low-tech focus aid with vignette
+    - stage 2: glasses with retention cord
+    - stage 3: contact lenses
+    - stage 4: HUD glasses with damage state
+    - stage 5+: HUD upgrades and glasses improvements
+    - stage 6: goggles
+    - stage 7: advanced contact lens with HUD
+    - likely system ownership:
+      - gear / item durability system
+      - vision-condition system
+      - equipment upgrade progression
+  - drone / minimap / map progression:
+    - cheap early drone can provide a temporary minimap window
+    - better drone upgrades improve battery, height, or capability
+    - map stage 1: lidar-based point-cloud / height-map reveal
+    - map stage 2: photogrammetry upgrade for 3D color map
+    - drone view and minimap should likely be technology unlocks rather than innate character skills
+  - clone / respawn progression:
+    - death uploads the brain into a clone system
+    - clone must be grown before respawn is available
+    - clone growth takes time and may require food / farming input
+    - under-grown clones can respawn with reduced skill levels
+    - underfed or neglected clones can develop defects:
+      - extra clumsy
+      - low health
+      - coughing / stealth penalties
+    - mutation upgrades may grant specialized traits such as climbing claws
+    - likely system ownership:
+      - respawn / meta-progression system
+      - clone growth / farming dependency
+      - defect / mutation modifier system
+  - clumsiness / instability expansion:
+    - early game sprinting while exhausted should have a high chance of stumbling or falling
+    - those falls can launch glasses off the face
+    - desired "bump mode":
+      - walking or running backward into walls should cause stumble reactions
+      - lower obstacles such as curbs / steps can trip the player into ragdoll
+      - low walls can cause a slump-forward / camera-tilt reaction
+      - agility and `Clumsiness` skill should reduce these failures over time
+    - later agility progression can unlock sliding and eventually a faster velocity slide
+    - some movement abilities may also require technology upgrades such as slide pads, not just skill level
+  - weapon incompetence progression fantasy:
+    - early reloads can drop ammo
+    - early shotgun / heavy weapon handling should be poor
+    - running and shooting should be inaccurate and unstable early on
+    - early aiming should be slow and swaying
+    - early melee with heavy tools should be weak and unstable enough to nearly lose grip
+    - low stamina max or high fatigue should raise:
+      - drop / fumble chance even if trained `Clumsiness` is decent
+      - reload mistake chance
+      - weapon jitter / shake
+      - chance to fumble / drop weapon
+    - likely system ownership:
+      - weapon handling skill set
+      - fatigue / condition penalties
+      - equipment weight handling modifiers
+  - fear / confidence system ideas:
+    - phobias can be content-specific, such as heights or specific creatures
+    - exposure can reduce fear over time
+    - confidence can rise from:
+      - armor
+      - stronger or more familiar weapons
+      - allies
+      - fire / safe light sources
+      - torch / flashlight
+    - high fear can cause:
+      - erratic movement
+      - lower movement confidence / speed
+      - weaker hits
+    - open concern:
+      - fear spikes from damage or death could become annoying if too aggressive
+    - likely system ownership:
+      - psychological state system layered on top of skills, not a direct replacement for them
+  - useful implementation framing from this whole batch:
+    - the project likely needs multiple progression layers:
+      - innate / learned skills
+      - temporary condition state
+      - gear stage and durability
+      - tech unlocks
+      - clone / respawn meta progression
+      - fear / confidence state
+    - the future skills module should expose values that those other systems can consume, but it should not try to directly contain every progression mechanic in the game
+    - `Clumsiness` should be treated as a learned anti-failure skill inside the skills module, while the actual trip / drop / ragdoll probabilities remain derived runtime outputs
+
 ## Future Version Notes
 - Continue tuning the flight feel toward professional FPV sims like DRL / Liftoff / VelociDrone style handling.
 - Prioritize tuning exposed drone variables before adding cosmetic systems; the key settings now live mostly on `ADroneCompanion`.

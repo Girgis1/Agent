@@ -3,7 +3,7 @@
 #include "Factory/MachineInputVolumeComponent.h"
 #include "Engine/Engine.h"
 #include "Factory/FactoryPayloadActor.h"
-#include "Factory/ResourceTypes.h"
+#include "Material/MaterialTypes.h"
 
 namespace
 {
@@ -129,3 +129,4 @@ int32 UMachineInputVolumeComponent::GetCurrentStoredQuantityScaled() const
 {
 	return TotalBufferedQuantityScaled;
 }
+

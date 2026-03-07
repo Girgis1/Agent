@@ -1,7 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Factory/FactoryVolumeComponentBase.h"
-#include "Factory/ResourceTypes.h"
+#include "Material/MaterialTypes.h"
 
 UFactoryVolumeComponentBase::UFactoryVolumeComponentBase()
 {
@@ -103,3 +103,4 @@ bool UFactoryVolumeComponentBase::HasCapacityForAdditionalQuantity(int32 Additio
 
 	return (GetCurrentStoredQuantityScaled() + AdditionalQuantityScaled) <= MaxQuantityScaled;
 }
+
