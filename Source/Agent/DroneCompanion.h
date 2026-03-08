@@ -580,16 +580,19 @@ public:
 	float FlatBatteryPulseMaxBrightnessAlpha = 0.35f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Flicker", meta=(ClampMin="0.0", UIMin="0.0"))
-	float LowBatteryFlickerMinFrequencyHz = 2.0f;
+	float LowBatteryFlickerMinFrequencyHz = 0.08f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Flicker", meta=(ClampMin="0.0", UIMin="0.0"))
-	float LowBatteryFlickerMaxFrequencyHz = 25.0f;
+	float LowBatteryFlickerMaxFrequencyHz = 1.25f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Flicker", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="1.0", UIMax="1.0"))
-	float LowBatteryFlickerMinDepth = 0.1f;
+	float LowBatteryFlickerMinDepth = 0.01f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Flicker", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="1.0", UIMax="1.0"))
-	float LowBatteryFlickerMaxDepth = 0.85f;
+	float LowBatteryFlickerMaxDepth = 0.32f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Flicker", meta=(ClampMin="0.1", UIMin="0.1"))
+	float LowBatteryFlickerRampExponent = 2.75f;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone|Battery", meta=(AllowPrivateAccess="true"))
 	bool bDronePoweredOff = false;

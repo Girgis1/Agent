@@ -13,7 +13,6 @@ void UDroneBatteryComponent::BeginPlay()
 
 	MaxBatteryPercent = FMath::Clamp(MaxBatteryPercent, 0.01f, 100.0f);
 	FullThresholdPercent = FMath::Clamp(FullThresholdPercent, 0.0f, MaxBatteryPercent);
-	DeadThresholdPercent = FMath::Clamp(DeadThresholdPercent, 0.0f, MaxBatteryPercent);
 	BatteryDrainDurationSeconds = FMath::Max(0.01f, BatteryDrainDurationSeconds);
 	PassiveChargeRatePercentPerSecond = FMath::Max(0.0f, PassiveChargeRatePercentPerSecond);
 	BatteryPercent = FMath::Clamp(BatteryPercent, 0.0f, MaxBatteryPercent);
@@ -22,7 +21,7 @@ void UDroneBatteryComponent::BeginPlay()
 
 bool UDroneBatteryComponent::IsDepleted() const
 {
-	return BatteryPercent <= FMath::Max(0.0f, DeadThresholdPercent);
+	return BatteryPercent <= 0.0f;
 }
 
 bool UDroneBatteryComponent::IsFullyCharged() const
@@ -61,13 +60,6 @@ void UDroneBatteryComponent::SetFullThresholdPercent(float NewFullThresholdPerce
 	ClampAndBroadcastIfChanged(PreviousBatteryPercent);
 }
 
-void UDroneBatteryComponent::SetDeadThresholdPercent(float NewDeadThresholdPercent)
-{
-	const float PreviousBatteryPercent = BatteryPercent;
-	DeadThresholdPercent = FMath::Clamp(NewDeadThresholdPercent, 0.0f, MaxBatteryPercent);
-	ClampAndBroadcastIfChanged(PreviousBatteryPercent);
-}
-
 float UDroneBatteryComponent::ConsumePercent(float PercentToConsume)
 {
 	if (PercentToConsume <= 0.0f)
@@ -98,7 +90,6 @@ void UDroneBatteryComponent::ClampAndBroadcastIfChanged(float PreviousBatteryPer
 {
 	MaxBatteryPercent = FMath::Clamp(MaxBatteryPercent, 0.01f, 100.0f);
 	FullThresholdPercent = FMath::Clamp(FullThresholdPercent, 0.0f, MaxBatteryPercent);
-	DeadThresholdPercent = FMath::Clamp(DeadThresholdPercent, 0.0f, MaxBatteryPercent);
 	BatteryDrainDurationSeconds = FMath::Max(0.01f, BatteryDrainDurationSeconds);
 	PassiveChargeRatePercentPerSecond = FMath::Max(0.0f, PassiveChargeRatePercentPerSecond);
 	BatteryPercent = FMath::Clamp(BatteryPercent, 0.0f, MaxBatteryPercent);
