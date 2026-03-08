@@ -11,8 +11,11 @@ void UDroneBatteryComponent::BeginPlay()
 {
 	Super::BeginPlay();
 
-	MaxBatteryPercent = 100.0f;
+	MaxBatteryPercent = FMath::Clamp(MaxBatteryPercent, 0.01f, 100.0f);
+	FullThresholdPercent = FMath::Clamp(FullThresholdPercent, 0.0f, MaxBatteryPercent);
 	DeadThresholdPercent = FMath::Clamp(DeadThresholdPercent, 0.0f, MaxBatteryPercent);
+	BatteryDrainDurationSeconds = FMath::Max(0.01f, BatteryDrainDurationSeconds);
+	PassiveChargeRatePercentPerSecond = FMath::Max(0.0f, PassiveChargeRatePercentPerSecond);
 	BatteryPercent = FMath::Clamp(BatteryPercent, 0.0f, MaxBatteryPercent);
 	bWasDepleted = IsDepleted();
 }
@@ -22,10 +25,39 @@ bool UDroneBatteryComponent::IsDepleted() const
 	return BatteryPercent <= FMath::Max(0.0f, DeadThresholdPercent);
 }
 
+bool UDroneBatteryComponent::IsFullyCharged() const
+{
+	return BatteryPercent >= FMath::Max(0.0f, FullThresholdPercent) - KINDA_SMALL_NUMBER;
+}
+
+float UDroneBatteryComponent::GetDrainRatePercentPerSecond() const
+{
+	if (!bDrainBatteryOverTime || BatteryDrainDurationSeconds <= KINDA_SMALL_NUMBER)
+	{
+		return 0.0f;
+	}
+
+	return MaxBatteryPercent / FMath::Max(0.01f, BatteryDrainDurationSeconds);
+}
+
 void UDroneBatteryComponent::SetBatteryPercent(float NewBatteryPercent)
 {
 	const float PreviousBatteryPercent = BatteryPercent;
 	BatteryPercent = NewBatteryPercent;
+	ClampAndBroadcastIfChanged(PreviousBatteryPercent);
+}
+
+void UDroneBatteryComponent::SetMaxBatteryPercent(float NewMaxBatteryPercent)
+{
+	const float PreviousBatteryPercent = BatteryPercent;
+	MaxBatteryPercent = NewMaxBatteryPercent;
+	ClampAndBroadcastIfChanged(PreviousBatteryPercent);
+}
+
+void UDroneBatteryComponent::SetFullThresholdPercent(float NewFullThresholdPercent)
+{
+	const float PreviousBatteryPercent = BatteryPercent;
+	FullThresholdPercent = NewFullThresholdPercent;
 	ClampAndBroadcastIfChanged(PreviousBatteryPercent);
 }
 
@@ -64,8 +96,11 @@ float UDroneBatteryComponent::ChargePercent(float PercentToCharge)
 
 void UDroneBatteryComponent::ClampAndBroadcastIfChanged(float PreviousBatteryPercent)
 {
-	MaxBatteryPercent = 100.0f;
+	MaxBatteryPercent = FMath::Clamp(MaxBatteryPercent, 0.01f, 100.0f);
+	FullThresholdPercent = FMath::Clamp(FullThresholdPercent, 0.0f, MaxBatteryPercent);
 	DeadThresholdPercent = FMath::Clamp(DeadThresholdPercent, 0.0f, MaxBatteryPercent);
+	BatteryDrainDurationSeconds = FMath::Max(0.01f, BatteryDrainDurationSeconds);
+	PassiveChargeRatePercentPerSecond = FMath::Max(0.0f, PassiveChargeRatePercentPerSecond);
 	BatteryPercent = FMath::Clamp(BatteryPercent, 0.0f, MaxBatteryPercent);
 
 	if (!FMath::IsNearlyEqual(BatteryPercent, PreviousBatteryPercent))

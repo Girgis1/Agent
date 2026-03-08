@@ -145,10 +145,16 @@ public:
 	bool IsBatteryDepleted() const;
 
 	UFUNCTION(BlueprintPure, Category="Drone|Battery")
+	bool IsBatteryFullyCharged() const;
+
+	UFUNCTION(BlueprintPure, Category="Drone|Battery")
 	bool IsDronePoweredOff() const { return bDronePoweredOff; }
 
 	UFUNCTION(BlueprintPure, Category="Drone|Battery")
 	bool IsInChargerVolume() const { return bIsInChargerVolume; }
+
+	UFUNCTION(BlueprintPure, Category="Drone|Battery")
+	bool IsChargingLockActive() const { return bChargingLockActive; }
 
 	UFUNCTION(BlueprintCallable, Category="Drone|Battery")
 	void NotifyEnteredChargerVolume();
@@ -537,23 +543,11 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Crash")
 	float CrashSelfRightActivationSpeed = 200.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Battery")
-	bool bBatteryEnabled = true;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Battery")
-	bool bDrainBatteryOverTime = true;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Battery", meta=(ClampMin="0.01", UIMin="0.01"))
-	float BatteryDrainDurationSeconds = 60.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Battery", meta=(ClampMin="0.0", UIMin="0.0"))
-	float BatteryChargeRateInChargerPercentPerSecond = 0.0f;
-
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Battery", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="100.0", UIMax="100.0"))
 	float BatteryFlickerStartPercent = 10.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Battery", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="100.0", UIMax="100.0"))
-	float BatteryFullThresholdPercent = 100.0f;
+	float BatteryRedLightStartPercent = 5.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light", meta=(ClampMin="0.0", UIMin="0.0"))
 	float StatusLightBaseIntensity = 8000.0f;
@@ -569,6 +563,21 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light")
 	FLinearColor StatusLightChargingFullColor = FLinearColor(0.15f, 1.0f, 0.25f, 1.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light")
+	FLinearColor StatusLightLowBatteryColor = FLinearColor(1.0f, 0.06f, 0.03f, 1.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="1.0", UIMax="1.0"))
+	float StatusLightLowBatteryMinBrightnessAlpha = 0.2f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Flat", meta=(ClampMin="0.01", UIMin="0.01"))
+	float FlatBatteryPulseFrequencyHz = 0.75f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Flat", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="1.0", UIMax="1.0"))
+	float FlatBatteryPulseMinBrightnessAlpha = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Flat", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="1.0", UIMax="1.0"))
+	float FlatBatteryPulseMaxBrightnessAlpha = 0.35f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Flicker", meta=(ClampMin="0.0", UIMin="0.0"))
 	float LowBatteryFlickerMinFrequencyHz = 2.0f;
@@ -587,6 +596,9 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone|Battery", meta=(AllowPrivateAccess="true"))
 	bool bIsInChargerVolume = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone|Battery", meta=(AllowPrivateAccess="true"))
+	bool bChargingLockActive = false;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone|Battery", meta=(AllowPrivateAccess="true"))
 	float LowBatteryFlickerAlpha = 0.0f;
@@ -765,6 +777,7 @@ protected:
 	float LiftAssistForceRampTime = 0.0f;
 	float LiftAssistSmoothedVerticalAcceleration = 0.0f;
 	float StatusLightFlickerTime = 0.0f;
+	float FlatBatteryPulseTime = 0.0f;
 	FVector FreeFlyCurrentVelocity = FVector::ZeroVector;
 	FRotator CameraTransitionStartRotation = FRotator::ZeroRotator;
 	TWeakObjectPtr<UPrimitiveComponent> LiftAssistTargetComponent;
@@ -772,4 +785,5 @@ protected:
 	FDroneLiftAssistForceTuning LiftAssistForceTuning;
 	FRotator CameraTransitionTargetRotation = FRotator::ZeroRotator;
 	int32 ChargerVolumeOverlapCount = 0;
+	bool bStatusLightFlickerOn = true;
 };
