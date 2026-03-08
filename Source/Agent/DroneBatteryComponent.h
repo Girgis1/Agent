@@ -33,9 +33,6 @@ public:
 	float GetFullThresholdPercent() const { return FullThresholdPercent; }
 
 	UFUNCTION(BlueprintPure, Category="Battery")
-	float GetDeadThresholdPercent() const { return DeadThresholdPercent; }
-
-	UFUNCTION(BlueprintPure, Category="Battery")
 	bool IsDepleted() const;
 
 	UFUNCTION(BlueprintPure, Category="Battery")
@@ -63,9 +60,6 @@ public:
 	void SetFullThresholdPercent(float NewFullThresholdPercent);
 
 	UFUNCTION(BlueprintCallable, Category="Battery")
-	void SetDeadThresholdPercent(float NewDeadThresholdPercent);
-
-	UFUNCTION(BlueprintCallable, Category="Battery")
 	float ConsumePercent(float PercentToConsume);
 
 	UFUNCTION(BlueprintCallable, Category="Battery")
@@ -82,9 +76,6 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battery", meta=(ClampMin="0.0", UIMin="0.0"))
 	float FullThresholdPercent = 100.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battery", meta=(ClampMin="0.0", UIMin="0.0"))
-	float DeadThresholdPercent = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battery")
 	bool bDrainBatteryOverTime = true;

@@ -104,16 +104,12 @@ void ADroneCompanion::Tick(float DeltaSeconds)
 		&& BatteryComponent
 		&& bShouldApplyChargingLock
 		&& !IsBatteryFullyCharged();
-	if (bChargingLockActive)
+	if (bChargingLockActive && !bWasChargingLockActive)
 	{
-		if (!bWasChargingLockActive)
-		{
-			StopLiftAssist();
-		}
-
+		// Entering charger-idle should behave like dead-mode physics:
+		// stop active control/lift, but leave rigid-body simulation free.
+		StopLiftAssist();
 		ResetPilotInputs();
-		DroneBody->SetPhysicsLinearVelocity(FVector::ZeroVector);
-		DroneBody->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
 	}
 
 	if (ImpactDebugTimeRemaining > 0.0f)
@@ -378,24 +374,27 @@ void ADroneCompanion::UpdateStatusLight(float DeltaSeconds)
 	if (bInLowBatteryRange)
 	{
 		LowBatteryFlickerAlpha = 1.0f - FMath::Clamp(BatteryPercent / FlickerStartPercent, 0.0f, 1.0f);
+		const float FlickerRampAlpha = FMath::Pow(
+			LowBatteryFlickerAlpha,
+			FMath::Max(0.1f, LowBatteryFlickerRampExponent));
 
 		const float FlickerFrequency = FMath::Lerp(
 			FMath::Max(0.0f, LowBatteryFlickerMinFrequencyHz),
 			FMath::Max(0.0f, LowBatteryFlickerMaxFrequencyHz),
-			LowBatteryFlickerAlpha);
+			FlickerRampAlpha);
 		const float FlickerOffChance = FMath::Lerp(
 			FMath::Clamp(LowBatteryFlickerMinDepth, 0.0f, 1.0f),
 			FMath::Clamp(LowBatteryFlickerMaxDepth, 0.0f, 1.0f),
-			LowBatteryFlickerAlpha);
+			FlickerRampAlpha);
 		StatusLightFlickerTime = FMath::Max(0.0f, StatusLightFlickerTime - SafeDeltaSeconds);
 		if (StatusLightFlickerTime <= KINDA_SMALL_NUMBER)
 		{
 			bStatusLightFlickerOn = FMath::FRand() > FlickerOffChance;
 
 			const float SafeFrequency = FMath::Max(0.1f, FlickerFrequency);
-			const float MinIntervalSeconds = 0.02f;
 			const float MeanIntervalSeconds = 1.0f / SafeFrequency;
-			const float MaxIntervalSeconds = FMath::Max(MinIntervalSeconds, MeanIntervalSeconds * 1.75f);
+			const float MinIntervalSeconds = FMath::Max(0.05f, MeanIntervalSeconds * 0.35f);
+			const float MaxIntervalSeconds = FMath::Max(MinIntervalSeconds, MeanIntervalSeconds * 1.65f);
 			StatusLightFlickerTime = FMath::FRandRange(MinIntervalSeconds, MaxIntervalSeconds);
 		}
 
