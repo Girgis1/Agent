@@ -64,3 +64,17 @@ struct FResourceAmount
 	}
 };
 
+USTRUCT(BlueprintType)
+struct FResourceStorageEntry
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Material")
+	FName ResourceId = NAME_None;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Material", meta=(ClampMin="0"))
+	int32 QuantityScaled = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Material", meta=(ClampMin="0.0", UIMin="0.0"))
+	float Units = 0.0f;
+};

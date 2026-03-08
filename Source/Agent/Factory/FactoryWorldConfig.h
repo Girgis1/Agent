@@ -22,4 +22,10 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Resources", meta=(ClampMin="0.0", UIMin="0.0"))
 	float ResourceBaseMassMultiplier = 1.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Resources|GlobalStorage")
+	bool bGlobalStorageInfinite = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Resources|GlobalStorage", meta=(ClampMin="0", UIMin="0", EditCondition="!bGlobalStorageInfinite"))
+	int32 GlobalStorageCapacityUnits = 0;
 };

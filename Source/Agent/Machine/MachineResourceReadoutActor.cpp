@@ -4,7 +4,12 @@
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/TextRenderComponent.h"
+#include "Factory/FactoryResourceBankSubsystem.h"
+#include "Factory/MachineInputVolumeComponent.h"
+#include "Factory/StorageVolumeComponent.h"
+#include "Machine/MachineComponent.h"
 #include "Machine/AtomiserVolume.h"
+#include "Material/AgentResourceTypes.h"
 #include "Material/MaterialDefinitionAsset.h"
 #include "UObject/ConstructorHelpers.h"
 #include "UObject/UObjectIterator.h"
@@ -33,13 +38,14 @@ void AMachineResourceReadoutActor::OnConstruction(const FTransform& Transform)
 void AMachineResourceReadoutActor::BeginPlay()
 {
 	Super::BeginPlay();
-	BindToAtomiserSource();
+	BindToActiveSource();
 	RefreshReadout();
 }
 
 void AMachineResourceReadoutActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	UnbindFromAtomiserSource();
+	UnbindFromAtomBankSource();
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -79,7 +85,7 @@ void AMachineResourceReadoutActor::SetManualEntries(const TArray<FMachineReadout
 
 void AMachineResourceReadoutActor::RefreshReadout()
 {
-	BindToAtomiserSource();
+	BindToActiveSource();
 	RebuildEntriesFromSource();
 	SyncVisualRows();
 }
@@ -87,6 +93,31 @@ void AMachineResourceReadoutActor::RefreshReadout()
 void AMachineResourceReadoutActor::HandleAtomiserStorageChanged()
 {
 	RefreshReadout();
+}
+
+void AMachineResourceReadoutActor::HandleAtomBankStorageChanged()
+{
+	RefreshReadout();
+}
+
+void AMachineResourceReadoutActor::BindToActiveSource()
+{
+	if (SourceMode == EMachineReadoutSourceMode::Atomiser)
+	{
+		BindToAtomiserSource();
+		UnbindFromAtomBankSource();
+		return;
+	}
+
+	if (SourceMode == EMachineReadoutSourceMode::AtomBank)
+	{
+		UnbindFromAtomiserSource();
+		BindToAtomBankSource();
+		return;
+	}
+
+	UnbindFromAtomiserSource();
+	UnbindFromAtomBankSource();
 }
 
 void AMachineResourceReadoutActor::BindToAtomiserSource()
@@ -128,6 +159,35 @@ void AMachineResourceReadoutActor::UnbindFromAtomiserSource()
 	}
 }
 
+void AMachineResourceReadoutActor::BindToAtomBankSource()
+{
+	UFactoryResourceBankSubsystem* ResolvedBank = ResolveAtomBankSource();
+	if (BoundAtomBank == ResolvedBank)
+	{
+		return;
+	}
+
+	if (BoundAtomBank)
+	{
+		BoundAtomBank->OnStorageChanged.RemoveDynamic(this, &AMachineResourceReadoutActor::HandleAtomBankStorageChanged);
+	}
+
+	BoundAtomBank = ResolvedBank;
+	if (BoundAtomBank)
+	{
+		BoundAtomBank->OnStorageChanged.AddUniqueDynamic(this, &AMachineResourceReadoutActor::HandleAtomBankStorageChanged);
+	}
+}
+
+void AMachineResourceReadoutActor::UnbindFromAtomBankSource()
+{
+	if (BoundAtomBank)
+	{
+		BoundAtomBank->OnStorageChanged.RemoveDynamic(this, &AMachineResourceReadoutActor::HandleAtomBankStorageChanged);
+		BoundAtomBank = nullptr;
+	}
+}
+
 UAtomiserVolume* AMachineResourceReadoutActor::ResolveAtomiserSourceCandidate() const
 {
 	if (AActor* AttachedParentActor = GetAttachParentActor())
@@ -149,6 +209,16 @@ UAtomiserVolume* AMachineResourceReadoutActor::ResolveAtomiserSourceCandidate() 
 	return nullptr;
 }
 
+UFactoryResourceBankSubsystem* AMachineResourceReadoutActor::ResolveAtomBankSource() const
+{
+	if (UWorld* World = GetWorld())
+	{
+		return World->GetSubsystem<UFactoryResourceBankSubsystem>();
+	}
+
+	return nullptr;
+}
+
 void AMachineResourceReadoutActor::RebuildEntriesFromSource()
 {
 	CurrentEntries.Reset();
@@ -156,6 +226,14 @@ void AMachineResourceReadoutActor::RebuildEntriesFromSource()
 	if (SourceMode == EMachineReadoutSourceMode::Atomiser)
 	{
 		BuildEntriesFromAtomiser(CurrentEntries);
+	}
+	else if (SourceMode == EMachineReadoutSourceMode::AtomBank)
+	{
+		BuildEntriesFromAtomBank(CurrentEntries);
+	}
+	else if (SourceMode == EMachineReadoutSourceMode::CurrentMachine)
+	{
+		BuildEntriesFromCurrentMachine(CurrentEntries);
 	}
 	else
 	{
@@ -179,6 +257,11 @@ void AMachineResourceReadoutActor::RebuildEntriesFromSource()
 		}
 	}
 
+	if (CurrentEntries.Num() == 0 && ShouldShowPlaceholderEntries())
+	{
+		BuildPlaceholderEntries(CurrentEntries);
+	}
+
 	CurrentEntries.Sort([](const FMachineReadoutEntry& Left, const FMachineReadoutEntry& Right)
 	{
 		if (!FMath::IsNearlyEqual(Left.Units, Right.Units))
@@ -196,6 +279,77 @@ void AMachineResourceReadoutActor::RebuildEntriesFromSource()
 	}
 }
 
+void AMachineResourceReadoutActor::BuildPlaceholderEntries(TArray<FMachineReadoutEntry>& OutEntries) const
+{
+	OutEntries.Reset();
+
+	const int32 SafeRowCount = FMath::Clamp(PlaceholderRowCount, 1, 32);
+	const float SafeReferenceUnits = FMath::Max(1.0f, ReferenceUnits);
+	const float StepUnits = FMath::Max(0.0f, PlaceholderUnitsStep);
+
+	for (int32 RowIndex = 0; RowIndex < SafeRowCount; ++RowIndex)
+	{
+		const float Units = FMath::Max(0.0f, SafeReferenceUnits - (StepUnits * static_cast<float>(RowIndex)));
+
+		FMachineReadoutEntry NewEntry;
+		NewEntry.ResourceId = FName(*FString::Printf(TEXT("Preview_%02d"), RowIndex + 1));
+		NewEntry.Label = FText::FromString(FString::Printf(TEXT("Current Output %02d"), RowIndex + 1));
+		NewEntry.Units = Units;
+		NewEntry.Percent01 = FMath::Clamp(Units / SafeReferenceUnits, 0.0f, 1.0f);
+		OutEntries.Add(NewEntry);
+	}
+}
+
+bool AMachineResourceReadoutActor::ShouldShowPlaceholderEntries() const
+{
+#if WITH_EDITOR
+	if (!bShowPlaceholderWhenNoData)
+	{
+		return false;
+	}
+
+	const UWorld* World = GetWorld();
+	if (!World)
+	{
+		return false;
+	}
+
+	return World->WorldType == EWorldType::EditorPreview;
+#else
+	return false;
+#endif
+}
+
+FVector AMachineResourceReadoutActor::GetRowDirectionVector() const
+{
+	if (RowLayout == EMachineReadoutRowLayout::Vertical)
+	{
+		if (HorizontalRowDirection.IsNearlyZero())
+		{
+			return FVector(0.0f, -1.0f, 0.0f);
+		}
+
+		return HorizontalRowDirection.GetSafeNormal();
+	}
+
+	return FVector(0.0f, 0.0f, -1.0f);
+}
+
+FVector AMachineResourceReadoutActor::GetBarFillDirectionVector() const
+{
+	if (RowLayout == EMachineReadoutRowLayout::Vertical)
+	{
+		return FVector::UpVector;
+	}
+
+	if (BarFillDirection.IsNearlyZero())
+	{
+		return FVector(1.0f, 0.0f, 0.0f);
+	}
+
+	return BarFillDirection.GetSafeNormal();
+}
+
 void AMachineResourceReadoutActor::BuildEntriesFromAtomiser(TArray<FMachineReadoutEntry>& OutEntries) const
 {
 	OutEntries.Reset();
@@ -206,11 +360,11 @@ void AMachineResourceReadoutActor::BuildEntriesFromAtomiser(TArray<FMachineReado
 		return;
 	}
 
-	TArray<FAtomiserStoredResourceEntry> SnapshotEntries;
+	TArray<FResourceStorageEntry> SnapshotEntries;
 	SourceAtomiser->GetStorageSnapshot(SnapshotEntries);
 
 	const float SafeReferenceUnits = FMath::Max(1.0f, ReferenceUnits);
-	for (const FAtomiserStoredResourceEntry& SnapshotEntry : SnapshotEntries)
+	for (const FResourceStorageEntry& SnapshotEntry : SnapshotEntries)
 	{
 		if (SnapshotEntry.ResourceId.IsNone() || SnapshotEntry.Units <= KINDA_SMALL_NUMBER)
 		{
@@ -222,6 +376,121 @@ void AMachineResourceReadoutActor::BuildEntriesFromAtomiser(TArray<FMachineReado
 		NewEntry.Label = ResolveResourceLabel(SnapshotEntry.ResourceId);
 		NewEntry.Units = SnapshotEntry.Units;
 		NewEntry.Percent01 = FMath::Clamp(SnapshotEntry.Units / SafeReferenceUnits, 0.0f, 1.0f);
+		OutEntries.Add(NewEntry);
+	}
+}
+
+void AMachineResourceReadoutActor::BuildEntriesFromAtomBank(TArray<FMachineReadoutEntry>& OutEntries) const
+{
+	OutEntries.Reset();
+
+	const UFactoryResourceBankSubsystem* ResourceBank = BoundAtomBank.Get() ? BoundAtomBank.Get() : ResolveAtomBankSource();
+	if (!ResourceBank)
+	{
+		return;
+	}
+
+	TArray<FResourceStorageEntry> SnapshotEntries;
+	ResourceBank->GetStorageSnapshot(SnapshotEntries);
+
+	const float SafeReferenceUnits = FMath::Max(1.0f, ReferenceUnits);
+	for (const FResourceStorageEntry& SnapshotEntry : SnapshotEntries)
+	{
+		if (SnapshotEntry.ResourceId.IsNone() || SnapshotEntry.Units <= KINDA_SMALL_NUMBER)
+		{
+			continue;
+		}
+
+		FMachineReadoutEntry NewEntry;
+		NewEntry.ResourceId = SnapshotEntry.ResourceId;
+		NewEntry.Label = ResolveResourceLabel(SnapshotEntry.ResourceId);
+		NewEntry.Units = SnapshotEntry.Units;
+		NewEntry.Percent01 = FMath::Clamp(SnapshotEntry.Units / SafeReferenceUnits, 0.0f, 1.0f);
+		OutEntries.Add(NewEntry);
+	}
+}
+
+void AMachineResourceReadoutActor::BuildEntriesFromCurrentMachine(TArray<FMachineReadoutEntry>& OutEntries) const
+{
+	OutEntries.Reset();
+
+	TArray<const AActor*> Candidates;
+	Candidates.Reserve(3);
+	if (const AActor* AttachedParentActor = GetAttachParentActor())
+	{
+		Candidates.Add(AttachedParentActor);
+	}
+
+	if (const AActor* OwnerActor = GetOwner())
+	{
+		Candidates.Add(OwnerActor);
+	}
+
+	Candidates.Add(this);
+
+	for (const AActor* CandidateActor : Candidates)
+	{
+		if (!CandidateActor)
+		{
+			continue;
+		}
+
+		if (const UMachineComponent* MachineComponent = CandidateActor->FindComponentByClass<UMachineComponent>())
+		{
+			BuildEntriesFromScaledResourceMap(MachineComponent->StoredResourcesScaled, OutEntries);
+			if (OutEntries.Num() > 0)
+			{
+				return;
+			}
+		}
+
+		if (const UMachineInputVolumeComponent* MachineInputVolume = CandidateActor->FindComponentByClass<UMachineInputVolumeComponent>())
+		{
+			BuildEntriesFromScaledResourceMap(MachineInputVolume->InputBufferScaled, OutEntries);
+			if (OutEntries.Num() > 0)
+			{
+				return;
+			}
+		}
+
+		if (const UStorageVolumeComponent* StorageVolume = CandidateActor->FindComponentByClass<UStorageVolumeComponent>())
+		{
+			BuildEntriesFromScaledResourceMap(StorageVolume->StoredResourceQuantitiesScaled, OutEntries);
+			if (OutEntries.Num() > 0)
+			{
+				return;
+			}
+		}
+	}
+}
+
+void AMachineResourceReadoutActor::BuildEntriesFromScaledResourceMap(const TMap<FName, int32>& ResourceQuantitiesScaled, TArray<FMachineReadoutEntry>& OutEntries) const
+{
+	OutEntries.Reset();
+
+	TArray<FName> ResourceIds;
+	ResourceQuantitiesScaled.GetKeys(ResourceIds);
+	ResourceIds.Sort([](const FName& Left, const FName& Right)
+	{
+		return Left.LexicalLess(Right);
+	});
+
+	const float SafeReferenceUnits = FMath::Max(1.0f, ReferenceUnits);
+	for (const FName ResourceId : ResourceIds)
+	{
+		const int32 QuantityScaled = FMath::Max(0, ResourceQuantitiesScaled.FindRef(ResourceId));
+		if (ResourceId.IsNone() || QuantityScaled <= 0)
+		{
+			continue;
+		}
+
+		const float Units = AgentResource::ScaledToUnits(QuantityScaled);
+
+		FMachineReadoutEntry NewEntry;
+		NewEntry.ResourceId = ResourceId;
+		NewEntry.Label = ResolveResourceLabel(ResourceId);
+		NewEntry.Units = Units;
+		NewEntry.Percent01 = FMath::Clamp(Units / SafeReferenceUnits, 0.0f, 1.0f);
 		OutEntries.Add(NewEntry);
 	}
 }
@@ -336,13 +605,13 @@ void AMachineResourceReadoutActor::ConfigureRowVisual(int32 RowIndex, const FMac
 		return;
 	}
 
-	RowVisual.RowRoot->SetRelativeLocation(FVector(0.0f, 0.0f, -RowSpacing * static_cast<float>(RowIndex)));
+	const FVector RowDirection = GetRowDirectionVector();
+	RowVisual.RowRoot->SetRelativeLocation(RowDirection * (FMath::Max(1.0f, RowSpacing) * static_cast<float>(RowIndex)));
 
 	const FString LabelString = Entry.Label.IsEmpty()
 		? (Entry.ResourceId.IsNone() ? TEXT("Unknown") : Entry.ResourceId.ToString())
 		: Entry.Label.ToString();
 	const float SafeReferenceUnits = FMath::Max(1.0f, ReferenceUnits);
-	RowVisual.LabelText->SetRelativeLocation(TextOffset);
 	RowVisual.LabelText->SetWorldSize(FMath::Max(1.0f, TextWorldSize));
 	RowVisual.LabelText->SetTextRenderColor(TextColor);
 	RowVisual.LabelText->SetText(FText::FromString(FString::Printf(TEXT("%s  %.1f/%.0f"), *LabelString, Entry.Units, SafeReferenceUnits)));
@@ -353,14 +622,36 @@ void AMachineResourceReadoutActor::ConfigureRowVisual(int32 RowIndex, const FMac
 	}
 
 	const float Percent01 = FMath::Clamp(Entry.Percent01, 0.0f, 1.0f);
-	const float WidthUnits = FMath::Max(0.0f, BarWidth) * Percent01;
-	const float WidthScale = FMath::Max(KINDA_SMALL_NUMBER, WidthUnits / 100.0f);
+	const float LengthUnits = FMath::Max(0.0f, BarWidth) * Percent01;
+	const float WidthScale = FMath::Max(KINDA_SMALL_NUMBER, LengthUnits / 100.0f);
 	const float DepthScale = FMath::Max(KINDA_SMALL_NUMBER, FMath::Max(0.1f, BarDepth) / 100.0f);
 	const float HeightScale = FMath::Max(KINDA_SMALL_NUMBER, FMath::Max(0.1f, BarHeight) / 100.0f);
+	const FVector BarDirection = GetBarFillDirectionVector();
+	const FRotator FinalBarRotation = BarDirection.Rotation() + BarRotationOffset;
+	const FVector FinalBarDirection = FinalBarRotation.Vector();
+	const FVector EffectiveBarStartOffset = (RowLayout == EMachineReadoutRowLayout::Vertical) ? FVector::ZeroVector : BarStartOffset;
 
 	RowVisual.FillBar->SetRelativeScale3D(FVector(WidthScale, DepthScale, HeightScale));
-	RowVisual.FillBar->SetRelativeLocation(BarStartOffset + FVector(WidthUnits * 0.5f, 0.0f, 0.0f));
-	RowVisual.FillBar->SetVisibility(WidthUnits > KINDA_SMALL_NUMBER, true);
+	RowVisual.FillBar->SetRelativeRotation(FinalBarRotation);
+	RowVisual.FillBar->SetRelativeLocation(EffectiveBarStartOffset + (FinalBarDirection * (LengthUnits * 0.5f)));
+	RowVisual.FillBar->SetVisibility(LengthUnits > KINDA_SMALL_NUMBER, true);
+
+	if (RowLayout == EMachineReadoutRowLayout::Vertical)
+	{
+		RowVisual.LabelText->SetHorizontalAlignment(EHTA_Center);
+		RowVisual.LabelText->SetVerticalAlignment(EVRTA_TextCenter);
+
+		const float MaxBarLengthUnits = FMath::Max(0.0f, BarWidth);
+		const float SafeVerticalTextGap = FMath::Max(0.0f, VerticalTextGap);
+		const FVector VerticalTextLocation = EffectiveBarStartOffset - (FinalBarDirection * ((MaxBarLengthUnits * 0.5f) + SafeVerticalTextGap));
+		RowVisual.LabelText->SetRelativeLocation(VerticalTextLocation + TextOffset);
+	}
+	else
+	{
+		RowVisual.LabelText->SetHorizontalAlignment(EHTA_Left);
+		RowVisual.LabelText->SetVerticalAlignment(EVRTA_TextCenter);
+		RowVisual.LabelText->SetRelativeLocation(TextOffset);
+	}
 }
 
 void AMachineResourceReadoutActor::SetRowVisualEnabled(int32 RowIndex, bool bEnabled)

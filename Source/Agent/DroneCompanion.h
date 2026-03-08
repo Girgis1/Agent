@@ -8,7 +8,9 @@
 
 class UCameraComponent;
 class UConveyorSurfaceVelocityComponent;
+class UDroneBatteryComponent;
 class UPhysicalMaterial;
+class UPointLightComponent;
 class UPrimitiveComponent;
 class UStaticMeshComponent;
 class USceneComponent;
@@ -129,6 +131,30 @@ public:
 
 	UFUNCTION(BlueprintPure, Category="Drone")
 	bool IsLiftAssistActive() const { return bLiftAssistActive; }
+
+	UFUNCTION(BlueprintPure, Category="Drone|Battery")
+	float GetBatteryPercent() const;
+
+	UFUNCTION(BlueprintCallable, Category="Drone|Battery")
+	void SetBatteryPercent(float NewBatteryPercent);
+
+	UFUNCTION(BlueprintCallable, Category="Drone|Battery")
+	float ChargeBatteryPercent(float PercentToCharge);
+
+	UFUNCTION(BlueprintPure, Category="Drone|Battery")
+	bool IsBatteryDepleted() const;
+
+	UFUNCTION(BlueprintPure, Category="Drone|Battery")
+	bool IsDronePoweredOff() const { return bDronePoweredOff; }
+
+	UFUNCTION(BlueprintPure, Category="Drone|Battery")
+	bool IsInChargerVolume() const { return bIsInChargerVolume; }
+
+	UFUNCTION(BlueprintCallable, Category="Drone|Battery")
+	void NotifyEnteredChargerVolume();
+
+	UFUNCTION(BlueprintCallable, Category="Drone|Battery")
+	void NotifyExitedChargerVolume();
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Physics")
 	float DroneMassKg = 3.0f;
@@ -511,6 +537,60 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Crash")
 	float CrashSelfRightActivationSpeed = 200.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Battery")
+	bool bBatteryEnabled = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Battery")
+	bool bDrainBatteryOverTime = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Battery", meta=(ClampMin="0.01", UIMin="0.01"))
+	float BatteryDrainDurationSeconds = 60.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Battery", meta=(ClampMin="0.0", UIMin="0.0"))
+	float BatteryChargeRateInChargerPercentPerSecond = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Battery", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="100.0", UIMax="100.0"))
+	float BatteryFlickerStartPercent = 10.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Battery", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="100.0", UIMax="100.0"))
+	float BatteryFullThresholdPercent = 100.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light", meta=(ClampMin="0.0", UIMin="0.0"))
+	float StatusLightBaseIntensity = 8000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light", meta=(ClampMin="0.0", UIMin="0.0"))
+	float StatusLightMinIntensity = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light", meta=(ClampMin="0.0", UIMin="0.0"))
+	float StatusLightAttenuationRadius = 600.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light")
+	FLinearColor StatusLightNormalColor = FLinearColor(1.0f, 0.92f, 0.76f, 1.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light")
+	FLinearColor StatusLightChargingFullColor = FLinearColor(0.15f, 1.0f, 0.25f, 1.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Flicker", meta=(ClampMin="0.0", UIMin="0.0"))
+	float LowBatteryFlickerMinFrequencyHz = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Flicker", meta=(ClampMin="0.0", UIMin="0.0"))
+	float LowBatteryFlickerMaxFrequencyHz = 25.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Flicker", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="1.0", UIMax="1.0"))
+	float LowBatteryFlickerMinDepth = 0.1f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Flicker", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="1.0", UIMax="1.0"))
+	float LowBatteryFlickerMaxDepth = 0.85f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone|Battery", meta=(AllowPrivateAccess="true"))
+	bool bDronePoweredOff = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone|Battery", meta=(AllowPrivateAccess="true"))
+	bool bIsInChargerVolume = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone|Battery", meta=(AllowPrivateAccess="true"))
+	float LowBatteryFlickerAlpha = 0.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Debug")
 	bool bShowDebugOverlay = true;
 
@@ -557,6 +637,10 @@ protected:
 	void RemoveAppliedConveyorSurfaceVelocity();
 	void ApplyConveyorSurfaceVelocity();
 	void ApplyRuntimePhysicalMaterial();
+	void UpdateBatteryState(float DeltaSeconds);
+	void HandleDronePowerLoss();
+	void HandleDronePowerRestore();
+	void UpdateStatusLight(float DeltaSeconds);
 	void RefreshCameraForPilotControlModeChange(bool bWasRollControls);
 	void UpdateCameraTransition(float DeltaSeconds);
 	void StartCameraTransition(
@@ -576,6 +660,12 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UCameraComponent* DroneCamera;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	UPointLightComponent* DroneStatusLight;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	UDroneBatteryComponent* BatteryComponent;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Conveyor", meta=(AllowPrivateAccess="true"))
 	UConveyorSurfaceVelocityComponent* ConveyorSurfaceVelocity;
@@ -674,10 +764,12 @@ protected:
 	float LiftAssistStageTimeRemaining = 0.0f;
 	float LiftAssistForceRampTime = 0.0f;
 	float LiftAssistSmoothedVerticalAcceleration = 0.0f;
+	float StatusLightFlickerTime = 0.0f;
 	FVector FreeFlyCurrentVelocity = FVector::ZeroVector;
 	FRotator CameraTransitionStartRotation = FRotator::ZeroRotator;
 	TWeakObjectPtr<UPrimitiveComponent> LiftAssistTargetComponent;
 	FVector LiftAssistLocalGrabOffset = FVector::ZeroVector;
 	FDroneLiftAssistForceTuning LiftAssistForceTuning;
 	FRotator CameraTransitionTargetRotation = FRotator::ZeroRotator;
+	int32 ChargerVolumeOverlapCount = 0;
 };

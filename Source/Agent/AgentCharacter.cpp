@@ -130,6 +130,11 @@ void AAgentCharacter::BeginPlay()
 	}
 	SetDronePilotControlMode(DronePilotControlMode);
 	CurrentViewMode = bStartInThirdPersonDroneView ? EAgentViewMode::ThirdPerson : EAgentViewMode::FirstPerson;
+	PersistedPrimaryDroneBatteryPercent = FMath::Clamp(PersistedPrimaryDroneBatteryPercent, 0.0f, 100.0f);
+	if (!bPrimaryDroneAvailable)
+	{
+		CurrentViewMode = EAgentViewMode::FirstPerson;
+	}
 
 	if (CurrentViewMode != EAgentViewMode::ThirdPerson)
 	{
@@ -180,6 +185,13 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 	UpdateControllerMapButtonHold(DeltaSeconds);
 	UpdateRollModeJumpHold(DeltaSeconds);
 	UpdateDronePilotCameraLimits();
+	RefreshPrimaryDroneAvailabilityFromCompanion();
+	if (!bPrimaryDroneAvailable
+		&& bForceFirstPersonWhenDroneUnavailable
+		&& (CurrentViewMode != EAgentViewMode::FirstPerson || bMapModeActive || bMiniMapModeActive))
+	{
+		ApplyViewMode(EAgentViewMode::FirstPerson, true);
+	}
 
 	if (bConveyorPlacementModeActive)
 	{
@@ -213,7 +225,7 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 		PickupCandidateComponent.Reset();
 	}
 
-	if (DroneCompanion)
+	if (DroneCompanion && bPrimaryDroneAvailable)
 	{
 		SyncDroneCompanionControlState(IsDronePilotMode() && !bMapModeActive);
 		UpdateDroneCompanionThirdPersonTarget();
@@ -226,6 +238,10 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 		{
 			DroneCompanion->ResetPilotInputs();
 		}
+	}
+	else if (DroneCompanion)
+	{
+		DroneCompanion->ResetPilotInputs();
 	}
 
 	UpdateThirdPersonTransition(DeltaSeconds);
@@ -407,6 +423,11 @@ void AAgentCharacter::ApplyViewMode(EAgentViewMode NewMode, bool bBlend)
 	if (bConveyorPlacementModeActive && NewMode != CurrentViewMode)
 	{
 		ExitConveyorPlacementMode();
+	}
+
+	if (!bPrimaryDroneAvailable && NewMode != EAgentViewMode::FirstPerson)
+	{
+		NewMode = EAgentViewMode::FirstPerson;
 	}
 
 	bMapModeActive = false;
@@ -592,6 +613,12 @@ void AAgentCharacter::ApplyViewMode(EAgentViewMode NewMode, bool bBlend)
 			PlayerController->SetViewTargetWithBlend(this, bWasDronePilot ? 0.0f : BlendTime);
 		}
 
+		if (!bPrimaryDroneAvailable)
+		{
+			ResetDroneInputState();
+			break;
+		}
+
 		if (!DroneCompanion)
 		{
 			FVector DroneSpawnLocation = FVector::ZeroVector;
@@ -691,6 +718,12 @@ void AAgentCharacter::SyncDroneCompanionControlState(bool bAllowRollControls, bo
 		return;
 	}
 
+	if (!bPrimaryDroneAvailable)
+	{
+		DroneCompanion->ResetPilotInputs();
+		return;
+	}
+
 	DroneCompanion->SetFollowTarget(this);
 	DroneCompanion->SetViewReferenceRotation(GetControlRotation());
 	if (bSuppressCameraMountRefresh)
@@ -743,6 +776,11 @@ bool AAgentCharacter::GetThirdPersonDroneTarget(FVector& OutLocation, FRotator& 
 
 void AAgentCharacter::SpawnDroneCompanion()
 {
+	if (!bPrimaryDroneAvailable)
+	{
+		return;
+	}
+
 	const FRotator SpawnYawRotation(0.0f, GetControlRotation().Yaw, 0.0f);
 	const FVector SpawnLocation = GetActorLocation() + FRotationMatrix(SpawnYawRotation).TransformVector(DroneSpawnOffset);
 	const EDroneCompanionMode InitialMode = CurrentViewMode == EAgentViewMode::DronePilot
@@ -756,7 +794,7 @@ void AAgentCharacter::SpawnDroneCompanionAtTransform(
 	const FRotator& SpawnRotation,
 	EDroneCompanionMode InitialMode)
 {
-	if (DroneCompanion || !GetWorld())
+	if (!bPrimaryDroneAvailable || DroneCompanion || !GetWorld())
 	{
 		return;
 	}
@@ -783,6 +821,8 @@ void AAgentCharacter::SpawnDroneCompanionAtTransform(
 		return;
 	}
 
+	DroneCompanion->SetBatteryPercent(PersistedPrimaryDroneBatteryPercent);
+
 	SyncDroneCompanionControlState(CurrentViewMode == EAgentViewMode::DronePilot && !bMapModeActive);
 	UpdateDroneCompanionThirdPersonTarget();
 	DroneCompanion->SetCompanionMode(InitialMode);
@@ -794,6 +834,8 @@ void AAgentCharacter::DespawnDroneCompanion()
 	{
 		return;
 	}
+
+	PersistedPrimaryDroneBatteryPercent = FMath::Clamp(DroneCompanion->GetBatteryPercent(), 0.0f, 100.0f);
 
 	DroneCompanion->Destroy();
 	DroneCompanion = nullptr;
@@ -2332,6 +2374,65 @@ void AAgentCharacter::SyncControllerRotationToDroneCamera()
 	DroneCompanion->SetViewReferenceRotation(DroneCameraRotation);
 }
 
+void AAgentCharacter::RefreshPrimaryDroneAvailabilityFromCompanion()
+{
+	if (!DroneCompanion)
+	{
+		return;
+	}
+
+	PersistedPrimaryDroneBatteryPercent = FMath::Clamp(DroneCompanion->GetBatteryPercent(), 0.0f, 100.0f);
+
+	if (DroneCompanion->IsBatteryDepleted())
+	{
+		if (bPrimaryDroneAvailable)
+		{
+			SetPrimaryDroneAvailable(false, true);
+		}
+	}
+	else if (!bPrimaryDroneAvailable)
+	{
+		SetPrimaryDroneAvailable(true, false);
+	}
+}
+
+void AAgentCharacter::SetPrimaryDroneAvailable(bool bNewAvailable, bool bForceFirstPersonIfUnavailable)
+{
+	bPrimaryDroneAvailable = bNewAvailable;
+	if (bPrimaryDroneAvailable)
+	{
+		if (DroneCompanion)
+		{
+			if (!IsDronePilotMode() && !bMapModeActive && !bMiniMapModeActive)
+			{
+				SyncDroneCompanionControlState(false);
+				DroneCompanion->SetCompanionMode(EDroneCompanionMode::BuddyFollow);
+			}
+		}
+		else if (CurrentViewMode == EAgentViewMode::FirstPerson && !bMapModeActive && !bMiniMapModeActive)
+		{
+			SpawnDroneCompanion();
+		}
+
+		return;
+	}
+
+	if (DroneCompanion)
+	{
+		PersistedPrimaryDroneBatteryPercent = FMath::Clamp(DroneCompanion->GetBatteryPercent(), 0.0f, 100.0f);
+		DroneCompanion->ResetPilotInputs();
+	}
+
+	ResetDroneInputState();
+	const bool bShouldForceFirstPerson =
+		(bForceFirstPersonWhenDroneUnavailable || bForceFirstPersonIfUnavailable)
+		&& (CurrentViewMode != EAgentViewMode::FirstPerson || bMapModeActive || bMiniMapModeActive);
+	if (bShouldForceFirstPerson)
+	{
+		ApplyViewMode(EAgentViewMode::FirstPerson, true);
+	}
+}
+
 bool AAgentCharacter::IsDronePilotMode() const
 {
 	return CurrentViewMode == EAgentViewMode::DronePilot;
@@ -2339,7 +2440,7 @@ bool AAgentCharacter::IsDronePilotMode() const
 
 bool AAgentCharacter::IsDroneInputModeActive() const
 {
-	return IsDronePilotMode() || bMapModeActive;
+	return bPrimaryDroneAvailable && (IsDronePilotMode() || bMapModeActive);
 }
 
 bool AAgentCharacter::IsSimpleDronePilotMode() const
@@ -2447,6 +2548,16 @@ void AAgentCharacter::CycleDronePilotControlMode(int32 Direction)
 
 void AAgentCharacter::ToggleMapMode()
 {
+	if (!bPrimaryDroneAvailable)
+	{
+		if (bForceFirstPersonWhenDroneUnavailable && CurrentViewMode != EAgentViewMode::FirstPerson)
+		{
+			ApplyViewMode(EAgentViewMode::FirstPerson, true);
+		}
+
+		return;
+	}
+
 	APlayerController* PlayerController = Cast<APlayerController>(GetController());
 
 	if (bMiniMapModeActive)
@@ -2507,6 +2618,16 @@ void AAgentCharacter::ToggleMapMode()
 
 void AAgentCharacter::EnterMiniMapMode()
 {
+	if (!bPrimaryDroneAvailable)
+	{
+		if (bForceFirstPersonWhenDroneUnavailable && CurrentViewMode != EAgentViewMode::FirstPerson)
+		{
+			ApplyViewMode(EAgentViewMode::FirstPerson, true);
+		}
+
+		return;
+	}
+
 	if (bMiniMapModeActive || bMapModeActive)
 	{
 		return;

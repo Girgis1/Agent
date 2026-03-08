@@ -4,8 +4,9 @@
 #include "Components/PrimitiveComponent.h"
 #include "Engine/Engine.h"
 #include "Factory/FactoryPayloadActor.h"
-#include "Material/MaterialComponent.h"
+#include "Factory/FactoryResourceBankSubsystem.h"
 #include "Material/AgentResourceTypes.h"
+#include "Material/MaterialComponent.h"
 #include <limits>
 
 UAtomiserVolume::UAtomiserVolume()
@@ -27,11 +28,23 @@ UAtomiserVolume::UAtomiserVolume()
 void UAtomiserVolume::BeginPlay()
 {
 	Super::BeginPlay();
+	BindToSharedResourceBank();
+}
+
+void UAtomiserVolume::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	UnbindFromSharedResourceBank();
+	Super::EndPlay(EndPlayReason);
 }
 
 void UAtomiserVolume::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	if (bUseSharedResourceBank && !BoundSharedResourceBank)
+	{
+		BindToSharedResourceBank();
+	}
 
 	if (!bEnabled)
 	{
@@ -98,14 +111,35 @@ float UAtomiserVolume::GetStoredUnits(FName ResourceId) const
 
 float UAtomiserVolume::GetTotalStoredUnits() const
 {
-	return AgentResource::ScaledToUnits(TotalStoredScaled);
+	return AgentResource::ScaledToUnits(GetTotalStoredScaled());
+}
+
+int32 UAtomiserVolume::GetTotalStoredScaled() const
+{
+	if (bUseSharedResourceBank)
+	{
+		if (UFactoryResourceBankSubsystem* ResourceBank = ResolveSharedResourceBank())
+		{
+			return ResourceBank->GetTotalStoredScaled();
+		}
+	}
+
+	return FMath::Max(0, TotalStoredScaled);
 }
 
 int32 UAtomiserVolume::GetStoredScaled(FName ResourceId) const
 {
+	if (bUseSharedResourceBank)
+	{
+		if (UFactoryResourceBankSubsystem* ResourceBank = ResolveSharedResourceBank())
+		{
+			return ResourceBank->GetStoredScaled(ResourceId);
+		}
+	}
+
 	if (ResourceId.IsNone())
 	{
-		return TotalStoredScaled;
+		return FMath::Max(0, TotalStoredScaled);
 	}
 
 	return FMath::Max(0, StoredResourcesScaled.FindRef(ResourceId));
@@ -113,16 +147,40 @@ int32 UAtomiserVolume::GetStoredScaled(FName ResourceId) const
 
 float UAtomiserVolume::GetCapacityUnits() const
 {
+	if (bUseSharedResourceBank)
+	{
+		if (UFactoryResourceBankSubsystem* ResourceBank = ResolveSharedResourceBank())
+		{
+			return ResourceBank->GetCapacityUnitsAsFloat();
+		}
+	}
+
 	return bInfiniteStorage ? -1.0f : AgentResource::ScaledToUnits(GetCapacityScaled());
 }
 
 float UAtomiserVolume::GetRemainingCapacityUnits() const
 {
+	if (bUseSharedResourceBank)
+	{
+		if (UFactoryResourceBankSubsystem* ResourceBank = ResolveSharedResourceBank())
+		{
+			return ResourceBank->GetRemainingCapacityUnits();
+		}
+	}
+
 	return bInfiniteStorage ? -1.0f : AgentResource::ScaledToUnits(GetRemainingCapacityScaled());
 }
 
 int32 UAtomiserVolume::GetRemainingCapacityScaled() const
 {
+	if (bUseSharedResourceBank)
+	{
+		if (UFactoryResourceBankSubsystem* ResourceBank = ResolveSharedResourceBank())
+		{
+			return ResourceBank->GetRemainingCapacityScaled();
+		}
+	}
+
 	if (bInfiniteStorage)
 	{
 		return TNumericLimits<int32>::Max();
@@ -141,6 +199,14 @@ bool UAtomiserVolume::HasResourceQuantityScaled(FName ResourceId, int32 Quantity
 	if (ResourceId.IsNone() || QuantityScaled <= 0)
 	{
 		return false;
+	}
+
+	if (bUseSharedResourceBank)
+	{
+		if (UFactoryResourceBankSubsystem* ResourceBank = ResolveSharedResourceBank())
+		{
+			return ResourceBank->HasResourceQuantityScaled(ResourceId, QuantityScaled);
+		}
 	}
 
 	return StoredResourcesScaled.FindRef(ResourceId) >= QuantityScaled;
@@ -168,6 +234,28 @@ bool UAtomiserVolume::ConsumeResourcesScaledAtomic(const TMap<FName, int32>& Res
 	if (ResourceQuantitiesScaled.Num() == 0)
 	{
 		return false;
+	}
+
+	if (bUseSharedResourceBank)
+	{
+		if (UFactoryResourceBankSubsystem* ResourceBank = ResolveSharedResourceBank())
+		{
+			const bool bConsumed = ResourceBank->ConsumeResourcesScaledAtomic(ResourceQuantitiesScaled);
+			if (bConsumed)
+			{
+				int64 TotalToConsumeScaled = 0;
+				for (const TPair<FName, int32>& Pair : ResourceQuantitiesScaled)
+				{
+					TotalToConsumeScaled += static_cast<int64>(FMath::Max(0, Pair.Value));
+				}
+				const int32 SafeConsumedScaled = static_cast<int32>(FMath::Min<int64>(TotalToConsumeScaled, static_cast<int64>(TNumericLimits<int32>::Max())));
+
+				ShowDebugMessage(
+					FString::Printf(TEXT("Consumed %.2f units"), AgentResource::ScaledToUnits(SafeConsumedScaled)),
+					FColor::Yellow);
+			}
+			return bConsumed;
+		}
 	}
 
 	int64 TotalToConsumeScaled = 0;
@@ -217,6 +305,28 @@ bool UAtomiserVolume::ConsumeResourcesScaledAtomic(const TMap<FName, int32>& Res
 
 bool UAtomiserVolume::AddResourcesScaledAtomic(const TMap<FName, int32>& ResourceQuantitiesScaled)
 {
+	if (bUseSharedResourceBank)
+	{
+		if (UFactoryResourceBankSubsystem* ResourceBank = ResolveSharedResourceBank())
+		{
+			const bool bAdded = ResourceBank->AddResourcesScaledAtomic(ResourceQuantitiesScaled);
+			if (bAdded)
+			{
+				int64 AddedTotalScaled = 0;
+				for (const TPair<FName, int32>& Pair : ResourceQuantitiesScaled)
+				{
+					AddedTotalScaled += static_cast<int64>(FMath::Max(0, Pair.Value));
+				}
+				const int32 SafeAddedScaled = static_cast<int32>(FMath::Min<int64>(AddedTotalScaled, static_cast<int64>(TNumericLimits<int32>::Max())));
+
+				ShowDebugMessage(
+					FString::Printf(TEXT("Stored %.2f units (Total %.2f)"), AgentResource::ScaledToUnits(SafeAddedScaled), ResourceBank->GetTotalStoredUnits()),
+					FColor::Cyan);
+			}
+			return bAdded;
+		}
+	}
+
 	if (!CanAcceptResourcesAtomic(ResourceQuantitiesScaled))
 	{
 		return false;
@@ -250,6 +360,16 @@ bool UAtomiserVolume::AddResourcesScaledAtomic(const TMap<FName, int32>& Resourc
 
 void UAtomiserVolume::ClearStoredResources()
 {
+	if (bUseSharedResourceBank)
+	{
+		if (UFactoryResourceBankSubsystem* ResourceBank = ResolveSharedResourceBank())
+		{
+			ResourceBank->ClearStorage();
+			ShowDebugMessage(TEXT("Storage cleared"), FColor::Silver);
+			return;
+		}
+	}
+
 	if (StoredResourcesScaled.Num() == 0 && TotalStoredScaled == 0)
 	{
 		return;
@@ -261,9 +381,18 @@ void UAtomiserVolume::ClearStoredResources()
 	BroadcastStorageChanged();
 }
 
-void UAtomiserVolume::GetStorageSnapshot(TArray<FAtomiserStoredResourceEntry>& OutEntries) const
+void UAtomiserVolume::GetStorageSnapshot(TArray<FResourceStorageEntry>& OutEntries) const
 {
 	OutEntries.Reset();
+
+	if (bUseSharedResourceBank)
+	{
+		if (UFactoryResourceBankSubsystem* ResourceBank = ResolveSharedResourceBank())
+		{
+			ResourceBank->GetStorageSnapshot(OutEntries);
+			return;
+		}
+	}
 
 	TArray<FName> ResourceIds;
 	StoredResourcesScaled.GetKeys(ResourceIds);
@@ -280,11 +409,96 @@ void UAtomiserVolume::GetStorageSnapshot(TArray<FAtomiserStoredResourceEntry>& O
 			continue;
 		}
 
-		FAtomiserStoredResourceEntry Entry;
+		FResourceStorageEntry Entry;
 		Entry.ResourceId = ResourceId;
 		Entry.QuantityScaled = QuantityScaled;
 		Entry.Units = AgentResource::ScaledToUnits(QuantityScaled);
 		OutEntries.Add(Entry);
+	}
+}
+
+void UAtomiserVolume::HandleSharedResourceBankChanged()
+{
+	SyncCachedStorageFromSharedBank();
+	BroadcastStorageChanged();
+}
+
+UFactoryResourceBankSubsystem* UAtomiserVolume::ResolveSharedResourceBank() const
+{
+	if (!bUseSharedResourceBank)
+	{
+		return nullptr;
+	}
+
+	if (UWorld* World = GetWorld())
+	{
+		return World->GetSubsystem<UFactoryResourceBankSubsystem>();
+	}
+
+	return nullptr;
+}
+
+void UAtomiserVolume::BindToSharedResourceBank()
+{
+	if (!bUseSharedResourceBank)
+	{
+		UnbindFromSharedResourceBank();
+		return;
+	}
+
+	UFactoryResourceBankSubsystem* ResolvedBank = ResolveSharedResourceBank();
+	if (BoundSharedResourceBank == ResolvedBank)
+	{
+		SyncCachedStorageFromSharedBank();
+		return;
+	}
+
+	if (BoundSharedResourceBank)
+	{
+		BoundSharedResourceBank->OnStorageChanged.RemoveDynamic(this, &UAtomiserVolume::HandleSharedResourceBankChanged);
+	}
+
+	BoundSharedResourceBank = ResolvedBank;
+	if (BoundSharedResourceBank)
+	{
+		BoundSharedResourceBank->OnStorageChanged.AddUniqueDynamic(this, &UAtomiserVolume::HandleSharedResourceBankChanged);
+	}
+
+	SyncCachedStorageFromSharedBank();
+}
+
+void UAtomiserVolume::UnbindFromSharedResourceBank()
+{
+	if (BoundSharedResourceBank)
+	{
+		BoundSharedResourceBank->OnStorageChanged.RemoveDynamic(this, &UAtomiserVolume::HandleSharedResourceBankChanged);
+		BoundSharedResourceBank = nullptr;
+	}
+}
+
+void UAtomiserVolume::SyncCachedStorageFromSharedBank()
+{
+	if (!bUseSharedResourceBank || !BoundSharedResourceBank)
+	{
+		return;
+	}
+
+	bInfiniteStorage = BoundSharedResourceBank->IsInfiniteStorage();
+	CapacityUnits = BoundSharedResourceBank->GetCapacityUnits();
+	TotalStoredScaled = BoundSharedResourceBank->GetTotalStoredScaled();
+
+	TArray<FResourceStorageEntry> SnapshotEntries;
+	BoundSharedResourceBank->GetStorageSnapshot(SnapshotEntries);
+	StoredResourcesScaled.Reset();
+
+	for (const FResourceStorageEntry& SnapshotEntry : SnapshotEntries)
+	{
+		if (SnapshotEntry.ResourceId.IsNone() || SnapshotEntry.QuantityScaled <= 0)
+		{
+			continue;
+		}
+
+		StoredResourcesScaled.Add(SnapshotEntry.ResourceId, SnapshotEntry.QuantityScaled);
 	}
 }
 
@@ -479,7 +693,12 @@ UPrimitiveComponent* UAtomiserVolume::ResolveSourcePrimitive(const AActor* Actor
 
 int32 UAtomiserVolume::GetCapacityScaled() const
 {
-	return bInfiniteStorage
-		? TNumericLimits<int32>::Max()
-		: AgentResource::WholeUnitsToScaled(CapacityUnits);
+	if (bInfiniteStorage)
+	{
+		return TNumericLimits<int32>::Max();
+	}
+
+	const int32 MaxWholeUnits = TNumericLimits<int32>::Max() / AgentResource::UnitsScale;
+	const int32 SafeCapacityUnits = FMath::Clamp(CapacityUnits, 0, MaxWholeUnits);
+	return AgentResource::WholeUnitsToScaled(SafeCapacityUnits);
 }
