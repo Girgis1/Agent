@@ -3,7 +3,7 @@
 #include "Factory/StorageVolumeComponent.h"
 #include "Engine/Engine.h"
 #include "Factory/FactoryPayloadActor.h"
-#include "Material/MaterialTypes.h"
+#include "Material/AgentResourceTypes.h"
 
 namespace
 {

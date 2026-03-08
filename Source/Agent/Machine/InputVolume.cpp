@@ -4,7 +4,7 @@
 #include "Components/PrimitiveComponent.h"
 #include "Factory/FactoryPayloadActor.h"
 #include "Material/MaterialComponent.h"
-#include "Material/MaterialTypes.h"
+#include "Material/AgentResourceTypes.h"
 #include "Machine/MachineComponent.h"
 
 namespace

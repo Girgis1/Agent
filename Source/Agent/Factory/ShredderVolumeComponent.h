@@ -4,7 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Factory/FactoryVolumeComponentBase.h"
-#include "Material/MaterialTypes.h"
+#include "Material/AgentResourceTypes.h"
 #include "ShredderVolumeComponent.generated.h"
 
 class UMachineOutputVolumeComponent;

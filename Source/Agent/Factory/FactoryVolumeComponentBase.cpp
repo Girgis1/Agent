@@ -1,7 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Factory/FactoryVolumeComponentBase.h"
-#include "Material/MaterialTypes.h"
+#include "Material/AgentResourceTypes.h"
 
 UFactoryVolumeComponentBase::UFactoryVolumeComponentBase()
 {
