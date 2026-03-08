@@ -7,6 +7,10 @@
 #include "MachineResourceReadoutActor.generated.h"
 
 class UAtomiserVolume;
+class UFactoryResourceBankSubsystem;
+class UMachineComponent;
+class UMachineInputVolumeComponent;
+class UStorageVolumeComponent;
 class USceneComponent;
 class UStaticMesh;
 class UStaticMeshComponent;
@@ -16,7 +20,16 @@ UENUM(BlueprintType)
 enum class EMachineReadoutSourceMode : uint8
 {
 	Atomiser,
-	Manual
+	Manual,
+	CurrentMachine,
+	AtomBank
+};
+
+UENUM(BlueprintType)
+enum class EMachineReadoutRowLayout : uint8
+{
+	Vertical,
+	Horizontal
 };
 
 USTRUCT(BlueprintType)
@@ -78,11 +91,25 @@ protected:
 	UFUNCTION()
 	void HandleAtomiserStorageChanged();
 
+	UFUNCTION()
+	void HandleAtomBankStorageChanged();
+
+	void BindToActiveSource();
 	void BindToAtomiserSource();
 	void UnbindFromAtomiserSource();
+	void BindToAtomBankSource();
+	void UnbindFromAtomBankSource();
 	UAtomiserVolume* ResolveAtomiserSourceCandidate() const;
+	UFactoryResourceBankSubsystem* ResolveAtomBankSource() const;
 	void RebuildEntriesFromSource();
 	void BuildEntriesFromAtomiser(TArray<FMachineReadoutEntry>& OutEntries) const;
+	void BuildEntriesFromAtomBank(TArray<FMachineReadoutEntry>& OutEntries) const;
+	void BuildEntriesFromCurrentMachine(TArray<FMachineReadoutEntry>& OutEntries) const;
+	void BuildEntriesFromScaledResourceMap(const TMap<FName, int32>& ResourceQuantitiesScaled, TArray<FMachineReadoutEntry>& OutEntries) const;
+	void BuildPlaceholderEntries(TArray<FMachineReadoutEntry>& OutEntries) const;
+	bool ShouldShowPlaceholderEntries() const;
+	FVector GetRowDirectionVector() const;
+	FVector GetBarFillDirectionVector() const;
 	FText ResolveResourceLabel(FName ResourceId) const;
 	void SyncVisualRows();
 	void EnsureRowVisualCount(int32 DesiredCount);
@@ -112,10 +139,25 @@ public:
 	float RowSpacing = 24.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Readout|Layout")
+	EMachineReadoutRowLayout RowLayout = EMachineReadoutRowLayout::Horizontal;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Readout|Layout")
+	FVector HorizontalRowDirection = FVector(0.0f, -1.0f, 0.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Readout|Layout")
 	FVector TextOffset = FVector::ZeroVector;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Readout|Layout")
-	FVector BarStartOffset = FVector(120.0f, 0.0f, 0.0f);
+	FVector BarStartOffset = FVector::ZeroVector;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Readout|Layout")
+	FVector BarFillDirection = FVector(1.0f, 0.0f, 0.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Readout|Layout")
+	FRotator BarRotationOffset = FRotator::ZeroRotator;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Readout|Layout", meta=(ClampMin="0.0", UIMin="0.0", EditCondition="RowLayout==EMachineReadoutRowLayout::Vertical"))
+	float VerticalTextGap = 8.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Readout|Layout", meta=(ClampMin="1.0", UIMin="1.0"))
 	float BarWidth = 120.0f;
@@ -138,6 +180,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Readout|Refresh", meta=(ClampMin="0.05", UIMin="0.05", EditCondition="bAutoRefresh"))
 	float RefreshIntervalSeconds = 0.25f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Readout|Preview")
+	bool bShowPlaceholderWhenNoData = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Readout|Preview", meta=(ClampMin="1", UIMin="1", EditCondition="bShowPlaceholderWhenNoData"))
+	int32 PlaceholderRowCount = 5;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Readout|Preview", meta=(ClampMin="0.0", UIMin="0.0", EditCondition="bShowPlaceholderWhenNoData"))
+	float PlaceholderUnitsStep = 20.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Readout|Visual")
 	TObjectPtr<UStaticMesh> BarMesh = nullptr;
 
@@ -147,6 +198,9 @@ public:
 protected:
 	UPROPERTY(Transient)
 	TObjectPtr<UAtomiserVolume> BoundAtomiserVolume = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UFactoryResourceBankSubsystem> BoundAtomBank = nullptr;
 
 	UPROPERTY(Transient)
 	TArray<FMachineReadoutRowVisual> RowVisuals;

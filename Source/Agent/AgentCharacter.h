@@ -139,6 +139,7 @@ protected:
 	void ResetCharacterCameraRoll();
 	void UpdateDronePilotCameraLimits();
 	void SyncControllerRotationToDroneCamera();
+	void RefreshPrimaryDroneAvailabilityFromCompanion();
 	bool IsDronePilotMode() const;
 	bool IsDroneInputModeActive() const;
 	bool IsSimpleDronePilotMode() const;
@@ -306,6 +307,15 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Crash")
 	float CrashRollRecoveryStableDelay = 0.35f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Availability")
+	bool bPrimaryDroneAvailable = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Availability")
+	bool bForceFirstPersonWhenDroneUnavailable = true;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone|Battery")
+	float PersistedPrimaryDroneBatteryPercent = 100.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera")
 	FVector FirstPersonCameraOffset = FVector(0.0f, 0.0f, 64.0f);
@@ -819,6 +829,15 @@ public:
 
 	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
 	float GetTrolleyRightInput() const { return TrolleyRightInput; }
+
+	UFUNCTION(BlueprintPure, Category="Drone|Availability")
+	bool IsPrimaryDroneAvailable() const { return bPrimaryDroneAvailable; }
+
+	UFUNCTION(BlueprintPure, Category="Drone|Battery")
+	float GetPersistedPrimaryDroneBatteryPercent() const { return PersistedPrimaryDroneBatteryPercent; }
+
+	UFUNCTION(BlueprintCallable, Category="Drone|Availability")
+	void SetPrimaryDroneAvailable(bool bNewAvailable, bool bForceFirstPersonIfUnavailable = true);
 
 	bool ShouldUseAttachedLocomotionProxy() const;
 	FVector GetAttachedLocomotionVelocityWorld() const;

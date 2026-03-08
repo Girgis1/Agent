@@ -3,9 +3,11 @@
 #include "DroneCompanion.h"
 #include "Agent.h"
 #include "Camera/CameraComponent.h"
+#include "Components/PointLightComponent.h"
 #include "Factory/ConveyorSurfaceVelocityComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SceneComponent.h"
+#include "DroneBatteryComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -46,6 +48,16 @@ ADroneCompanion::ADroneCompanion()
 	DroneCamera->bUsePawnControlRotation = false;
 	DroneCamera->FieldOfView = PilotCameraFieldOfView;
 
+	DroneStatusLight = CreateDefaultSubobject<UPointLightComponent>(TEXT("DroneStatusLight"));
+	DroneStatusLight->SetupAttachment(DroneBody);
+	DroneStatusLight->SetIntensity(StatusLightBaseIntensity);
+	DroneStatusLight->SetAttenuationRadius(StatusLightAttenuationRadius);
+	DroneStatusLight->SetLightColor(StatusLightNormalColor);
+	DroneStatusLight->SetCastShadows(false);
+	DroneStatusLight->SetCanEverAffectNavigation(false);
+
+	BatteryComponent = CreateDefaultSubobject<UDroneBatteryComponent>(TEXT("BatteryComponent"));
+
 	ConveyorSurfaceVelocity = CreateDefaultSubobject<UConveyorSurfaceVelocityComponent>(TEXT("ConveyorSurfaceVelocity"));
 }
 
@@ -65,6 +77,8 @@ void ADroneCompanion::BeginPlay()
 	ApplyRuntimePhysicalMaterial();
 	AdjustCameraTilt(0.0f);
 	UpdateBuddyDrift(BuddyDriftUpdateInterval);
+	UpdateBatteryState(0.0f);
+	UpdateStatusLight(0.0f);
 }
 
 void ADroneCompanion::Tick(float DeltaSeconds)
@@ -80,6 +94,7 @@ void ADroneCompanion::Tick(float DeltaSeconds)
 	RemoveAppliedConveyorSurfaceVelocity();
 	RollJumpCooldownRemaining = FMath::Max(0.0f, RollJumpCooldownRemaining - DeltaSeconds);
 	RollModeLogTimeRemaining = FMath::Max(0.0f, RollModeLogTimeRemaining - DeltaSeconds);
+	UpdateBatteryState(DeltaSeconds);
 
 	if (ImpactDebugTimeRemaining > 0.0f)
 	{
@@ -92,8 +107,17 @@ void ADroneCompanion::Tick(float DeltaSeconds)
 	}
 
 	UpdateBuddyDrift(DeltaSeconds);
-	const bool bRollPilotActive = bUseRollPilotControls && CompanionMode == EDroneCompanionMode::PilotControlled;
-	if (bRollPilotActive)
+	const bool bRollPilotActive =
+		!bDronePoweredOff
+		&& bUseRollPilotControls
+		&& CompanionMode == EDroneCompanionMode::PilotControlled;
+	if (bDronePoweredOff)
+	{
+		bCrashed = false;
+		CrashRecoveryTimeRemaining = 0.0f;
+		bPendingCrashRollRecovery = false;
+	}
+	else if (bRollPilotActive)
 	{
 		bCrashed = false;
 		CrashRecoveryTimeRemaining = 0.0f;
@@ -103,7 +127,7 @@ void ADroneCompanion::Tick(float DeltaSeconds)
 		UpdateCrashRecovery(DeltaSeconds);
 	}
 
-	if (!bCrashed)
+	if (!bDronePoweredOff && !bCrashed)
 	{
 		if (bLiftAssistActive
 			&& (CompanionMode == EDroneCompanionMode::BuddyFollow
@@ -166,11 +190,185 @@ void ADroneCompanion::Tick(float DeltaSeconds)
 
 	ApplyConveyorSurfaceVelocity();
 	UpdateCameraTransition(DeltaSeconds);
-	if (bRollPilotActive && !bCameraTransitionActive && CameraMount)
+	if (!bDronePoweredOff && bRollPilotActive && !bCameraTransitionActive && CameraMount)
 	{
 		UpdateRollCamera(DeltaSeconds);
 	}
+
+	UpdateStatusLight(DeltaSeconds);
 	UpdateDebugOutput();
+}
+
+float ADroneCompanion::GetBatteryPercent() const
+{
+	return BatteryComponent ? BatteryComponent->GetBatteryPercent() : 0.0f;
+}
+
+void ADroneCompanion::SetBatteryPercent(float NewBatteryPercent)
+{
+	if (!BatteryComponent)
+	{
+		return;
+	}
+
+	BatteryComponent->SetBatteryPercent(NewBatteryPercent);
+	if (BatteryComponent->IsDepleted())
+	{
+		if (!bDronePoweredOff)
+		{
+			HandleDronePowerLoss();
+		}
+
+		return;
+	}
+
+	if (bDronePoweredOff)
+	{
+		HandleDronePowerRestore();
+	}
+}
+
+float ADroneCompanion::ChargeBatteryPercent(float PercentToCharge)
+{
+	if (!BatteryComponent)
+	{
+		return 0.0f;
+	}
+
+	const float ChargedAmount = BatteryComponent->ChargePercent(PercentToCharge);
+	if (ChargedAmount > KINDA_SMALL_NUMBER && bDronePoweredOff && !BatteryComponent->IsDepleted())
+	{
+		HandleDronePowerRestore();
+	}
+
+	return ChargedAmount;
+}
+
+bool ADroneCompanion::IsBatteryDepleted() const
+{
+	return BatteryComponent ? BatteryComponent->IsDepleted() : bDronePoweredOff;
+}
+
+void ADroneCompanion::NotifyEnteredChargerVolume()
+{
+	ChargerVolumeOverlapCount = FMath::Max(0, ChargerVolumeOverlapCount + 1);
+	bIsInChargerVolume = ChargerVolumeOverlapCount > 0;
+}
+
+void ADroneCompanion::NotifyExitedChargerVolume()
+{
+	ChargerVolumeOverlapCount = FMath::Max(0, ChargerVolumeOverlapCount - 1);
+	bIsInChargerVolume = ChargerVolumeOverlapCount > 0;
+}
+
+void ADroneCompanion::UpdateBatteryState(float DeltaSeconds)
+{
+	if (!BatteryComponent)
+	{
+		LowBatteryFlickerAlpha = 0.0f;
+		return;
+	}
+
+	if (!bBatteryEnabled)
+	{
+		if (bDronePoweredOff)
+		{
+			HandleDronePowerRestore();
+		}
+
+		LowBatteryFlickerAlpha = 0.0f;
+		return;
+	}
+
+	const float SafeDeltaSeconds = FMath::Max(0.0f, DeltaSeconds);
+	if (bDrainBatteryOverTime && BatteryDrainDurationSeconds > KINDA_SMALL_NUMBER && !BatteryComponent->IsDepleted())
+	{
+		const float DrainRatePercentPerSecond =
+			BatteryComponent->GetMaxBatteryPercent() / FMath::Max(0.01f, BatteryDrainDurationSeconds);
+		BatteryComponent->ConsumePercent(DrainRatePercentPerSecond * SafeDeltaSeconds);
+	}
+
+	if (bIsInChargerVolume && BatteryChargeRateInChargerPercentPerSecond > 0.0f)
+	{
+		BatteryComponent->ChargePercent(BatteryChargeRateInChargerPercentPerSecond * SafeDeltaSeconds);
+	}
+
+	if (BatteryComponent->IsDepleted())
+	{
+		if (!bDronePoweredOff)
+		{
+			HandleDronePowerLoss();
+		}
+	}
+	else if (bDronePoweredOff)
+	{
+		HandleDronePowerRestore();
+	}
+}
+
+void ADroneCompanion::HandleDronePowerLoss()
+{
+	bDronePoweredOff = true;
+	bCrashed = false;
+	CrashRecoveryTimeRemaining = 0.0f;
+	bPendingCrashRollRecovery = false;
+	StopLiftAssist();
+	ResetPilotInputs();
+}
+
+void ADroneCompanion::HandleDronePowerRestore()
+{
+	bDronePoweredOff = false;
+}
+
+void ADroneCompanion::UpdateStatusLight(float DeltaSeconds)
+{
+	if (!DroneStatusLight)
+	{
+		return;
+	}
+
+	const float SafeDeltaSeconds = FMath::Max(0.0f, DeltaSeconds);
+	StatusLightFlickerTime += SafeDeltaSeconds;
+
+	const float BatteryPercent = BatteryComponent ? BatteryComponent->GetBatteryPercent() : 0.0f;
+	const float MaxBatteryPercent = BatteryComponent ? FMath::Max(0.01f, BatteryComponent->GetMaxBatteryPercent()) : 100.0f;
+	const float BatteryAlpha = FMath::Clamp(BatteryPercent / MaxBatteryPercent, 0.0f, 1.0f);
+	const float FlickerStartPercent = FMath::Clamp(BatteryFlickerStartPercent, 0.0f, MaxBatteryPercent);
+
+	float FlickerMultiplier = 1.0f;
+	LowBatteryFlickerAlpha = 0.0f;
+	if (FlickerStartPercent > KINDA_SMALL_NUMBER && BatteryPercent > 0.0f && BatteryPercent <= FlickerStartPercent)
+	{
+		LowBatteryFlickerAlpha = 1.0f - FMath::Clamp(BatteryPercent / FlickerStartPercent, 0.0f, 1.0f);
+
+		const float FlickerFrequency = FMath::Lerp(
+			FMath::Max(0.0f, LowBatteryFlickerMinFrequencyHz),
+			FMath::Max(0.0f, LowBatteryFlickerMaxFrequencyHz),
+			LowBatteryFlickerAlpha);
+		const float FlickerDepth = FMath::Lerp(
+			FMath::Clamp(LowBatteryFlickerMinDepth, 0.0f, 1.0f),
+			FMath::Clamp(LowBatteryFlickerMaxDepth, 0.0f, 1.0f),
+			LowBatteryFlickerAlpha);
+		const float FlickerPhase = StatusLightFlickerTime * FlickerFrequency * 2.0f * PI;
+		const float PulseA = 0.5f + 0.5f * FMath::Sin(FlickerPhase);
+		const float PulseB = 0.5f + 0.5f * FMath::Sin((FlickerPhase * 2.31f) + 1.71f);
+		const float FlickerSample = FMath::Lerp(PulseA, PulseB, 0.35f);
+		FlickerMultiplier = FMath::Clamp(1.0f - (FlickerDepth * FlickerSample), 0.0f, 1.0f);
+	}
+
+	const float BaseIntensity = FMath::Lerp(
+		FMath::Max(0.0f, StatusLightMinIntensity),
+		FMath::Max(StatusLightMinIntensity, StatusLightBaseIntensity),
+		BatteryAlpha);
+	const float FinalIntensity = BatteryPercent <= KINDA_SMALL_NUMBER ? 0.0f : (BaseIntensity * FlickerMultiplier);
+
+	DroneStatusLight->SetIntensity(FinalIntensity);
+	DroneStatusLight->SetAttenuationRadius(FMath::Max(0.0f, StatusLightAttenuationRadius));
+
+	const float FullyChargedThreshold = FMath::Clamp(BatteryFullThresholdPercent, 0.0f, MaxBatteryPercent);
+	const bool bIsFullyChargedInCharger = bIsInChargerVolume && BatteryPercent >= FullyChargedThreshold;
+	DroneStatusLight->SetLightColor(bIsFullyChargedInCharger ? StatusLightChargingFullColor : StatusLightNormalColor);
 }
 
 void ADroneCompanion::RemoveAppliedConveyorSurfaceVelocity()
@@ -303,6 +501,12 @@ void ADroneCompanion::SetHoldTransform(const FVector& NewLocation, const FRotato
 
 void ADroneCompanion::SetPilotInputs(float InThrottleInput, float InYawInput, float InRollInput, float InPitchInput)
 {
+	if (bDronePoweredOff)
+	{
+		ResetPilotInputs();
+		return;
+	}
+
 	auto ApplyDeadzone = [this](float Value)
 	{
 		const float ClampedDeadzone = FMath::Clamp(PilotInputDeadzone, 0.0f, 0.95f);
@@ -496,6 +700,7 @@ void ADroneCompanion::SetPilotHoverModeEnabled(bool bEnable)
 bool ADroneCompanion::TryRollJump(float ChargeAlpha)
 {
 	if (!DroneBody
+		|| bDronePoweredOff
 		|| !bUseRollPilotControls
 		|| CompanionMode != EDroneCompanionMode::PilotControlled
 		|| RollJumpCooldownRemaining > 0.0f)
@@ -583,6 +788,7 @@ bool ADroneCompanion::StartLiftAssist(
 		|| CompanionMode == EDroneCompanionMode::MapMode;
 
 	if (!DroneBody
+		|| bDronePoweredOff
 		|| !InTargetComponent
 		|| !InTargetComponent->IsSimulatingPhysics()
 		|| !bSupportsLiftAssistMode)
@@ -673,7 +879,7 @@ void ADroneCompanion::OnDroneBodyHit(
 	FVector NormalImpulse,
 	const FHitResult& Hit)
 {
-	if (!DroneBody || !Hit.bBlockingHit)
+	if (!DroneBody || !Hit.bBlockingHit || bDronePoweredOff)
 	{
 		return;
 	}
@@ -1965,9 +2171,11 @@ void ADroneCompanion::UpdateDebugOutput() const
 	const FColor HoverDebugColor = bPilotHoverAssistTemporarilySuppressed
 		? FColor::Yellow
 		: (bPilotHoverModeEnabled ? FColor::Green : FColor::Red);
+	const float BatteryPercent = GetBatteryPercent();
 	const FString DebugText = FString::Printf(
 		TEXT("Drone Companion\n")
 		TEXT("Mode: %s  Stab: %s  Hover: %s  Crashed: %s  Recovery: %.2fs\n")
+		TEXT("Battery: %.2f%%  Dead: %s  Charger: %s  Flicker: %.2f\n")
 		TEXT("Speed: %.0f / %.0f uu/s  Angular: %.0f deg/s\n")
 		TEXT("Impact: %s  Would Crash: %s  Last Impact: %.0f\n")
 		TEXT("Inputs: V %.2f  Y %.2f  X %.2f  F %.2f  Cam Tilt: %.1f  FOV: %.1f  Lean: %.1f\n")
@@ -1977,6 +2185,10 @@ void ADroneCompanion::UpdateDebugOutput() const
 		bPilotHoverModeEnabled ? TEXT("ON") : TEXT("OFF"),
 		bCrashed ? TEXT("YES") : TEXT("NO"),
 		CrashRecoveryTimeRemaining,
+		BatteryPercent,
+		bDronePoweredOff ? TEXT("YES") : TEXT("NO"),
+		bIsInChargerVolume ? TEXT("YES") : TEXT("NO"),
+		LowBatteryFlickerAlpha,
 		Velocity.Size(),
 		DroneMaxLinearSpeed,
 		AngularVelocity.Size(),
