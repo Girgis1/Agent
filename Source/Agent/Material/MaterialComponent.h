@@ -4,7 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
-#include "Material/MaterialTypes.h"
+#include "Material/AgentResourceTypes.h"
 #include "MaterialComponent.generated.h"
 
 class UPrimitiveComponent;

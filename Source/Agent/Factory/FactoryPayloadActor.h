@@ -3,7 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Material/MaterialTypes.h"
+#include "Material/AgentResourceTypes.h"
 #include "GameFramework/Actor.h"
 #include "FactoryPayloadActor.generated.h"
 

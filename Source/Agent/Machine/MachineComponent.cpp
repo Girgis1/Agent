@@ -3,7 +3,7 @@
 #include "Machine/MachineComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Material/MaterialDefinitionAsset.h"
-#include "Material/MaterialTypes.h"
+#include "Material/AgentResourceTypes.h"
 #include "Machine/InputVolume.h"
 #include "Machine/OutputVolume.h"
 #include "Material/RecipeAsset.h"

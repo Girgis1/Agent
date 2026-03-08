@@ -7,7 +7,7 @@
 #include "Factory/FactoryPayloadActor.h"
 #include "Material/MaterialComponent.h"
 #include "Material/MaterialDefinitionAsset.h"
-#include "Material/MaterialTypes.h"
+#include "Material/AgentResourceTypes.h"
 #include "UObject/UObjectIterator.h"
 
 UMachineOutputVolumeComponent::UMachineOutputVolumeComponent()

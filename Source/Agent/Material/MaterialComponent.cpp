@@ -6,7 +6,7 @@
 #include "Engine/World.h"
 #include "Factory/FactoryWorldConfig.h"
 #include "Material/MaterialDefinitionAsset.h"
-#include "Material/MaterialTypes.h"
+#include "Material/AgentResourceTypes.h"
 #include "UObject/UObjectIterator.h"
 
 namespace

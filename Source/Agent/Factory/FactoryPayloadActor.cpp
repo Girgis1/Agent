@@ -3,7 +3,7 @@
 #include "Factory/FactoryPayloadActor.h"
 #include "Components/StaticMeshComponent.h"
 #include "Material/MaterialComponent.h"
-#include "Material/MaterialTypes.h"
+#include "Material/AgentResourceTypes.h"
 #include "UObject/ConstructorHelpers.h"
 
 AFactoryPayloadActor::AFactoryPayloadActor()

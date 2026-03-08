@@ -7,7 +7,7 @@
 #include "Factory/MachineOutputVolumeComponent.h"
 #include "GameFramework/Pawn.h"
 #include "Material/MaterialComponent.h"
-#include "Material/MaterialTypes.h"
+#include "Material/AgentResourceTypes.h"
 
 namespace
 {

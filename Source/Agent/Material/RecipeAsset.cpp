@@ -3,7 +3,7 @@
 #include "Material/RecipeAsset.h"
 #include "GameFramework/Actor.h"
 #include "Material/MaterialDefinitionAsset.h"
-#include "Material/MaterialTypes.h"
+#include "Material/AgentResourceTypes.h"
 
 bool FRecipeMaterialInputEntry::IsDefined() const
 {
