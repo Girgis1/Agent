@@ -2382,17 +2382,16 @@ void AAgentCharacter::RefreshPrimaryDroneAvailabilityFromCompanion()
 	}
 
 	PersistedPrimaryDroneBatteryPercent = FMath::Clamp(DroneCompanion->GetBatteryPercent(), 0.0f, 100.0f);
-
-	if (DroneCompanion->IsBatteryDepleted())
+	const bool bRequiresChargingIdle =
+		DroneCompanion->IsInChargerVolume()
+		&& !DroneCompanion->IsBatteryFullyCharged()
+		&& DroneCompanion->GetCompanionMode() != EDroneCompanionMode::PilotControlled;
+	const bool bShouldBeAvailable =
+		!DroneCompanion->IsBatteryDepleted()
+		&& !bRequiresChargingIdle;
+	if (bShouldBeAvailable != bPrimaryDroneAvailable)
 	{
-		if (bPrimaryDroneAvailable)
-		{
-			SetPrimaryDroneAvailable(false, true);
-		}
-	}
-	else if (!bPrimaryDroneAvailable)
-	{
-		SetPrimaryDroneAvailable(true, false);
+		SetPrimaryDroneAvailable(bShouldBeAvailable, true);
 	}
 }
 
