@@ -688,11 +688,71 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light")
 	FLinearColor StatusLightLowBatteryColor = FLinearColor(1.0f, 0.06f, 0.03f, 1.0f);
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light")
+	FLinearColor StatusLightLowBatteryWarningColor = FLinearColor(1.0f, 0.46f, 0.06f, 1.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|PoweredOff")
+	bool bUseManualOffHeartbeat = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|PoweredOff", meta=(ClampMin="0.01", UIMin="0.01"))
+	float ManualOffHeartbeatFrequencyHz = 0.28f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|PoweredOff", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="1.0", UIMax="1.0"))
+	float ManualOffHeartbeatMinBrightnessAlpha = 0.015f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|PoweredOff", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="1.0", UIMax="1.0"))
+	float ManualOffHeartbeatMaxBrightnessAlpha = 0.1f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Spotlight")
 	bool bForceTorchSpotlightsWhite = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Spotlight")
 	FLinearColor TorchSpotlightColor = FLinearColor::White;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Spotlight", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="100.0", UIMax="100.0"))
+	float TorchDisableAtLowBatteryPercent = 5.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Spotlight")
+	FLinearColor TorchLowBatteryColor = FLinearColor(1.0f, 0.05f, 0.03f, 1.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Spotlight", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="1.0", UIMax="1.0"))
+	float TorchLowBatteryBrightnessAlpha = 0.35f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Spotlight|Flicker", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="100.0", UIMax="100.0"))
+	float TorchFlickerStartPercent = 10.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Spotlight|Flicker", meta=(ClampMin="0.1", UIMin="0.1"))
+	float TorchFlickerRampExponent = 1.8f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Spotlight|Flicker", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="1.0", UIMax="1.0"))
+	float TorchFlickerOutageChanceAtStart = 0.06f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Spotlight|Flicker", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="1.0", UIMax="1.0"))
+	float TorchFlickerOutageChanceAtCutoff = 0.82f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Spotlight|Flicker", meta=(ClampMin="0.01", UIMin="0.01"))
+	float TorchFlickerGapMinAtStartSeconds = 1.8f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Spotlight|Flicker", meta=(ClampMin="0.01", UIMin="0.01"))
+	float TorchFlickerGapMaxAtStartSeconds = 4.2f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Spotlight|Flicker", meta=(ClampMin="0.01", UIMin="0.01"))
+	float TorchFlickerGapMinAtCutoffSeconds = 0.12f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Spotlight|Flicker", meta=(ClampMin="0.01", UIMin="0.01"))
+	float TorchFlickerGapMaxAtCutoffSeconds = 0.55f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Spotlight|Flicker", meta=(ClampMin="0.005", UIMin="0.005"))
+	float TorchFlickerOffMinAtStartSeconds = 0.02f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Spotlight|Flicker", meta=(ClampMin="0.005", UIMin="0.005"))
+	float TorchFlickerOffMaxAtStartSeconds = 0.07f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Spotlight|Flicker", meta=(ClampMin="0.005", UIMin="0.005"))
+	float TorchFlickerOffMinAtCutoffSeconds = 0.05f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Spotlight|Flicker", meta=(ClampMin="0.005", UIMin="0.005"))
+	float TorchFlickerOffMaxAtCutoffSeconds = 0.2f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Spotlight", meta=(ClampMin="0.0", UIMin="0.0"))
 	float TorchAimInterpSpeed = 10.0f;
@@ -726,6 +786,24 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Emissive")
 	FLinearColor EyeEmissiveColor = FLinearColor(1.0f, 0.05f, 0.03f, 1.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Emissive")
+	bool bEyeBlinkGreenWhenFullyCharged = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Emissive")
+	bool bEyeFullChargeBlinkRequiresChargerVolume = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Emissive")
+	FLinearColor EyeFullyChargedBlinkColor = FLinearColor(0.15f, 1.0f, 0.25f, 1.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Emissive", meta=(ClampMin="0.01", UIMin="0.01"))
+	float EyeFullChargeBlinkFrequencyHz = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Emissive", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="1.0", UIMax="1.0"))
+	float EyeFullChargeBlinkMinAlpha = 0.25f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Emissive", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="1.0", UIMax="1.0"))
+	float EyeFullChargeBlinkMaxAlpha = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Emissive", meta=(ClampMin="0.0", UIMin="0.0"))
 	float AccessoryEmissiveMinIntensity = 0.0f;
@@ -999,7 +1077,9 @@ protected:
 	float LiftAssistStageTimeRemaining = 0.0f;
 	float LiftAssistForceRampTime = 0.0f;
 	float LiftAssistSmoothedVerticalAcceleration = 0.0f;
+	float ManualOffHeartbeatTime = 0.0f;
 	float StatusLightFlickerTime = 0.0f;
+	float TorchFlickerTimeRemaining = 0.0f;
 	float FlatBatteryPulseTime = 0.0f;
 	FVector FreeFlyCurrentVelocity = FVector::ZeroVector;
 	FRotator CameraTransitionStartRotation = FRotator::ZeroRotator;
@@ -1019,4 +1099,6 @@ protected:
 	FRotator CameraTransitionTargetRotation = FRotator::ZeroRotator;
 	int32 ChargerVolumeOverlapCount = 0;
 	bool bStatusLightFlickerOn = true;
+	bool bTorchFlickerOn = true;
+	TMap<TWeakObjectPtr<USpotLightComponent>, float> TorchSpotlightBaseIntensityByComponent;
 };
