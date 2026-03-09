@@ -684,6 +684,11 @@ void AAgentCharacter::ApplyViewMode(EAgentViewMode NewMode, bool bBlend)
 			SpawnDroneCompanionAtTransform(DroneSpawnLocation, DroneSpawnRotation, EDroneCompanionMode::PilotControlled, true);
 		}
 
+		if (DroneCompanion)
+		{
+			DroneCompanion->SetHideStaticMeshesFromOwnerCamera(true);
+		}
+
 		if (DroneCompanion && PreviousViewMode == EAgentViewMode::ThirdPerson)
 		{
 			DroneCompanion->StartPilotCameraTransitionFromThirdPerson();
@@ -1393,8 +1398,11 @@ void AAgentCharacter::ApplyDroneFleetContext(bool bUpdateViewTarget, bool bBlend
 			DroneCompanion->ClearTorchAimTarget();
 		}
 
+		const bool bShadowOnlyDroneMeshes =
+			CurrentViewMode == EAgentViewMode::ThirdPerson
+			|| CurrentViewMode == EAgentViewMode::DronePilot;
+		DroneCompanion->SetHideStaticMeshesFromOwnerCamera(bShadowOnlyDroneMeshes);
 		const bool bPseudoThirdPersonMode = DesiredMode == EDroneCompanionMode::ThirdPersonFollow;
-		DroneCompanion->SetHideStaticMeshesFromOwnerCamera(bPseudoThirdPersonMode);
 		if (bPseudoThirdPersonMode)
 		{
 			FVector ThirdPersonTargetLocation = FVector::ZeroVector;
