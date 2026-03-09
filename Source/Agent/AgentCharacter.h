@@ -234,7 +234,7 @@ protected:
 	void AdjustPickupStrength(float Delta);
 	void ShowPickupStrengthDebug() const;
 	bool TryAssignActiveDroneToHookJob(bool bCycleAfterAssign);
-	bool TryReleaseHookJobDrone();
+	bool TryReleaseAllHookJobDrones();
 	void UpdateHookJobButtonHold(float DeltaSeconds);
 
 	void OnDronePitchForwardPressed();
@@ -445,7 +445,7 @@ public:
 	float PickupMaxHoldDistance = 650.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
-	float MapModePickupDownwardDotThreshold = 0.95f;
+	float MapModePickupDownwardDotThreshold = -1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
 	FVector ThirdPersonPickupHoldOffset = FVector(7.5f, 0.0f, 0.0f);
