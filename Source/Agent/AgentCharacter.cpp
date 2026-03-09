@@ -209,6 +209,7 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 	UpdateViewModeButtonHold(DeltaSeconds);
 	UpdateKeyboardMapButtonHold(DeltaSeconds);
 	UpdateControllerMapButtonHold(DeltaSeconds);
+	UpdateHookJobButtonHold(DeltaSeconds);
 	UpdateRollModeJumpHold(DeltaSeconds);
 	UpdateDronePilotCameraLimits();
 	RefreshPrimaryDroneAvailabilityFromCompanion();
@@ -326,7 +327,10 @@ void AAgentCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	PlayerInputComponent->BindKey(EKeys::RightMouseButton, IE_Pressed, this, &AAgentCharacter::OnConveyorCancelPressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Right, IE_Pressed, this, &AAgentCharacter::OnConveyorCancelPressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_LeftShoulder, IE_Pressed, this, &AAgentCharacter::OnGamepadLeftShoulderPressed);
-	PlayerInputComponent->BindKey(EKeys::Gamepad_RightShoulder, IE_Pressed, this, &AAgentCharacter::OnConveyorRotateRightPressed);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_RightShoulder, IE_Pressed, this, &AAgentCharacter::OnHookJobButtonPressed);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_RightShoulder, IE_Released, this, &AAgentCharacter::OnHookJobButtonReleased);
+	PlayerInputComponent->BindKey(EKeys::MiddleMouseButton, IE_Pressed, this, &AAgentCharacter::OnHookJobButtonPressed);
+	PlayerInputComponent->BindKey(EKeys::MiddleMouseButton, IE_Released, this, &AAgentCharacter::OnHookJobButtonReleased);
 	PlayerInputComponent->BindKey(EKeys::SpaceBar, IE_Pressed, this, &AAgentCharacter::DoJumpStart);
 	PlayerInputComponent->BindKey(EKeys::SpaceBar, IE_Released, this, &AAgentCharacter::DoJumpEnd);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Bottom, IE_Pressed, this, &AAgentCharacter::DoJumpStart);
@@ -551,6 +555,19 @@ void AAgentCharacter::ApplyViewMode(EAgentViewMode NewMode, bool bBlend)
 	bThirdPersonTransitionActive = false;
 	bPendingThirdPersonSwapFromDroneCamera = false;
 	ThirdPersonTransitionElapsed = 0.0f;
+	bool bAutoCycleToBuddyAfterRoleAssignment = false;
+
+	if (NewMode == EAgentViewMode::ThirdPerson)
+	{
+		EnsureActiveDroneSelection();
+		const bool bAssignedDifferentThirdPersonDrone = ThirdPersonLockedDrone.Get() != DroneCompanion.Get();
+		ThirdPersonLockedDrone = DroneCompanion;
+		bAutoCycleToBuddyAfterRoleAssignment = bAssignedDifferentThirdPersonDrone;
+	}
+	else if (PreviousViewMode == EAgentViewMode::ThirdPerson)
+	{
+		ThirdPersonLockedDrone = nullptr;
+	}
 
 	const float BlendTime = bBlend ? ViewBlendTime : 0.0f;
 	APlayerController* PlayerController = Cast<APlayerController>(GetController());
@@ -743,6 +760,10 @@ void AAgentCharacter::ApplyViewMode(EAgentViewMode NewMode, bool bBlend)
 	}
 
 	ApplyDroneFleetContext(false, false);
+	if (bAutoCycleToBuddyAfterRoleAssignment)
+	{
+		CycleActiveDrone(1);
+	}
 }
 
 void AAgentCharacter::ApplyDroneAssistState()
@@ -961,6 +982,81 @@ void AAgentCharacter::SyncSwarmFromDroneFleet()
 	DroneSwarmComponent->SetActiveDrone(DroneCompanion);
 }
 
+void AAgentCharacter::CleanupInvalidDroneJobLocks()
+{
+	auto IsDroneValidForJob = [this](const ADroneCompanion* CandidateDrone)
+	{
+		return IsValid(CandidateDrone)
+			&& DroneCompanions.Contains(CandidateDrone)
+			&& !CandidateDrone->IsBatteryDepleted()
+			&& !CandidateDrone->IsManualPowerOffRequested();
+	};
+
+	if (!IsDroneValidForJob(ThirdPersonLockedDrone.Get()))
+	{
+		ThirdPersonLockedDrone = nullptr;
+	}
+
+	if (!IsDroneValidForJob(MiniMapLockedDrone.Get()))
+	{
+		MiniMapLockedDrone = nullptr;
+	}
+
+	for (int32 HookIndex = HookJobLockedDrones.Num() - 1; HookIndex >= 0; --HookIndex)
+	{
+		ADroneCompanion* HookDrone = HookJobLockedDrones[HookIndex].Get();
+		const bool bHookLiftStillActive = HookDrone && HookDrone->IsLiftAssistActive();
+		if (IsDroneValidForJob(HookDrone) && bHookLiftStillActive)
+		{
+			continue;
+		}
+
+		if (DroneSwarmComponent && HookDrone)
+		{
+			DroneSwarmComponent->SetHookWorker(HookDrone, false);
+		}
+
+		HookJobLockedDrones.RemoveAtSwap(HookIndex);
+	}
+
+	if (!IsDroneInHookJobLock(LastHookJobLockedDrone.Get()))
+	{
+		LastHookJobLockedDrone = HookJobLockedDrones.Num() > 0
+			? HookJobLockedDrones.Last()
+			: nullptr;
+	}
+}
+
+bool AAgentCharacter::IsDroneInHookJobLock(const ADroneCompanion* CandidateDrone) const
+{
+	if (!IsValid(CandidateDrone))
+	{
+		return false;
+	}
+
+	for (const TObjectPtr<ADroneCompanion>& HookDrone : HookJobLockedDrones)
+	{
+		if (HookDrone.Get() == CandidateDrone)
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+bool AAgentCharacter::IsDroneLockedToPersistentJob(const ADroneCompanion* CandidateDrone) const
+{
+	if (!IsValid(CandidateDrone))
+	{
+		return false;
+	}
+
+	return CandidateDrone == ThirdPersonLockedDrone.Get()
+		|| CandidateDrone == MiniMapLockedDrone.Get()
+		|| IsDroneInHookJobLock(CandidateDrone);
+}
+
 EDroneSwarmRoleSlot AAgentCharacter::ResolveDesiredActiveSwarmRole() const
 {
 	if (!bPrimaryDroneAvailable || !DroneCompanion)
@@ -998,15 +1094,74 @@ void AAgentCharacter::RefreshSwarmRoleAssignments()
 		return;
 	}
 
-	DroneSwarmComponent->ClearAllRoles();
+	CleanupInvalidDroneJobLocks();
+
 	DroneSwarmComponent->SetActiveDrone(DroneCompanion);
+	DroneSwarmComponent->ClearRole(EDroneSwarmRoleSlot::Buddy);
+	DroneSwarmComponent->ClearRole(EDroneSwarmRoleSlot::ThirdPersonCamera);
+	DroneSwarmComponent->ClearRole(EDroneSwarmRoleSlot::MiniMap);
+	DroneSwarmComponent->ClearRole(EDroneSwarmRoleSlot::Pilot);
+	DroneSwarmComponent->ClearRole(EDroneSwarmRoleSlot::Map);
+	DroneSwarmComponent->ClearHookWorkers();
+
+	if (ThirdPersonLockedDrone)
+	{
+		DroneSwarmComponent->AssignRole(EDroneSwarmRoleSlot::ThirdPersonCamera, ThirdPersonLockedDrone.Get());
+	}
+
+	if (MiniMapLockedDrone)
+	{
+		DroneSwarmComponent->AssignRole(EDroneSwarmRoleSlot::MiniMap, MiniMapLockedDrone.Get());
+	}
+
+	for (ADroneCompanion* HookDrone : HookJobLockedDrones)
+	{
+		if (!IsValid(HookDrone))
+		{
+			continue;
+		}
+
+		DroneSwarmComponent->SetHookWorker(HookDrone, true);
+	}
 
 	if (DroneCompanion)
 	{
 		const EDroneSwarmRoleSlot ActiveRole = ResolveDesiredActiveSwarmRole();
-		if (ActiveRole != EDroneSwarmRoleSlot::None)
+		switch (ActiveRole)
 		{
+		case EDroneSwarmRoleSlot::ThirdPersonCamera:
+			if (!ThirdPersonLockedDrone)
+			{
+				ThirdPersonLockedDrone = DroneCompanion;
+			}
+			if (ThirdPersonLockedDrone == DroneCompanion)
+			{
+				DroneSwarmComponent->AssignRole(EDroneSwarmRoleSlot::ThirdPersonCamera, ThirdPersonLockedDrone.Get());
+			}
+			else
+			{
+				DroneSwarmComponent->AssignRole(EDroneSwarmRoleSlot::Buddy, DroneCompanion);
+			}
+			break;
+		case EDroneSwarmRoleSlot::MiniMap:
+			if (!MiniMapLockedDrone)
+			{
+				MiniMapLockedDrone = DroneCompanion;
+			}
+			if (MiniMapLockedDrone == DroneCompanion)
+			{
+				DroneSwarmComponent->AssignRole(EDroneSwarmRoleSlot::MiniMap, MiniMapLockedDrone.Get());
+			}
+			else
+			{
+				DroneSwarmComponent->AssignRole(EDroneSwarmRoleSlot::Buddy, DroneCompanion);
+			}
+			break;
+		case EDroneSwarmRoleSlot::None:
+			break;
+		default:
 			DroneSwarmComponent->AssignRole(ActiveRole, DroneCompanion);
+			break;
 		}
 	}
 
@@ -1047,6 +1202,7 @@ EDroneCompanionMode AAgentCharacter::ResolveCompanionModeForRole(EDroneSwarmRole
 	case EDroneSwarmRoleSlot::Buddy:
 		return EDroneCompanionMode::BuddyFollow;
 	case EDroneSwarmRoleSlot::HookWorker:
+		return EDroneCompanionMode::BuddyFollow;
 	case EDroneSwarmRoleSlot::None:
 	default:
 		return EDroneCompanionMode::Idle;
@@ -1220,6 +1376,7 @@ void AAgentCharacter::CleanupInvalidDroneCompanions()
 		ActiveDroneIndex = INDEX_NONE;
 	}
 
+	CleanupInvalidDroneJobLocks();
 	SyncSwarmFromDroneFleet();
 }
 
@@ -1231,17 +1388,20 @@ void AAgentCharacter::EnsureActiveDroneSelection()
 		return;
 	}
 
-	const int32 AvailableIndex = FindNextDroneIndex(INDEX_NONE, 1, true);
+	const int32 AvailableIndex = FindNextDroneIndex(INDEX_NONE, 1, true, true);
 	const int32 FallbackIndex = AvailableIndex != INDEX_NONE
 		? AvailableIndex
-		: FindNextDroneIndex(INDEX_NONE, 1, false);
-	if (!DroneCompanions.IsValidIndex(FallbackIndex))
+		: FindNextDroneIndex(INDEX_NONE, 1, false, true);
+	const int32 AnyDroneFallbackIndex = FallbackIndex != INDEX_NONE
+		? FallbackIndex
+		: FindNextDroneIndex(INDEX_NONE, 1, false, false);
+	if (!DroneCompanions.IsValidIndex(AnyDroneFallbackIndex))
 	{
 		return;
 	}
 
-	ActiveDroneIndex = FallbackIndex;
-	DroneCompanion = DroneCompanions[FallbackIndex];
+	ActiveDroneIndex = AnyDroneFallbackIndex;
+	DroneCompanion = DroneCompanions[AnyDroneFallbackIndex];
 }
 
 bool AAgentCharacter::IsDroneAvailableForActivation(const ADroneCompanion* CandidateDrone) const
@@ -1255,7 +1415,11 @@ bool AAgentCharacter::IsDroneAvailableForActivation(const ADroneCompanion* Candi
 		&& !CandidateDrone->IsManualPowerOffRequested();
 }
 
-int32 AAgentCharacter::FindNextDroneIndex(int32 StartIndex, int32 Direction, bool bPreferAvailable) const
+int32 AAgentCharacter::FindNextDroneIndex(
+	int32 StartIndex,
+	int32 Direction,
+	bool bPreferAvailable,
+	bool bSkipJobLockedDrones) const
 {
 	const int32 DroneCount = DroneCompanions.Num();
 	if (DroneCount <= 0)
@@ -1291,6 +1455,11 @@ int32 AAgentCharacter::FindNextDroneIndex(int32 StartIndex, int32 Direction, boo
 			continue;
 		}
 
+		if (bSkipJobLockedDrones && IsDroneLockedToPersistentJob(CandidateDrone))
+		{
+			continue;
+		}
+
 		if (!bPreferAvailable || IsDroneAvailableForActivation(CandidateDrone))
 		{
 			return CandidateIndex;
@@ -1318,10 +1487,17 @@ bool AAgentCharacter::SetActiveDroneIndex(int32 NewActiveIndex, bool bUpdateView
 
 	if (PreviousDrone && PreviousDrone != DroneCompanion)
 	{
-		PreviousDrone->StopLiftAssist();
-		PreviousDrone->ResetPilotInputs();
-		PreviousDrone->SetActorEnableCollision(true);
-		PreviousDrone->SetCompanionMode(EDroneCompanionMode::Idle);
+		if (!IsDroneLockedToPersistentJob(PreviousDrone))
+		{
+			PreviousDrone->StopLiftAssist();
+			PreviousDrone->ResetPilotInputs();
+			PreviousDrone->SetActorEnableCollision(true);
+			PreviousDrone->SetCompanionMode(EDroneCompanionMode::Idle);
+		}
+		else
+		{
+			PreviousDrone->ResetPilotInputs();
+		}
 	}
 
 	RefreshPrimaryDroneAvailabilityFromCompanion();
@@ -1340,10 +1516,10 @@ void AAgentCharacter::CycleActiveDrone(int32 Direction)
 	const int32 StartIndex = DroneCompanion
 		? ActiveDroneIndex
 		: INDEX_NONE;
-	int32 NextIndex = FindNextDroneIndex(StartIndex, Direction, bCycleOnlyAvailableDrones);
+	int32 NextIndex = FindNextDroneIndex(StartIndex, Direction, bCycleOnlyAvailableDrones, true);
 	if (NextIndex == INDEX_NONE && bCycleOnlyAvailableDrones)
 	{
-		NextIndex = FindNextDroneIndex(StartIndex, Direction, false);
+		NextIndex = FindNextDroneIndex(StartIndex, Direction, false, true);
 	}
 
 	if (NextIndex == INDEX_NONE || NextIndex == ActiveDroneIndex)
@@ -1362,67 +1538,102 @@ void AAgentCharacter::ApplyDroneFleetContext(bool bUpdateViewTarget, bool bBlend
 
 	for (ADroneCompanion* CandidateDrone : DroneCompanions)
 	{
-		if (!IsValid(CandidateDrone) || CandidateDrone == DroneCompanion)
+		if (!IsValid(CandidateDrone))
 		{
 			continue;
 		}
 
-		CandidateDrone->StopLiftAssist();
-		CandidateDrone->ResetPilotInputs();
-		CandidateDrone->SetActorEnableCollision(true);
-		CandidateDrone->SetHideStaticMeshesFromOwnerCamera(false);
-		CandidateDrone->SetTorchEnabled(false);
-		CandidateDrone->ClearTorchAimTarget();
-		CandidateDrone->SetCompanionMode(EDroneCompanionMode::Idle);
-	}
+		const bool bIsActiveDrone = CandidateDrone == DroneCompanion;
+		EDroneSwarmRoleSlot AssignedRole = DroneSwarmComponent
+			? DroneSwarmComponent->GetAssignedRoleForDrone(CandidateDrone)
+			: EDroneSwarmRoleSlot::None;
 
-	if (DroneCompanion)
-	{
-		SyncDroneCompanionControlState(IsDronePilotMode() && !bMapModeActive, bMapModeActive || bMiniMapModeActive);
-		UpdateDroneCompanionThirdPersonTarget();
-		const EDroneSwarmRoleSlot ActiveRole = DroneSwarmComponent
-			? DroneSwarmComponent->GetAssignedRoleForDrone(DroneCompanion)
-			: ResolveDesiredActiveSwarmRole();
-		EDroneCompanionMode DesiredMode = ResolveCompanionModeForRole(ActiveRole);
-		if (!bPrimaryDroneAvailable)
+		if (CandidateDrone == ThirdPersonLockedDrone.Get())
+		{
+			AssignedRole = EDroneSwarmRoleSlot::ThirdPersonCamera;
+		}
+		else if (CandidateDrone == MiniMapLockedDrone.Get())
+		{
+			AssignedRole = EDroneSwarmRoleSlot::MiniMap;
+		}
+		else if (IsDroneInHookJobLock(CandidateDrone))
+		{
+			AssignedRole = EDroneSwarmRoleSlot::HookWorker;
+		}
+		else if (bIsActiveDrone && AssignedRole == EDroneSwarmRoleSlot::None)
+		{
+			const EDroneSwarmRoleSlot DesiredActiveRole = ResolveDesiredActiveSwarmRole();
+			const bool bRoleLockedToAnotherDrone =
+				(DesiredActiveRole == EDroneSwarmRoleSlot::ThirdPersonCamera
+					&& ThirdPersonLockedDrone
+					&& ThirdPersonLockedDrone.Get() != CandidateDrone)
+				|| (DesiredActiveRole == EDroneSwarmRoleSlot::MiniMap
+					&& MiniMapLockedDrone
+					&& MiniMapLockedDrone.Get() != CandidateDrone);
+			AssignedRole = bRoleLockedToAnotherDrone
+				? EDroneSwarmRoleSlot::Buddy
+				: DesiredActiveRole;
+		}
+
+		EDroneCompanionMode DesiredMode = ResolveCompanionModeForRole(AssignedRole);
+		if (!bIsActiveDrone && AssignedRole == EDroneSwarmRoleSlot::None)
+		{
+			DesiredMode = EDroneCompanionMode::Idle;
+		}
+		if (bIsActiveDrone && !bPrimaryDroneAvailable)
 		{
 			DesiredMode = EDroneCompanionMode::Idle;
 		}
 
-		const bool bEnableActiveDroneTorch = bPrimaryDroneAvailable && bPlayerDroneTorchEnabled;
-		DroneCompanion->SetTorchEnabled(bEnableActiveDroneTorch);
-		if (!bEnableActiveDroneTorch
+		if (bIsActiveDrone)
+		{
+			SyncDroneCompanionControlState(IsDronePilotMode() && !bMapModeActive, bMapModeActive || bMiniMapModeActive);
+			UpdateDroneCompanionThirdPersonTarget();
+		}
+		else
+		{
+			CandidateDrone->ResetPilotInputs();
+		}
+
+		const bool bEnableDroneTorch = bIsActiveDrone && bPrimaryDroneAvailable && bPlayerDroneTorchEnabled;
+		CandidateDrone->SetTorchEnabled(bEnableDroneTorch);
+		if (!bEnableDroneTorch
 			|| CurrentViewMode != EAgentViewMode::FirstPerson
 			|| DesiredMode != EDroneCompanionMode::BuddyFollow)
 		{
-			DroneCompanion->ClearTorchAimTarget();
+			CandidateDrone->ClearTorchAimTarget();
 		}
 
 		const bool bShadowOnlyDroneMeshes =
-			CurrentViewMode == EAgentViewMode::ThirdPerson
-			|| CurrentViewMode == EAgentViewMode::DronePilot;
-		DroneCompanion->SetHideStaticMeshesFromOwnerCamera(bShadowOnlyDroneMeshes);
-		const bool bPseudoThirdPersonMode = DesiredMode == EDroneCompanionMode::ThirdPersonFollow;
-		if (bPseudoThirdPersonMode)
+			bIsActiveDrone
+			&& (CurrentViewMode == EAgentViewMode::ThirdPerson || CurrentViewMode == EAgentViewMode::DronePilot);
+		CandidateDrone->SetHideStaticMeshesFromOwnerCamera(bShadowOnlyDroneMeshes);
+
+		if (DesiredMode == EDroneCompanionMode::ThirdPersonFollow)
 		{
 			FVector ThirdPersonTargetLocation = FVector::ZeroVector;
 			FRotator ThirdPersonTargetRotation = FRotator::ZeroRotator;
 			GetThirdPersonDroneTarget(ThirdPersonTargetLocation, ThirdPersonTargetRotation);
-			DroneCompanion->SetThirdPersonCameraTarget(ThirdPersonTargetLocation, ThirdPersonTargetRotation);
-			DroneCompanion->TeleportDroneToTransform(ThirdPersonTargetLocation, ThirdPersonTargetRotation);
-			DroneCompanion->SetActorEnableCollision(false);
-			DroneCompanion->SetCompanionMode(DesiredMode);
+			CandidateDrone->SetThirdPersonCameraTarget(ThirdPersonTargetLocation, ThirdPersonTargetRotation);
+			CandidateDrone->TeleportDroneToTransform(ThirdPersonTargetLocation, ThirdPersonTargetRotation);
+			CandidateDrone->SetActorEnableCollision(false);
 		}
 		else
 		{
-			DroneCompanion->SetActorEnableCollision(true);
+			CandidateDrone->SetActorEnableCollision(true);
 			if (DesiredMode == EDroneCompanionMode::MapMode)
 			{
-				DroneCompanion->SetNextMapModeUsesEntryLift(CurrentViewMode != EAgentViewMode::DronePilot);
+				CandidateDrone->SetNextMapModeUsesEntryLift(CurrentViewMode != EAgentViewMode::DronePilot);
 			}
-
-			DroneCompanion->SetCompanionMode(DesiredMode);
 		}
+
+		// Keep only explicitly hook-locked drones carrying with lift assist.
+		if (!IsDroneInHookJobLock(CandidateDrone) && CandidateDrone->IsLiftAssistActive())
+		{
+			CandidateDrone->StopLiftAssist();
+		}
+
+		CandidateDrone->SetCompanionMode(DesiredMode);
 	}
 
 	if (!bUpdateViewTarget)
@@ -1443,9 +1654,14 @@ void AAgentCharacter::ApplyDroneFleetContext(bool bUpdateViewTarget, bool bBlend
 		return;
 	}
 
+	ADroneCompanion* MiniMapViewDrone = MiniMapLockedDrone ? MiniMapLockedDrone.Get() : DroneCompanion.Get();
 	if (bMapModeActive || (bMiniMapModeActive && bMiniMapViewingDroneCamera) || CurrentViewMode == EAgentViewMode::DronePilot)
 	{
-		PlayerController->SetViewTargetWithBlend(DroneCompanion, BlendTime);
+		PlayerController->SetViewTargetWithBlend(
+			bMiniMapModeActive && bMiniMapViewingDroneCamera && MiniMapViewDrone
+				? MiniMapViewDrone
+				: DroneCompanion.Get(),
+			BlendTime);
 	}
 	else
 	{
@@ -2613,7 +2829,20 @@ bool AAgentCharacter::TryToggleDroneLiftAssist()
 
 	if (DroneCompanion->IsLiftAssistActive())
 	{
+		if (DroneSwarmComponent)
+		{
+			DroneSwarmComponent->SetHookWorker(DroneCompanion, false);
+		}
+		HookJobLockedDrones.RemoveSingleSwap(DroneCompanion);
+		if (LastHookJobLockedDrone.Get() == DroneCompanion)
+		{
+			LastHookJobLockedDrone = HookJobLockedDrones.Num() > 0
+				? HookJobLockedDrones.Last()
+				: nullptr;
+		}
+
 		DroneCompanion->StopLiftAssist();
+		ApplyDroneFleetContext(false, false);
 		return true;
 	}
 
@@ -2651,8 +2880,104 @@ bool AAgentCharacter::TryToggleDroneLiftAssist()
 		return false;
 	}
 
+	HookJobLockedDrones.AddUnique(DroneCompanion);
+	LastHookJobLockedDrone = DroneCompanion;
+	if (DroneSwarmComponent)
+	{
+		DroneSwarmComponent->SetHookWorker(DroneCompanion, true);
+	}
+
 	SyncDroneLiftAssistTuning();
+	ApplyDroneFleetContext(false, false);
 	return true;
+}
+
+bool AAgentCharacter::TryAssignActiveDroneToHookJob(bool bCycleAfterAssign)
+{
+	if (!DroneCompanion)
+	{
+		return false;
+	}
+
+	if (!DroneCompanion->IsLiftAssistActive())
+	{
+		if (!TryToggleDroneLiftAssist())
+		{
+			return false;
+		}
+	}
+	else
+	{
+		HookJobLockedDrones.AddUnique(DroneCompanion);
+		LastHookJobLockedDrone = DroneCompanion;
+		if (DroneSwarmComponent)
+		{
+			DroneSwarmComponent->SetHookWorker(DroneCompanion, true);
+		}
+	}
+
+	if (bCycleAfterAssign)
+	{
+		CycleActiveDrone(1);
+	}
+
+	return true;
+}
+
+bool AAgentCharacter::TryReleaseHookJobDrone()
+{
+	ADroneCompanion* HookDrone = nullptr;
+	if (IsDroneInHookJobLock(DroneCompanion.Get()))
+	{
+		HookDrone = DroneCompanion.Get();
+	}
+	else if (IsDroneInHookJobLock(LastHookJobLockedDrone.Get()))
+	{
+		HookDrone = LastHookJobLockedDrone.Get();
+	}
+	else if (HookJobLockedDrones.Num() > 0)
+	{
+		HookDrone = HookJobLockedDrones.Last().Get();
+	}
+
+	if (!HookDrone)
+	{
+		return false;
+	}
+
+	if (DroneSwarmComponent)
+	{
+		DroneSwarmComponent->SetHookWorker(HookDrone, false);
+	}
+
+	HookDrone->StopLiftAssist();
+	HookJobLockedDrones.RemoveSingleSwap(HookDrone);
+	if (LastHookJobLockedDrone.Get() == HookDrone)
+	{
+		LastHookJobLockedDrone = HookJobLockedDrones.Num() > 0
+			? HookJobLockedDrones.Last()
+			: nullptr;
+	}
+
+	ApplyDroneFleetContext(false, false);
+	return true;
+}
+
+void AAgentCharacter::UpdateHookJobButtonHold(float DeltaSeconds)
+{
+	if (!bHookJobButtonHeld || bHookJobButtonTriggeredHoldRelease)
+	{
+		return;
+	}
+
+	HookJobButtonHeldDuration += FMath::Max(0.0f, DeltaSeconds);
+	if (HookJobButtonHeldDuration < FMath::Max(0.0f, HookJobReleaseHoldTime))
+	{
+		return;
+	}
+
+	bHookJobButtonTriggeredHoldRelease = true;
+	TryReleaseHookJobDrone();
 }
 
 void AAgentCharacter::SyncDroneLiftAssistTuning() const
@@ -3327,10 +3652,16 @@ void AAgentCharacter::EnterMiniMapMode()
 		return;
 	}
 
+	const bool bAssignedDifferentMiniMapDrone = MiniMapLockedDrone.Get() != DroneCompanion.Get();
+	MiniMapLockedDrone = DroneCompanion;
 	bMiniMapModeActive = true;
 	bMiniMapViewingDroneCamera = false;
 	SetThirdPersonProxyVisible(false);
 	ApplyDroneFleetContext(false, false);
+	if (bAssignedDifferentMiniMapDrone)
+	{
+		CycleActiveDrone(1);
+	}
 }
 
 void AAgentCharacter::ExitMiniMapMode()
@@ -3340,12 +3671,14 @@ void AAgentCharacter::ExitMiniMapMode()
 		return;
 	}
 
+	MiniMapLockedDrone = nullptr;
 	ApplyViewMode(MiniMapReturnViewMode, true);
 }
 
 void AAgentCharacter::FocusMiniMapDroneCamera()
 {
-	if (!bMiniMapModeActive || !DroneCompanion)
+	ADroneCompanion* MiniMapDrone = MiniMapLockedDrone ? MiniMapLockedDrone.Get() : DroneCompanion.Get();
+	if (!bMiniMapModeActive || !MiniMapDrone)
 	{
 		return;
 	}
@@ -3357,7 +3690,7 @@ void AAgentCharacter::FocusMiniMapDroneCamera()
 	}
 
 	bMiniMapViewingDroneCamera = true;
-	PlayerController->SetViewTargetWithBlend(DroneCompanion.Get(), ViewBlendTime);
+	PlayerController->SetViewTargetWithBlend(MiniMapDrone, ViewBlendTime);
 }
 
 void AAgentCharacter::UpdateControllerMapButtonHold(float DeltaSeconds)
@@ -3368,12 +3701,17 @@ void AAgentCharacter::UpdateControllerMapButtonHold(float DeltaSeconds)
 	}
 
 	ControllerMapButtonHeldDuration += FMath::Max(0.0f, DeltaSeconds);
-	if (!bMapModeActive
-		&& !bMiniMapModeActive
-		&& ControllerMapButtonHeldDuration >= FMath::Max(0.0f, ControllerMapButtonHoldTime))
+	if (ControllerMapButtonHeldDuration >= FMath::Max(0.0f, ControllerMapButtonHoldTime))
 	{
 		bControllerMapButtonTriggeredMiniMap = true;
-		EnterMiniMapMode();
+		if (bMiniMapModeActive)
+		{
+			ExitMiniMapMode();
+		}
+		else if (!bMapModeActive)
+		{
+			EnterMiniMapMode();
+		}
 	}
 }
 
@@ -3385,12 +3723,17 @@ void AAgentCharacter::UpdateKeyboardMapButtonHold(float DeltaSeconds)
 	}
 
 	KeyboardMapButtonHeldDuration += FMath::Max(0.0f, DeltaSeconds);
-	if (!bMapModeActive
-		&& !bMiniMapModeActive
-		&& KeyboardMapButtonHeldDuration >= FMath::Max(0.0f, ControllerMapButtonHoldTime))
+	if (KeyboardMapButtonHeldDuration >= FMath::Max(0.0f, ControllerMapButtonHoldTime))
 	{
 		bKeyboardMapButtonTriggeredMiniMap = true;
-		EnterMiniMapMode();
+		if (bMiniMapModeActive)
+		{
+			ExitMiniMapMode();
+		}
+		else if (!bMapModeActive)
+		{
+			EnterMiniMapMode();
+		}
 	}
 }
 
@@ -3861,12 +4204,38 @@ void AAgentCharacter::OnConveyorRotateLeftPressed()
 
 void AAgentCharacter::OnConveyorRotateRightPressed()
 {
-	if (!bConveyorPlacementModeActive && TryToggleDroneLiftAssist())
+	RotateConveyorPlacement(1);
+}
+
+void AAgentCharacter::OnHookJobButtonPressed()
+{
+	if (bConveyorPlacementModeActive)
+	{
+		OnConveyorRotateRightPressed();
+		return;
+	}
+
+	bHookJobButtonHeld = true;
+	bHookJobButtonTriggeredHoldRelease = false;
+	HookJobButtonHeldDuration = 0.0f;
+}
+
+void AAgentCharacter::OnHookJobButtonReleased()
+{
+	if (bConveyorPlacementModeActive || !bHookJobButtonHeld)
 	{
 		return;
 	}
 
-	RotateConveyorPlacement(1);
+	const bool bWasHoldTriggered = bHookJobButtonTriggeredHoldRelease;
+	bHookJobButtonHeld = false;
+	bHookJobButtonTriggeredHoldRelease = false;
+	HookJobButtonHeldDuration = 0.0f;
+
+	if (!bWasHoldTriggered)
+	{
+		TryAssignActiveDroneToHookJob(true);
+	}
 }
 
 void AAgentCharacter::OnPickupOrDroneYawRightPressed()
