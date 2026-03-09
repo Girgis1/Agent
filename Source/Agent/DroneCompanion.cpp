@@ -954,8 +954,9 @@ void ADroneCompanion::UpdateDynamicEmissiveMaterials(
 
 	const float EyeMinIntensity = FMath::Max(0.0f, EyeEmissiveMinIntensity);
 	const float EyeMaxIntensity = FMath::Max(EyeMinIntensity, EyeEmissiveMaxIntensity);
+	const bool bAtVisualFullCharge = BatteryAlpha >= 0.999f;
 	const bool bFullChargeBlinkActive = bEyeBlinkGreenWhenFullyCharged
-		&& IsBatteryFullyCharged()
+		&& bAtVisualFullCharge
 		&& (!bEyeFullChargeBlinkRequiresChargerVolume || bIsInChargerVolume);
 
 	float EyeIntensity = 0.0f;
@@ -1245,7 +1246,7 @@ void ADroneCompanion::UpdateStatusLight(float DeltaSeconds)
 	DroneStatusLight->SetIntensity(FinalIntensity);
 	DroneStatusLight->SetAttenuationRadius(FMath::Max(0.0f, StatusLightAttenuationRadius));
 
-	const bool bIsFullyChargedInCharger = bIsInChargerVolume && IsBatteryFullyCharged();
+	const bool bIsFullyChargedInCharger = bIsInChargerVolume && BatteryAlpha >= 0.999f;
 	FLinearColor StatusColor = StatusLightNormalColor;
 	if (bIsFullyChargedInCharger)
 	{

@@ -716,7 +716,7 @@ public:
 	FLinearColor TorchLowBatteryColor = FLinearColor(1.0f, 0.05f, 0.03f, 1.0f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Spotlight", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="1.0", UIMax="1.0"))
-	float TorchLowBatteryBrightnessAlpha = 0.35f;
+	float TorchLowBatteryBrightnessAlpha = 0.7f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Spotlight|Flicker", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="100.0", UIMax="100.0"))
 	float TorchFlickerStartPercent = 10.0f;
