@@ -140,6 +140,9 @@ protected:
 	void SyncSwarmFromDroneFleet();
 	EDroneSwarmRoleSlot ResolveDesiredActiveSwarmRole() const;
 	void RefreshSwarmRoleAssignments();
+	void CleanupInvalidDroneJobLocks();
+	bool IsDroneLockedToPersistentJob(const ADroneCompanion* CandidateDrone) const;
+	bool IsDroneInHookJobLock(const ADroneCompanion* CandidateDrone) const;
 	EDroneCompanionMode ResolveCompanionModeForRole(EDroneSwarmRoleSlot InRole) const;
 	void SpawnDroneCompanion();
 	ADroneCompanion* SpawnDroneCompanionAtTransform(
@@ -151,7 +154,7 @@ protected:
 	void CleanupInvalidDroneCompanions();
 	void EnsureActiveDroneSelection();
 	bool IsDroneAvailableForActivation(const ADroneCompanion* CandidateDrone) const;
-	int32 FindNextDroneIndex(int32 StartIndex, int32 Direction, bool bPreferAvailable) const;
+	int32 FindNextDroneIndex(int32 StartIndex, int32 Direction, bool bPreferAvailable, bool bSkipJobLockedDrones) const;
 	bool SetActiveDroneIndex(int32 NewActiveIndex, bool bUpdateViewTarget = true, bool bBlendViewTarget = true);
 	void CycleActiveDrone(int32 Direction = 1);
 	void ApplyDroneFleetContext(bool bUpdateViewTarget = false, bool bBlendViewTarget = true);
@@ -230,6 +233,9 @@ protected:
 	void AdjustDroneLiftAssistStrength(float Delta);
 	void AdjustPickupStrength(float Delta);
 	void ShowPickupStrengthDebug() const;
+	bool TryAssignActiveDroneToHookJob(bool bCycleAfterAssign);
+	bool TryReleaseHookJobDrone();
+	void UpdateHookJobButtonHold(float DeltaSeconds);
 
 	void OnDronePitchForwardPressed();
 	void OnDronePitchForwardReleased();
@@ -272,6 +278,8 @@ protected:
 	void OnConveyorCancelPressed();
 	void OnConveyorRotateLeftPressed();
 	void OnConveyorRotateRightPressed();
+	void OnHookJobButtonPressed();
+	void OnHookJobButtonReleased();
 	void OnPickupOrDroneYawRightPressed();
 	void OnPickupOrDroneYawRightReleased();
 	void OnPickupOrPlacePressed();
@@ -318,6 +326,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Swarm")
 	bool bAutoAssignInactiveDronesAsHookWorkers = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Swarm", meta=(ClampMin="0.05", UIMin="0.05"))
+	float HookJobReleaseHoldTime = 0.35f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Fleet", meta=(ClampMin="0.1", UIMin="0.1"))
 	float DroneWorldDiscoveryInterval = 1.0f;
@@ -611,6 +622,18 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone|Fleet", meta=(AllowPrivateAccess="true"))
 	int32 ActiveDroneIndex = INDEX_NONE;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone|Swarm", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<ADroneCompanion> ThirdPersonLockedDrone = nullptr;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone|Swarm", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<ADroneCompanion> MiniMapLockedDrone = nullptr;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone|Swarm", meta=(AllowPrivateAccess="true"))
+	TArray<TObjectPtr<ADroneCompanion>> HookJobLockedDrones;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone|Swarm", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<ADroneCompanion> LastHookJobLockedDrone = nullptr;
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Placement", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<AConveyorPlacementPreview> ConveyorPlacementPreview = nullptr;
 
@@ -755,6 +778,8 @@ protected:
 	bool bKeyboardMapButtonTriggeredMiniMap = false;
 	bool bControllerMapButtonHeld = false;
 	bool bControllerMapButtonTriggeredMiniMap = false;
+	bool bHookJobButtonHeld = false;
+	bool bHookJobButtonTriggeredHoldRelease = false;
 	bool bRollModeHoldStartedInFlight = false;
 	bool bPendingRollReleaseToFlight = false;
 	bool bCrashRollRecoveryActive = false;
@@ -766,6 +791,7 @@ protected:
 	float ViewModeButtonHeldDuration = 0.0f;
 	float KeyboardMapButtonHeldDuration = 0.0f;
 	float ControllerMapButtonHeldDuration = 0.0f;
+	float HookJobButtonHeldDuration = 0.0f;
 	float DroneWorldDiscoveryTimeRemaining = 0.0f;
 	float DefaultViewPitchMin = -89.9f;
 	float DefaultViewPitchMax = 89.9f;
