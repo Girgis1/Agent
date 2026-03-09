@@ -3,7 +3,10 @@
 #include "DroneCompanion.h"
 #include "Agent.h"
 #include "Camera/CameraComponent.h"
+#include "Components/MeshComponent.h"
 #include "Components/PointLightComponent.h"
+#include "Components/SpotLightComponent.h"
+#include "Components/SphereComponent.h"
 #include "Factory/ConveyorSurfaceVelocityComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SceneComponent.h"
@@ -13,6 +16,7 @@
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/Controller.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "PhysicalMaterials/PhysicalMaterial.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -38,7 +42,17 @@ ADroneCompanion::ADroneCompanion()
 		DroneBody->SetStaticMesh(DroneSphereMesh.Object);
 	}
 
-	DroneBody->SetRelativeScale3D(FVector(0.5f));
+	DroneBody->SetRelativeScale3D(FVector(DroneBodyVisualScale));
+
+	DronePickupProxySphere = CreateDefaultSubobject<USphereComponent>(TEXT("DronePickupProxySphere"));
+	DronePickupProxySphere->SetupAttachment(DroneBody);
+	DronePickupProxySphere->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	DronePickupProxySphere->SetCollisionObjectType(ECC_WorldDynamic);
+	DronePickupProxySphere->SetCollisionResponseToAllChannels(ECR_Block);
+	DronePickupProxySphere->SetGenerateOverlapEvents(false);
+	DronePickupProxySphere->SetCanEverAffectNavigation(false);
+	DronePickupProxySphere->SetSphereRadius(PickupProxySphereRadius);
+	DronePickupProxySphere->SetHiddenInGame(true);
 
 	CameraMount = CreateDefaultSubobject<USceneComponent>(TEXT("CameraMount"));
 	CameraMount->SetupAttachment(DroneBody);
@@ -68,16 +82,31 @@ void ADroneCompanion::BeginPlay()
 	if (DroneBody)
 	{
 		DroneBody->SetRelativeScale3D(FVector(FMath::Max(DroneBodyVisualScale, 0.01f)));
+		DroneBody->SetCollisionObjectType(ECC_PhysicsBody);
+		DroneBody->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+		DroneBody->SetCollisionResponseToAllChannels(ECR_Block);
+		DroneBody->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
 		DroneBody->SetMassOverrideInKg(NAME_None, FMath::Max(0.1f, DroneMassKg), true);
 		DroneBody->SetLinearDamping(DroneBodyLinearDamping);
 		DroneBody->SetAngularDamping(DroneBodyAngularDamping);
 		DroneBody->OnComponentHit.AddDynamic(this, &ADroneCompanion::OnDroneBodyHit);
 	}
 
+	if (DronePickupProxySphere)
+	{
+		DronePickupProxySphere->SetCollisionEnabled(bUsePickupProxySphere ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
+		DronePickupProxySphere->SetCollisionObjectType(ECC_WorldDynamic);
+		DronePickupProxySphere->SetCollisionResponseToAllChannels(ECR_Block);
+	}
+
 	ApplyRuntimePhysicalMaterial();
 	AdjustCameraTilt(0.0f);
 	UpdateBuddyDrift(BuddyDriftUpdateInterval);
 	UpdateBatteryState(0.0f);
+	RefreshStateDomains(TEXT("BeginPlay"));
+	InitializeDynamicEmissiveMaterials();
+	ApplyStaticMeshOwnerVisibility();
+	UpdateSpotlightVisuals();
 	UpdateStatusLight(0.0f);
 }
 
@@ -112,6 +141,9 @@ void ADroneCompanion::Tick(float DeltaSeconds)
 		ResetPilotInputs();
 	}
 
+	RefreshStateDomains(TEXT("Tick"));
+	UpdateAnchoredTransform();
+
 	if (ImpactDebugTimeRemaining > 0.0f)
 	{
 		ImpactDebugTimeRemaining = FMath::Max(0.0f, ImpactDebugTimeRemaining - DeltaSeconds);
@@ -123,12 +155,12 @@ void ADroneCompanion::Tick(float DeltaSeconds)
 	}
 
 	UpdateBuddyDrift(DeltaSeconds);
+	const bool bCanApplyMovementForces = CanApplyMovementForces();
 	const bool bRollPilotActive =
-		!bDronePoweredOff
-		&& !bChargingLockActive
+		bCanApplyMovementForces
 		&& bUseRollPilotControls
 		&& CompanionMode == EDroneCompanionMode::PilotControlled;
-	if (bDronePoweredOff || bChargingLockActive)
+	if (!bCanApplyMovementForces)
 	{
 		bCrashed = false;
 		CrashRecoveryTimeRemaining = 0.0f;
@@ -144,7 +176,7 @@ void ADroneCompanion::Tick(float DeltaSeconds)
 		UpdateCrashRecovery(DeltaSeconds);
 	}
 
-	if (!bDronePoweredOff && !bChargingLockActive && !bCrashed)
+	if (bCanApplyMovementForces && !bCrashed)
 	{
 		if (bLiftAssistActive
 			&& (CompanionMode == EDroneCompanionMode::BuddyFollow
@@ -186,6 +218,11 @@ void ADroneCompanion::Tick(float DeltaSeconds)
 			{
 				UpdateMiniMapFlight(DeltaSeconds);
 			}
+			else if (CompanionMode == EDroneCompanionMode::Idle)
+			{
+				// Idle drones stay as free physics bodies. We intentionally do not
+				// apply autopilot forces here so inactive drones remain in-world.
+			}
 			else
 			{
 				if (bLiftAssistActive && CompanionMode == EDroneCompanionMode::BuddyFollow)
@@ -200,14 +237,14 @@ void ADroneCompanion::Tick(float DeltaSeconds)
 		}
 	}
 
-	if (!bRollPilotActive)
+	if (!bRollPilotActive && ShouldClampVelocityForCurrentState())
 	{
 		ClampVelocity();
 	}
 
 	ApplyConveyorSurfaceVelocity();
 	UpdateCameraTransition(DeltaSeconds);
-	if (!bDronePoweredOff && !bChargingLockActive && bRollPilotActive && !bCameraTransitionActive && CameraMount)
+	if (bCanApplyMovementForces && bRollPilotActive && !bCameraTransitionActive && CameraMount)
 	{
 		UpdateRollCamera(DeltaSeconds);
 	}
@@ -231,7 +268,7 @@ void ADroneCompanion::SetBatteryPercent(float NewBatteryPercent)
 	BatteryComponent->SetBatteryPercent(NewBatteryPercent);
 	if (BatteryComponent->IsDepleted())
 	{
-		if (!bDronePoweredOff)
+		if (CurrentPowerState != EDronePowerState::Depleted)
 		{
 			HandleDronePowerLoss();
 		}
@@ -239,10 +276,12 @@ void ADroneCompanion::SetBatteryPercent(float NewBatteryPercent)
 		return;
 	}
 
-	if (bDronePoweredOff)
+	if (CurrentPowerState == EDronePowerState::Depleted)
 	{
 		HandleDronePowerRestore();
 	}
+
+	RefreshStateDomains(TEXT("SetBatteryPercent"));
 }
 
 float ADroneCompanion::ChargeBatteryPercent(float PercentToCharge)
@@ -253,9 +292,15 @@ float ADroneCompanion::ChargeBatteryPercent(float PercentToCharge)
 	}
 
 	const float ChargedAmount = BatteryComponent->ChargePercent(PercentToCharge);
-	if (ChargedAmount > KINDA_SMALL_NUMBER && bDronePoweredOff && !BatteryComponent->IsDepleted())
+	if (ChargedAmount > KINDA_SMALL_NUMBER
+		&& CurrentPowerState == EDronePowerState::Depleted
+		&& !BatteryComponent->IsDepleted())
 	{
 		HandleDronePowerRestore();
+	}
+	else if (ChargedAmount > KINDA_SMALL_NUMBER)
+	{
+		RefreshStateDomains(TEXT("ChargeBatteryPercent"));
 	}
 
 	return ChargedAmount;
@@ -263,7 +308,7 @@ float ADroneCompanion::ChargeBatteryPercent(float PercentToCharge)
 
 bool ADroneCompanion::IsBatteryDepleted() const
 {
-	return BatteryComponent ? BatteryComponent->IsDepleted() : bDronePoweredOff;
+	return BatteryComponent ? BatteryComponent->IsDepleted() : (CurrentPowerState == EDronePowerState::Depleted);
 }
 
 bool ADroneCompanion::IsBatteryFullyCharged() const
@@ -276,16 +321,45 @@ bool ADroneCompanion::IsBatteryFullyCharged() const
 	return BatteryComponent->IsFullyCharged();
 }
 
+bool ADroneCompanion::SetManualPowerOff(bool bPowerOff)
+{
+	if (bManualPowerOffRequested == bPowerOff)
+	{
+		return false;
+	}
+
+	bManualPowerOffRequested = bPowerOff;
+	RefreshStateDomains(bPowerOff ? FName(TEXT("ManualPowerOff")) : FName(TEXT("ManualPowerOn")));
+	return true;
+}
+
+void ADroneCompanion::ToggleManualPowerOff()
+{
+	SetManualPowerOff(!bManualPowerOffRequested);
+}
+
 void ADroneCompanion::NotifyEnteredChargerVolume()
 {
 	ChargerVolumeOverlapCount = FMath::Max(0, ChargerVolumeOverlapCount + 1);
 	bIsInChargerVolume = ChargerVolumeOverlapCount > 0;
+	const bool bBatteryEnabled = BatteryComponent && BatteryComponent->IsBatteryEnabled();
+	bChargingLockActive = bBatteryEnabled
+		&& bIsInChargerVolume
+		&& CompanionMode != EDroneCompanionMode::PilotControlled
+		&& !IsBatteryFullyCharged();
+	RefreshStateDomains(TEXT("ChargerEntered"));
 }
 
 void ADroneCompanion::NotifyExitedChargerVolume()
 {
 	ChargerVolumeOverlapCount = FMath::Max(0, ChargerVolumeOverlapCount - 1);
 	bIsInChargerVolume = ChargerVolumeOverlapCount > 0;
+	const bool bBatteryEnabled = BatteryComponent && BatteryComponent->IsBatteryEnabled();
+	bChargingLockActive = bBatteryEnabled
+		&& bIsInChargerVolume
+		&& CompanionMode != EDroneCompanionMode::PilotControlled
+		&& !IsBatteryFullyCharged();
+	RefreshStateDomains(TEXT("ChargerExited"));
 }
 
 void ADroneCompanion::UpdateBatteryState(float DeltaSeconds)
@@ -293,25 +367,35 @@ void ADroneCompanion::UpdateBatteryState(float DeltaSeconds)
 	if (!BatteryComponent)
 	{
 		LowBatteryFlickerAlpha = 0.0f;
+		RefreshStateDomains(TEXT("NoBatteryComponent"));
 		return;
 	}
 
 	if (!BatteryComponent->IsBatteryEnabled())
 	{
-		if (bDronePoweredOff)
+		if (CurrentPowerState == EDronePowerState::Depleted)
 		{
 			HandleDronePowerRestore();
 		}
 
 		LowBatteryFlickerAlpha = 0.0f;
+		RefreshStateDomains(TEXT("BatteryDisabled"));
 		return;
 	}
 
 	const float SafeDeltaSeconds = FMath::Max(0.0f, DeltaSeconds);
 	const float DrainRatePercentPerSecond = BatteryComponent->GetDrainRatePercentPerSecond();
-	if (DrainRatePercentPerSecond > KINDA_SMALL_NUMBER && !BatteryComponent->IsDepleted())
+	const bool bTorchDrainActive = bTorchEnabled && CurrentPowerState == EDronePowerState::Active;
+	float DrainScale = CurrentPowerState == EDronePowerState::PoweredOff
+		? FMath::Clamp(PoweredOffDrainMultiplier, 0.0f, 1.0f)
+		: 1.0f;
+	if (bTorchDrainActive)
 	{
-		BatteryComponent->ConsumePercent(DrainRatePercentPerSecond * SafeDeltaSeconds);
+		DrainScale *= FMath::Max(1.0f, TorchDrainMultiplier);
+	}
+	if (DrainRatePercentPerSecond > KINDA_SMALL_NUMBER && !BatteryComponent->IsDepleted() && DrainScale > KINDA_SMALL_NUMBER)
+	{
+		BatteryComponent->ConsumePercent(DrainRatePercentPerSecond * SafeDeltaSeconds * DrainScale);
 	}
 
 	const float PassiveChargeRatePercentPerSecond = BatteryComponent->GetPassiveChargeRatePercentPerSecond();
@@ -322,36 +406,599 @@ void ADroneCompanion::UpdateBatteryState(float DeltaSeconds)
 
 	if (BatteryComponent->IsDepleted())
 	{
-		if (!bDronePoweredOff)
+		if (CurrentPowerState != EDronePowerState::Depleted)
 		{
 			HandleDronePowerLoss();
 		}
 	}
-	else if (bDronePoweredOff)
+	else if (CurrentPowerState == EDronePowerState::Depleted)
 	{
 		HandleDronePowerRestore();
 	}
+
+	RefreshStateDomains(TEXT("UpdateBatteryState"));
 }
 
 void ADroneCompanion::HandleDronePowerLoss()
 {
-	bDronePoweredOff = true;
 	bCrashed = false;
 	CrashRecoveryTimeRemaining = 0.0f;
 	bPendingCrashRollRecovery = false;
 	StopLiftAssist();
 	ResetPilotInputs();
+	RequestPowerState(EDronePowerState::Depleted, TEXT("BatteryDepleted"));
 }
 
 void ADroneCompanion::HandleDronePowerRestore()
 {
-	bDronePoweredOff = false;
+	const EDronePowerState RestoredState = bManualPowerOffRequested
+		? EDronePowerState::PoweredOff
+		: EDronePowerState::Active;
+	RequestPowerState(RestoredState, TEXT("BatteryRestored"));
+}
+
+void ADroneCompanion::RefreshStateDomains(FName Reason)
+{
+	const EDronePowerState DesiredPowerState = ResolveDesiredPowerState();
+	RequestPowerState(DesiredPowerState, Reason);
+
+	const EDroneRoleState DesiredRoleState = ResolveRoleStateFromCompanionMode(CompanionMode);
+	RequestRoleState(DesiredRoleState, Reason);
+
+	const EDroneControlState DesiredControlState = ResolveControlStateFromCompanionMode(CompanionMode);
+	RequestControlState(DesiredControlState, Reason);
+
+	const EDroneMobilityState DesiredMobilityState = ResolveDesiredMobilityState();
+	if (!RequestMobilityState(DesiredMobilityState, Reason)
+		&& DesiredMobilityState != EDroneMobilityState::PhysicsBody)
+	{
+		RequestMobilityState(EDroneMobilityState::PhysicsBody, TEXT("MobilityFallback"));
+	}
+
+	RefreshTorchRuntimeState();
+}
+
+EDronePowerState ADroneCompanion::ResolveDesiredPowerState() const
+{
+	const bool bBatteryEnabled = BatteryComponent && BatteryComponent->IsBatteryEnabled();
+	const bool bBatteryDepleted = bBatteryEnabled && BatteryComponent->IsDepleted();
+	if (bBatteryDepleted)
+	{
+		return EDronePowerState::Depleted;
+	}
+
+	return bManualPowerOffRequested
+		? EDronePowerState::PoweredOff
+		: EDronePowerState::Active;
+}
+
+EDroneRoleState ADroneCompanion::ResolveRoleStateFromCompanionMode(EDroneCompanionMode Mode) const
+{
+	switch (Mode)
+	{
+	case EDroneCompanionMode::PilotControlled:
+		return EDroneRoleState::Pilot;
+	case EDroneCompanionMode::Idle:
+		return EDroneRoleState::Idle;
+	case EDroneCompanionMode::HoldPosition:
+		return EDroneRoleState::Hold;
+	case EDroneCompanionMode::BuddyFollow:
+		return EDroneRoleState::Buddy;
+	case EDroneCompanionMode::MapMode:
+		return EDroneRoleState::Map;
+	case EDroneCompanionMode::MiniMapFollow:
+		return EDroneRoleState::MiniMap;
+	case EDroneCompanionMode::ThirdPersonFollow:
+	default:
+		return EDroneRoleState::ThirdPersonCamera;
+	}
+}
+
+EDroneControlState ADroneCompanion::ResolveControlStateFromCompanionMode(EDroneCompanionMode Mode) const
+{
+	return Mode == EDroneCompanionMode::PilotControlled
+		? EDroneControlState::PlayerControlled
+		: EDroneControlState::Autonomous;
+}
+
+EDroneMobilityState ADroneCompanion::ResolveDesiredMobilityState() const
+{
+	if (CurrentPowerState != EDronePowerState::Active)
+	{
+		return EDroneMobilityState::PhysicsBody;
+	}
+
+	const bool bChargeLocked =
+		bChargingLockActive
+		&& CompanionMode != EDroneCompanionMode::PilotControlled;
+	if (bChargeLocked)
+	{
+		return EDroneMobilityState::PhysicsBody;
+	}
+
+	if (CurrentRoleState == EDroneRoleState::ThirdPersonCamera && bAnchorThirdPersonRoleToCamera)
+	{
+		return EDroneMobilityState::Anchored;
+	}
+
+	return EDroneMobilityState::Flight;
+}
+
+bool ADroneCompanion::RequestPowerState(EDronePowerState NewState, FName Reason)
+{
+	if (CurrentPowerState == NewState)
+	{
+		return true;
+	}
+
+	const bool bCanTransition = CanTransitionPowerState(CurrentPowerState, NewState);
+	LogStateTransition(
+		TEXT("Power"),
+		static_cast<int32>(CurrentPowerState),
+		static_cast<int32>(NewState),
+		Reason,
+		bCanTransition);
+	if (!bCanTransition)
+	{
+		return false;
+	}
+
+	CurrentPowerState = NewState;
+	bDronePoweredOff = CurrentPowerState != EDronePowerState::Active;
+	if (bDronePoweredOff)
+	{
+		bCrashed = false;
+		CrashRecoveryTimeRemaining = 0.0f;
+		bPendingCrashRollRecovery = false;
+		StopLiftAssist();
+		ResetPilotInputs();
+	}
+
+	return true;
+}
+
+bool ADroneCompanion::RequestMobilityState(EDroneMobilityState NewState, FName Reason)
+{
+	if (CurrentMobilityState == NewState)
+	{
+		return true;
+	}
+
+	const bool bCanTransition = CanTransitionMobilityState(CurrentMobilityState, NewState);
+	LogStateTransition(
+		TEXT("Mobility"),
+		static_cast<int32>(CurrentMobilityState),
+		static_cast<int32>(NewState),
+		Reason,
+		bCanTransition);
+	if (!bCanTransition)
+	{
+		return false;
+	}
+
+	const bool bResetKinematics =
+		CurrentMobilityState == EDroneMobilityState::Anchored
+		|| NewState == EDroneMobilityState::Anchored;
+	CurrentMobilityState = NewState;
+	ApplyPhysicsProfile(bResetKinematics);
+	if (CurrentMobilityState == EDroneMobilityState::Anchored)
+	{
+		UpdateAnchoredTransform();
+	}
+
+	return true;
+}
+
+bool ADroneCompanion::RequestRoleState(EDroneRoleState NewState, FName Reason)
+{
+	if (CurrentRoleState == NewState)
+	{
+		return true;
+	}
+
+	const bool bCanTransition = CanTransitionRoleState(CurrentRoleState, NewState);
+	LogStateTransition(
+		TEXT("Role"),
+		static_cast<int32>(CurrentRoleState),
+		static_cast<int32>(NewState),
+		Reason,
+		bCanTransition);
+	if (!bCanTransition)
+	{
+		return false;
+	}
+
+	CurrentRoleState = NewState;
+	return true;
+}
+
+bool ADroneCompanion::RequestControlState(EDroneControlState NewState, FName Reason)
+{
+	if (CurrentControlState == NewState)
+	{
+		return true;
+	}
+
+	const bool bCanTransition = CanTransitionControlState(CurrentControlState, NewState);
+	LogStateTransition(
+		TEXT("Control"),
+		static_cast<int32>(CurrentControlState),
+		static_cast<int32>(NewState),
+		Reason,
+		bCanTransition);
+	if (!bCanTransition)
+	{
+		return false;
+	}
+
+	CurrentControlState = NewState;
+	return true;
+}
+
+bool ADroneCompanion::CanTransitionPowerState(EDronePowerState FromState, EDronePowerState ToState) const
+{
+	if (FromState == ToState)
+	{
+		return true;
+	}
+
+	if (FromState == EDronePowerState::Depleted && ToState == EDronePowerState::Active)
+	{
+		return BatteryComponent && !BatteryComponent->IsDepleted();
+	}
+
+	if (ToState == EDronePowerState::Active && BatteryComponent && BatteryComponent->IsBatteryEnabled() && BatteryComponent->IsDepleted())
+	{
+		return false;
+	}
+
+	return true;
+}
+
+bool ADroneCompanion::CanTransitionMobilityState(EDroneMobilityState FromState, EDroneMobilityState ToState) const
+{
+	if (FromState == ToState)
+	{
+		return true;
+	}
+
+	if (ToState == EDroneMobilityState::Flight)
+	{
+		return CurrentPowerState == EDronePowerState::Active
+			&& (!bChargingLockActive || CompanionMode == EDroneCompanionMode::PilotControlled);
+	}
+
+	if (ToState == EDroneMobilityState::Anchored)
+	{
+		return CurrentPowerState == EDronePowerState::Active
+			&& CurrentRoleState == EDroneRoleState::ThirdPersonCamera
+			&& bAnchorThirdPersonRoleToCamera;
+	}
+
+	return true;
+}
+
+bool ADroneCompanion::CanTransitionRoleState(EDroneRoleState FromState, EDroneRoleState ToState) const
+{
+	if (FromState == ToState)
+	{
+		return true;
+	}
+
+	if (ToState == EDroneRoleState::Pilot)
+	{
+		return CurrentPowerState == EDronePowerState::Active;
+	}
+
+	return true;
+}
+
+bool ADroneCompanion::CanTransitionControlState(EDroneControlState FromState, EDroneControlState ToState) const
+{
+	if (FromState == ToState)
+	{
+		return true;
+	}
+
+	if (ToState == EDroneControlState::PlayerControlled)
+	{
+		return CurrentPowerState == EDronePowerState::Active;
+	}
+
+	return true;
+}
+
+void ADroneCompanion::ApplyPhysicsProfile(bool bResetKinematics)
+{
+	if (!DroneBody)
+	{
+		return;
+	}
+
+	DroneBody->SetCollisionObjectType(ECC_PhysicsBody);
+	DroneBody->SetCollisionResponseToAllChannels(ECR_Block);
+	DroneBody->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
+
+	if (DronePickupProxySphere)
+	{
+		const bool bAllowPickupProxy = bUsePickupProxySphere && CurrentMobilityState != EDroneMobilityState::Anchored;
+		DronePickupProxySphere->SetCollisionObjectType(ECC_WorldDynamic);
+		DronePickupProxySphere->SetCollisionResponseToAllChannels(ECR_Block);
+		DronePickupProxySphere->SetCollisionEnabled(
+			bAllowPickupProxy
+				? ECollisionEnabled::QueryOnly
+				: ECollisionEnabled::NoCollision);
+	}
+
+	if (CurrentMobilityState == EDroneMobilityState::Anchored)
+	{
+		DroneBody->SetSimulatePhysics(false);
+		DroneBody->SetEnableGravity(false);
+		DroneBody->SetCollisionEnabled(
+			bDisableCollisionWhenAnchored
+				? ECollisionEnabled::NoCollision
+				: FlightCollisionEnabled.GetValue());
+		DroneBody->SetLinearDamping(FMath::Max(0.0f, DroneBodyLinearDamping));
+		DroneBody->SetAngularDamping(FMath::Max(0.0f, DroneBodyAngularDamping));
+		AppliedConveyorSurfaceVelocity = FVector::ZeroVector;
+	}
+	else if (CurrentMobilityState == EDroneMobilityState::PhysicsBody)
+	{
+		DroneBody->SetSimulatePhysics(true);
+		DroneBody->SetEnableGravity(true);
+		DroneBody->SetCollisionEnabled(PassiveCollisionEnabled.GetValue());
+		DroneBody->SetLinearDamping(FMath::Max(0.0f, PassivePhysicsLinearDamping));
+		DroneBody->SetAngularDamping(FMath::Max(0.0f, PassivePhysicsAngularDamping));
+	}
+	else
+	{
+		DroneBody->SetSimulatePhysics(true);
+		DroneBody->SetEnableGravity(true);
+		DroneBody->SetCollisionEnabled(FlightCollisionEnabled.GetValue());
+		DroneBody->SetLinearDamping(FMath::Max(0.0f, DroneBodyLinearDamping));
+		DroneBody->SetAngularDamping(FMath::Max(0.0f, DroneBodyAngularDamping));
+	}
+
+	if (bResetKinematics && DroneBody->IsSimulatingPhysics())
+	{
+		DroneBody->SetPhysicsLinearVelocity(FVector::ZeroVector);
+		DroneBody->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+		PreviousLinearVelocity = FVector::ZeroVector;
+	}
+}
+
+bool ADroneCompanion::CanApplyMovementForces() const
+{
+	if (!DroneBody || !DroneBody->IsSimulatingPhysics())
+	{
+		return false;
+	}
+
+	if (CurrentPowerState != EDronePowerState::Active)
+	{
+		return false;
+	}
+
+	if (CurrentMobilityState != EDroneMobilityState::Flight)
+	{
+		return false;
+	}
+
+	return !bChargingLockActive || CompanionMode == EDroneCompanionMode::PilotControlled;
+}
+
+bool ADroneCompanion::ShouldProcessConveyorAssist() const
+{
+	return CanApplyMovementForces();
+}
+
+bool ADroneCompanion::ShouldClampVelocityForCurrentState() const
+{
+	return CanApplyMovementForces();
+}
+
+void ADroneCompanion::UpdateAnchoredTransform()
+{
+	if (!DroneBody || CurrentMobilityState != EDroneMobilityState::Anchored)
+	{
+		return;
+	}
+
+	if (!bHasThirdPersonCameraTarget)
+	{
+		return;
+	}
+
+	DroneBody->SetWorldLocationAndRotation(
+		ThirdPersonCameraTargetLocation,
+		ThirdPersonCameraTargetRotation,
+		false,
+		nullptr,
+		ETeleportType::TeleportPhysics);
+}
+
+void ADroneCompanion::LogStateTransition(
+	const TCHAR* Domain,
+	int32 PreviousValue,
+	int32 NewValue,
+	FName Reason,
+	bool bAccepted) const
+{
+	if (!bLogStateTransitions)
+	{
+		return;
+	}
+
+	UE_LOG(
+		LogAgent,
+		Log,
+		TEXT("[DroneState] %s %d -> %d | Reason=%s | %s"),
+		Domain,
+		PreviousValue,
+		NewValue,
+		Reason.IsNone() ? TEXT("None") : *Reason.ToString(),
+		bAccepted ? TEXT("Accepted") : TEXT("Blocked"));
+}
+
+void ADroneCompanion::RefreshTorchRuntimeState()
+{
+	const bool bBatteryEnabled = BatteryComponent && BatteryComponent->IsBatteryEnabled();
+	const bool bBatteryDepleted = bBatteryEnabled && BatteryComponent && BatteryComponent->IsDepleted();
+	bTorchRuntimeActive = bTorchEnabled
+		&& CurrentPowerState == EDronePowerState::Active
+		&& !bBatteryDepleted;
+}
+
+void ADroneCompanion::InitializeDynamicEmissiveMaterials()
+{
+	AccessoryEmissiveMaterialInstances.Reset();
+	EyeEmissiveMaterialInstances.Reset();
+
+	if (!bUseDynamicEmissiveMaterials)
+	{
+		return;
+	}
+
+	TInlineComponentArray<UMeshComponent*> MeshComponents(this);
+	for (UMeshComponent* MeshComponent : MeshComponents)
+	{
+		if (!IsValid(MeshComponent))
+		{
+			continue;
+		}
+
+		const TArray<FName> MaterialSlotNames = MeshComponent->GetMaterialSlotNames();
+		const int32 MaterialCount = MeshComponent->GetNumMaterials();
+		for (int32 MaterialIndex = 0; MaterialIndex < MaterialCount; ++MaterialIndex)
+		{
+			const FName SlotName = MaterialSlotNames.IsValidIndex(MaterialIndex)
+				? MaterialSlotNames[MaterialIndex]
+				: NAME_None;
+			const bool bAccessorySlot =
+				SlotName == AccessoryEmissiveSlotName
+				|| (AccessoryEmissiveLegacySlotName != NAME_None && SlotName == AccessoryEmissiveLegacySlotName);
+			const bool bEyeSlot =
+				SlotName == EyeEmissiveSlotName
+				|| (EyeEmissiveAltSlotName != NAME_None && SlotName == EyeEmissiveAltSlotName);
+			if (!bAccessorySlot && !bEyeSlot)
+			{
+				continue;
+			}
+
+			UMaterialInstanceDynamic* DynamicMaterial = MeshComponent->CreateAndSetMaterialInstanceDynamic(MaterialIndex);
+			if (!DynamicMaterial)
+			{
+				continue;
+			}
+
+			if (bAccessorySlot)
+			{
+				AccessoryEmissiveMaterialInstances.AddUnique(DynamicMaterial);
+			}
+
+			if (bEyeSlot)
+			{
+				EyeEmissiveMaterialInstances.AddUnique(DynamicMaterial);
+			}
+		}
+	}
+}
+
+void ADroneCompanion::UpdateDynamicEmissiveMaterials(
+	const FLinearColor& StatusColor,
+	float StatusBrightnessAlpha,
+	float BatteryAlpha,
+	bool bBatteryFlat)
+{
+	if (!bUseDynamicEmissiveMaterials)
+	{
+		return;
+	}
+
+	const float ClampedStatusBrightnessAlpha = FMath::Clamp(StatusBrightnessAlpha, 0.0f, 1.0f);
+	const float AccessoryMinIntensity = FMath::Max(0.0f, AccessoryEmissiveMinIntensity);
+	const float AccessoryMaxIntensity = FMath::Max(AccessoryMinIntensity, AccessoryEmissiveMaxIntensity);
+	const float AccessoryIntensity = FMath::Lerp(
+		AccessoryMinIntensity,
+		AccessoryMaxIntensity,
+		ClampedStatusBrightnessAlpha);
+	for (UMaterialInstanceDynamic* DynamicMaterial : AccessoryEmissiveMaterialInstances)
+	{
+		if (!IsValid(DynamicMaterial))
+		{
+			continue;
+		}
+
+		DynamicMaterial->SetVectorParameterValue(AccessoryEmissiveColorParameterName, StatusColor);
+		DynamicMaterial->SetScalarParameterValue(AccessoryEmissiveIntensityParameterName, AccessoryIntensity);
+	}
+
+	const float EyeMinIntensity = FMath::Max(0.0f, EyeEmissiveMinIntensity);
+	const float EyeMaxIntensity = FMath::Max(EyeMinIntensity, EyeEmissiveMaxIntensity);
+	const float EyeRampAlpha = FMath::Pow(
+		FMath::Clamp(BatteryAlpha, 0.0f, 1.0f),
+		FMath::Max(0.1f, EyeEmissiveBatteryRampExponent));
+	float EyeIntensity = FMath::Lerp(EyeMinIntensity, EyeMaxIntensity, EyeRampAlpha);
+	if (CurrentPowerState == EDronePowerState::PoweredOff || bBatteryFlat)
+	{
+		EyeIntensity = 0.0f;
+	}
+
+	for (UMaterialInstanceDynamic* DynamicMaterial : EyeEmissiveMaterialInstances)
+	{
+		if (!IsValid(DynamicMaterial))
+		{
+			continue;
+		}
+
+		DynamicMaterial->SetVectorParameterValue(EyeEmissiveColorParameterName, EyeEmissiveColor);
+		DynamicMaterial->SetScalarParameterValue(EyeEmissiveIntensityParameterName, EyeIntensity);
+	}
+}
+
+void ADroneCompanion::UpdateSpotlightVisuals(float DeltaSeconds)
+{
+	TInlineComponentArray<USpotLightComponent*> SpotLightComponents(this);
+	for (USpotLightComponent* SpotLightComponent : SpotLightComponents)
+	{
+		if (!IsValid(SpotLightComponent))
+		{
+			continue;
+		}
+
+		SpotLightComponent->SetVisibility(bTorchRuntimeActive, true);
+		if (!bTorchRuntimeActive)
+		{
+			continue;
+		}
+
+		if (bForceTorchSpotlightsWhite)
+		{
+			SpotLightComponent->SetLightColor(TorchSpotlightColor);
+		}
+
+		if (bTorchHasAimTarget)
+		{
+			const FVector AimDirection = (TorchAimTargetLocation - SpotLightComponent->GetComponentLocation()).GetSafeNormal();
+			if (!AimDirection.IsNearlyZero())
+			{
+				const FRotator DesiredRotation = AimDirection.Rotation();
+				const float InterpSpeed = FMath::Max(0.0f, TorchAimInterpSpeed);
+				const bool bUseInterp = DeltaSeconds > KINDA_SMALL_NUMBER && InterpSpeed > KINDA_SMALL_NUMBER;
+				const FRotator NextRotation = bUseInterp
+					? FMath::RInterpTo(SpotLightComponent->GetComponentRotation(), DesiredRotation, DeltaSeconds, InterpSpeed)
+					: DesiredRotation;
+				SpotLightComponent->SetWorldRotation(NextRotation);
+			}
+		}
+	}
 }
 
 void ADroneCompanion::UpdateStatusLight(float DeltaSeconds)
 {
 	if (!DroneStatusLight)
 	{
+		UpdateSpotlightVisuals(FMath::Max(0.0f, DeltaSeconds));
 		return;
 	}
 
@@ -361,6 +1008,7 @@ void ADroneCompanion::UpdateStatusLight(float DeltaSeconds)
 	const float BatteryAlpha = FMath::Clamp(BatteryPercent / MaxBatteryPercent, 0.0f, 1.0f);
 	const float FlickerStartPercent = FMath::Clamp(BatteryFlickerStartPercent, 0.0f, MaxBatteryPercent);
 	const float RedLightStartPercent = FMath::Clamp(BatteryRedLightStartPercent, 0.0f, MaxBatteryPercent);
+	const bool bManuallyPoweredOff = CurrentPowerState == EDronePowerState::PoweredOff;
 	const bool bBatteryFlat = BatteryComponent && BatteryComponent->IsBatteryEnabled() && BatteryPercent <= KINDA_SMALL_NUMBER;
 	const bool bInLowBatteryRange = FlickerStartPercent > KINDA_SMALL_NUMBER
 		&& BatteryPercent > 0.0f
@@ -435,30 +1083,48 @@ void ADroneCompanion::UpdateStatusLight(float DeltaSeconds)
 	else
 	{
 		FlatBatteryPulseTime = 0.0f;
-		FinalIntensity = BaseIntensity * FlickerMultiplier;
+		FinalIntensity = bManuallyPoweredOff
+			? 0.0f
+			: (BaseIntensity * FlickerMultiplier);
 	}
 
 	DroneStatusLight->SetIntensity(FinalIntensity);
 	DroneStatusLight->SetAttenuationRadius(FMath::Max(0.0f, StatusLightAttenuationRadius));
 
 	const bool bIsFullyChargedInCharger = bIsInChargerVolume && IsBatteryFullyCharged();
+	FLinearColor StatusColor = StatusLightNormalColor;
 	if (bIsFullyChargedInCharger)
 	{
-		DroneStatusLight->SetLightColor(StatusLightChargingFullColor);
+		StatusColor = StatusLightChargingFullColor;
 	}
 	else if (bBatteryFlat || bInRedLightRange)
 	{
-		DroneStatusLight->SetLightColor(StatusLightLowBatteryColor);
+		StatusColor = StatusLightLowBatteryColor;
 	}
-	else
-	{
-		DroneStatusLight->SetLightColor(StatusLightNormalColor);
-	}
+
+	DroneStatusLight->SetLightColor(StatusColor);
+	const float StatusBrightnessAlpha = MaxIntensity > KINDA_SMALL_NUMBER
+		? FMath::Clamp(FinalIntensity / MaxIntensity, 0.0f, 1.0f)
+		: 0.0f;
+	UpdateDynamicEmissiveMaterials(StatusColor, StatusBrightnessAlpha, BatteryAlpha, bBatteryFlat);
+	UpdateSpotlightVisuals(SafeDeltaSeconds);
 }
 
 void ADroneCompanion::RemoveAppliedConveyorSurfaceVelocity()
 {
-	if (!DroneBody || AppliedConveyorSurfaceVelocity.IsNearlyZero())
+	if (!DroneBody)
+	{
+		AppliedConveyorSurfaceVelocity = FVector::ZeroVector;
+		return;
+	}
+
+	if (!DroneBody->IsSimulatingPhysics())
+	{
+		AppliedConveyorSurfaceVelocity = FVector::ZeroVector;
+		return;
+	}
+
+	if (AppliedConveyorSurfaceVelocity.IsNearlyZero())
 	{
 		return;
 	}
@@ -470,7 +1136,13 @@ void ADroneCompanion::RemoveAppliedConveyorSurfaceVelocity()
 
 void ADroneCompanion::ApplyConveyorSurfaceVelocity()
 {
-	if (!DroneBody || !ConveyorSurfaceVelocity)
+	if (!DroneBody || !ConveyorSurfaceVelocity || !ShouldProcessConveyorAssist())
+	{
+		AppliedConveyorSurfaceVelocity = FVector::ZeroVector;
+		return;
+	}
+
+	if (!DroneBody->IsSimulatingPhysics())
 	{
 		AppliedConveyorSurfaceVelocity = FVector::ZeroVector;
 		return;
@@ -491,6 +1163,59 @@ void ADroneCompanion::ApplyConveyorSurfaceVelocity()
 void ADroneCompanion::SetFollowTarget(AActor* NewFollowTarget)
 {
 	FollowTarget = NewFollowTarget;
+}
+
+void ADroneCompanion::SetHideStaticMeshesFromOwnerCamera(bool bHide)
+{
+	if (bHideStaticMeshesFromOwnerCamera == bHide)
+	{
+		return;
+	}
+
+	bHideStaticMeshesFromOwnerCamera = bHide;
+	ApplyStaticMeshOwnerVisibility();
+}
+
+void ADroneCompanion::ApplyStaticMeshOwnerVisibility()
+{
+	TInlineComponentArray<UStaticMeshComponent*> StaticMeshComponents(this);
+	for (UStaticMeshComponent* StaticMeshComponent : StaticMeshComponents)
+	{
+		if (!IsValid(StaticMeshComponent))
+		{
+			continue;
+		}
+
+		StaticMeshComponent->SetOwnerNoSee(bHideStaticMeshesFromOwnerCamera);
+	}
+}
+
+void ADroneCompanion::SetTorchEnabled(bool bEnabled)
+{
+	if (bTorchEnabled == bEnabled)
+	{
+		return;
+	}
+
+	bTorchEnabled = bEnabled;
+	RefreshTorchRuntimeState();
+}
+
+void ADroneCompanion::ToggleTorchEnabled()
+{
+	SetTorchEnabled(!bTorchEnabled);
+}
+
+void ADroneCompanion::SetTorchAimTarget(const FVector& NewAimTargetLocation)
+{
+	TorchAimTargetLocation = NewAimTargetLocation;
+	bTorchHasAimTarget = true;
+}
+
+void ADroneCompanion::ClearTorchAimTarget()
+{
+	bTorchHasAimTarget = false;
+	TorchAimTargetLocation = FVector::ZeroVector;
 }
 
 void ADroneCompanion::SetCompanionMode(EDroneCompanionMode NewMode)
@@ -564,6 +1289,8 @@ void ADroneCompanion::SetCompanionMode(EDroneCompanionMode NewMode)
 	{
 		RefreshCameraMountRotation();
 	}
+
+	RefreshStateDomains(TEXT("SetCompanionMode"));
 }
 
 void ADroneCompanion::SetViewReferenceRotation(const FRotator& NewRotation)
@@ -576,6 +1303,7 @@ void ADroneCompanion::SetThirdPersonCameraTarget(const FVector& NewLocation, con
 	ThirdPersonCameraTargetLocation = NewLocation;
 	ThirdPersonCameraTargetRotation = NewRotation;
 	bHasThirdPersonCameraTarget = true;
+	UpdateAnchoredTransform();
 }
 
 void ADroneCompanion::SetHoldTransform(const FVector& NewLocation, const FRotator& NewRotation)
@@ -762,8 +1490,11 @@ void ADroneCompanion::TeleportDroneToTransform(const FVector& NewLocation, const
 		false,
 		nullptr,
 		ETeleportType::TeleportPhysics);
-	DroneBody->SetPhysicsLinearVelocity(FVector::ZeroVector);
-	DroneBody->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+	if (DroneBody->IsSimulatingPhysics())
+	{
+		DroneBody->SetPhysicsLinearVelocity(FVector::ZeroVector);
+		DroneBody->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+	}
 	PreviousLinearVelocity = FVector::ZeroVector;
 }
 
@@ -1912,7 +2643,7 @@ void ADroneCompanion::UpdateBuddyDrift(float DeltaSeconds)
 
 void ADroneCompanion::ClampVelocity() const
 {
-	if (!DroneBody)
+	if (!DroneBody || !DroneBody->IsSimulatingPhysics() || !ShouldClampVelocityForCurrentState())
 	{
 		return;
 	}
@@ -2208,6 +2939,10 @@ void ADroneCompanion::UpdateDebugOutput() const
 	{
 		ModeLabel = TEXT("Hold");
 	}
+	else if (CompanionMode == EDroneCompanionMode::Idle)
+	{
+		ModeLabel = TEXT("Idle");
+	}
 	else if (CompanionMode == EDroneCompanionMode::BuddyFollow)
 	{
 		ModeLabel = bLiftAssistActive ? TEXT("BuddyLift") : TEXT("Buddy");
@@ -2262,6 +2997,7 @@ void ADroneCompanion::UpdateDebugOutput() const
 	const FString DebugText = FString::Printf(
 		TEXT("Drone Companion\n")
 		TEXT("Mode: %s  Stab: %s  Hover: %s  Crashed: %s  Recovery: %.2fs\n")
+		TEXT("State: Power %d  Mobility %d  Role %d  Control %d  ManualOff: %s\n")
 		TEXT("Battery: %.2f%%  Dead: %s  Charger: %s  ChargeLock: %s  Flicker: %.2f\n")
 		TEXT("Speed: %.0f / %.0f uu/s  Angular: %.0f deg/s\n")
 		TEXT("Impact: %s  Would Crash: %s  Last Impact: %.0f\n")
@@ -2272,6 +3008,11 @@ void ADroneCompanion::UpdateDebugOutput() const
 		bPilotHoverModeEnabled ? TEXT("ON") : TEXT("OFF"),
 		bCrashed ? TEXT("YES") : TEXT("NO"),
 		CrashRecoveryTimeRemaining,
+		static_cast<int32>(CurrentPowerState),
+		static_cast<int32>(CurrentMobilityState),
+		static_cast<int32>(CurrentRoleState),
+		static_cast<int32>(CurrentControlState),
+		bManualPowerOffRequested ? TEXT("YES") : TEXT("NO"),
 		BatteryPercent,
 		bDronePoweredOff ? TEXT("YES") : TEXT("NO"),
 		bIsInChargerVolume ? TEXT("YES") : TEXT("NO"),
@@ -2421,7 +3162,9 @@ void ADroneCompanion::StartCameraTransition(
 
 FRotator ADroneCompanion::GetDesiredCameraMountRotationForMode(EDroneCompanionMode ForMode) const
 {
-	if (ForMode == EDroneCompanionMode::ThirdPersonFollow || ForMode == EDroneCompanionMode::HoldPosition)
+	if (ForMode == EDroneCompanionMode::ThirdPersonFollow
+		|| ForMode == EDroneCompanionMode::Idle
+		|| ForMode == EDroneCompanionMode::HoldPosition)
 	{
 		return FRotator::ZeroRotator;
 	}
@@ -2453,7 +3196,7 @@ float ADroneCompanion::GetDesiredCameraFieldOfViewForMode(EDroneCompanionMode Fo
 {
 	float BaseFieldOfView = PilotCameraFieldOfView;
 
-	if (ForMode == EDroneCompanionMode::ThirdPersonFollow)
+	if (ForMode == EDroneCompanionMode::ThirdPersonFollow || ForMode == EDroneCompanionMode::Idle)
 	{
 		BaseFieldOfView = ThirdPersonCameraFieldOfView;
 	}

@@ -9,9 +9,12 @@
 class UCameraComponent;
 class UConveyorSurfaceVelocityComponent;
 class UDroneBatteryComponent;
+class UMaterialInstanceDynamic;
 class UPhysicalMaterial;
 class UPointLightComponent;
 class UPrimitiveComponent;
+class USpotLightComponent;
+class USphereComponent;
 class UStaticMeshComponent;
 class USceneComponent;
 class AActor;
@@ -21,10 +24,47 @@ enum class EDroneCompanionMode : uint8
 {
 	ThirdPersonFollow,
 	PilotControlled,
+	Idle,
 	HoldPosition,
 	BuddyFollow,
 	MapMode,
 	MiniMapFollow
+};
+
+UENUM(BlueprintType)
+enum class EDronePowerState : uint8
+{
+	Active,
+	PoweredOff,
+	Depleted
+};
+
+UENUM(BlueprintType)
+enum class EDroneMobilityState : uint8
+{
+	Flight,
+	PhysicsBody,
+	Anchored
+};
+
+UENUM(BlueprintType)
+enum class EDroneRoleState : uint8
+{
+	ThirdPersonCamera,
+	Pilot,
+	Idle,
+	Hold,
+	Buddy,
+	Map,
+	MiniMap
+};
+
+UENUM(BlueprintType)
+enum class EDroneControlState : uint8
+{
+	Autonomous,
+	PlayerControlled,
+	ScriptControlled
 };
 
 struct FDroneLiftAssistForceTuning
@@ -97,6 +137,30 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Drone")
 	void SetSuppressCameraMountRefresh(bool bSuppress);
 
+	UFUNCTION(BlueprintCallable, Category="Drone|Visual")
+	void SetHideStaticMeshesFromOwnerCamera(bool bHide);
+
+	UFUNCTION(BlueprintPure, Category="Drone|Visual")
+	bool IsHidingStaticMeshesFromOwnerCamera() const { return bHideStaticMeshesFromOwnerCamera; }
+
+	UFUNCTION(BlueprintCallable, Category="Drone|Torch")
+	void SetTorchEnabled(bool bEnabled);
+
+	UFUNCTION(BlueprintCallable, Category="Drone|Torch")
+	void ToggleTorchEnabled();
+
+	UFUNCTION(BlueprintPure, Category="Drone|Torch")
+	bool IsTorchEnabled() const { return bTorchEnabled; }
+
+	UFUNCTION(BlueprintPure, Category="Drone|Torch")
+	bool IsTorchRuntimeActive() const { return bTorchRuntimeActive; }
+
+	UFUNCTION(BlueprintCallable, Category="Drone|Torch")
+	void SetTorchAimTarget(const FVector& NewAimTargetLocation);
+
+	UFUNCTION(BlueprintCallable, Category="Drone|Torch")
+	void ClearTorchAimTarget();
+
 	UFUNCTION(BlueprintCallable, Category="Drone")
 	bool StartLiftAssist(UPrimitiveComponent* InTargetComponent, const FVector& InGrabLocation);
 
@@ -156,17 +220,41 @@ public:
 	UFUNCTION(BlueprintPure, Category="Drone|Battery")
 	bool IsChargingLockActive() const { return bChargingLockActive; }
 
+	UFUNCTION(BlueprintCallable, Category="Drone|State")
+	bool SetManualPowerOff(bool bPowerOff);
+
+	UFUNCTION(BlueprintCallable, Category="Drone|State")
+	void ToggleManualPowerOff();
+
+	UFUNCTION(BlueprintPure, Category="Drone|State")
+	bool IsManualPowerOffRequested() const { return bManualPowerOffRequested; }
+
+	UFUNCTION(BlueprintPure, Category="Drone|State")
+	EDronePowerState GetPowerState() const { return CurrentPowerState; }
+
+	UFUNCTION(BlueprintPure, Category="Drone|State")
+	EDroneMobilityState GetMobilityState() const { return CurrentMobilityState; }
+
+	UFUNCTION(BlueprintPure, Category="Drone|State")
+	EDroneRoleState GetRoleState() const { return CurrentRoleState; }
+
+	UFUNCTION(BlueprintPure, Category="Drone|State")
+	EDroneControlState GetControlState() const { return CurrentControlState; }
+
 	UFUNCTION(BlueprintCallable, Category="Drone|Battery")
 	void NotifyEnteredChargerVolume();
 
 	UFUNCTION(BlueprintCallable, Category="Drone|Battery")
 	void NotifyExitedChargerVolume();
 
+	UFUNCTION(BlueprintPure, Category="Drone|Pickup")
+	UPrimitiveComponent* GetPickupPhysicsComponent() const { return DroneBody; }
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Physics")
 	float DroneMassKg = 3.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Physics")
-	float DroneBodyVisualScale = 0.5f;
+	float DroneBodyVisualScale = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Physics")
 	float DroneBodyLinearDamping = 0.9f;
@@ -179,6 +267,12 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Physics")
 	float DroneBodyRestitution = 0.05f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pickup")
+	bool bUsePickupProxySphere = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Pickup", meta=(ClampMin="1.0", UIMin="1.0"))
+	float PickupProxySphereRadius = 52.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Physics")
 	float DroneMaxLinearSpeed = 2600.0f;
@@ -549,6 +643,33 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Battery", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="100.0", UIMax="100.0"))
 	float BatteryRedLightStartPercent = 5.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Battery", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="1.0", UIMax="1.0"))
+	float PoweredOffDrainMultiplier = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Battery|Torch", meta=(ClampMin="1.0", UIMin="1.0"))
+	float TorchDrainMultiplier = 1.1f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|State")
+	bool bAnchorThirdPersonRoleToCamera = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|State")
+	bool bDisableCollisionWhenAnchored = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|State|Physics")
+	TEnumAsByte<ECollisionEnabled::Type> FlightCollisionEnabled = ECollisionEnabled::QueryAndPhysics;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|State|Physics")
+	TEnumAsByte<ECollisionEnabled::Type> PassiveCollisionEnabled = ECollisionEnabled::QueryAndPhysics;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|State|Physics", meta=(ClampMin="0.0", UIMin="0.0"))
+	float PassivePhysicsLinearDamping = 0.08f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|State|Physics", meta=(ClampMin="0.0", UIMin="0.0"))
+	float PassivePhysicsAngularDamping = 0.08f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|State")
+	bool bLogStateTransitions = false;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light", meta=(ClampMin="0.0", UIMin="0.0"))
 	float StatusLightBaseIntensity = 8000.0f;
 
@@ -559,13 +680,67 @@ public:
 	float StatusLightAttenuationRadius = 600.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light")
-	FLinearColor StatusLightNormalColor = FLinearColor(1.0f, 0.92f, 0.76f, 1.0f);
+	FLinearColor StatusLightNormalColor = FLinearColor(0.14f, 0.82f, 1.0f, 1.0f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light")
 	FLinearColor StatusLightChargingFullColor = FLinearColor(0.15f, 1.0f, 0.25f, 1.0f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light")
 	FLinearColor StatusLightLowBatteryColor = FLinearColor(1.0f, 0.06f, 0.03f, 1.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Spotlight")
+	bool bForceTorchSpotlightsWhite = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Spotlight")
+	FLinearColor TorchSpotlightColor = FLinearColor::White;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Spotlight", meta=(ClampMin="0.0", UIMin="0.0"))
+	float TorchAimInterpSpeed = 10.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Emissive")
+	bool bUseDynamicEmissiveMaterials = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Emissive")
+	FName AccessoryEmissiveSlotName = TEXT("AccessoryLight");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Emissive")
+	FName AccessoryEmissiveLegacySlotName = TEXT("AccesorryLight");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Emissive")
+	FName EyeEmissiveSlotName = TEXT("Eye");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Emissive")
+	FName EyeEmissiveAltSlotName = TEXT("DroneEye");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Emissive")
+	FName AccessoryEmissiveColorParameterName = TEXT("EmissiveColor");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Emissive")
+	FName AccessoryEmissiveIntensityParameterName = TEXT("EmissiveIntensity");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Emissive")
+	FName EyeEmissiveColorParameterName = TEXT("EmissiveColor");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Emissive")
+	FName EyeEmissiveIntensityParameterName = TEXT("EmissiveIntensity");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Emissive")
+	FLinearColor EyeEmissiveColor = FLinearColor(1.0f, 0.05f, 0.03f, 1.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Emissive", meta=(ClampMin="0.0", UIMin="0.0"))
+	float AccessoryEmissiveMinIntensity = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Emissive", meta=(ClampMin="0.0", UIMin="0.0"))
+	float AccessoryEmissiveMaxIntensity = 12.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Emissive", meta=(ClampMin="0.0", UIMin="0.0"))
+	float EyeEmissiveMinIntensity = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Emissive", meta=(ClampMin="0.0", UIMin="0.0"))
+	float EyeEmissiveMaxIntensity = 18.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light|Emissive", meta=(ClampMin="0.1", UIMin="0.1"))
+	float EyeEmissiveBatteryRampExponent = 1.3f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Light", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="1.0", UIMax="1.0"))
 	float StatusLightLowBatteryMinBrightnessAlpha = 0.2f;
@@ -596,6 +771,18 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone|Battery", meta=(AllowPrivateAccess="true"))
 	bool bDronePoweredOff = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone|State", meta=(AllowPrivateAccess="true"))
+	EDronePowerState CurrentPowerState = EDronePowerState::Active;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone|State", meta=(AllowPrivateAccess="true"))
+	EDroneMobilityState CurrentMobilityState = EDroneMobilityState::Flight;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone|State", meta=(AllowPrivateAccess="true"))
+	EDroneRoleState CurrentRoleState = EDroneRoleState::ThirdPersonCamera;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone|State", meta=(AllowPrivateAccess="true"))
+	EDroneControlState CurrentControlState = EDroneControlState::Autonomous;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone|Battery", meta=(AllowPrivateAccess="true"))
 	bool bIsInChargerVolume = false;
@@ -656,6 +843,34 @@ protected:
 	void HandleDronePowerLoss();
 	void HandleDronePowerRestore();
 	void UpdateStatusLight(float DeltaSeconds);
+	void InitializeDynamicEmissiveMaterials();
+	void UpdateDynamicEmissiveMaterials(
+		const FLinearColor& StatusColor,
+		float StatusBrightnessAlpha,
+		float BatteryAlpha,
+		bool bBatteryFlat);
+	void UpdateSpotlightVisuals(float DeltaSeconds = 0.0f);
+	void ApplyStaticMeshOwnerVisibility();
+	void RefreshTorchRuntimeState();
+	void RefreshStateDomains(FName Reason);
+	EDronePowerState ResolveDesiredPowerState() const;
+	EDroneRoleState ResolveRoleStateFromCompanionMode(EDroneCompanionMode Mode) const;
+	EDroneControlState ResolveControlStateFromCompanionMode(EDroneCompanionMode Mode) const;
+	EDroneMobilityState ResolveDesiredMobilityState() const;
+	bool RequestPowerState(EDronePowerState NewState, FName Reason);
+	bool RequestMobilityState(EDroneMobilityState NewState, FName Reason);
+	bool RequestRoleState(EDroneRoleState NewState, FName Reason);
+	bool RequestControlState(EDroneControlState NewState, FName Reason);
+	bool CanTransitionPowerState(EDronePowerState FromState, EDronePowerState ToState) const;
+	bool CanTransitionMobilityState(EDroneMobilityState FromState, EDroneMobilityState ToState) const;
+	bool CanTransitionRoleState(EDroneRoleState FromState, EDroneRoleState ToState) const;
+	bool CanTransitionControlState(EDroneControlState FromState, EDroneControlState ToState) const;
+	void ApplyPhysicsProfile(bool bResetKinematics);
+	bool CanApplyMovementForces() const;
+	bool ShouldProcessConveyorAssist() const;
+	bool ShouldClampVelocityForCurrentState() const;
+	void UpdateAnchoredTransform();
+	void LogStateTransition(const TCHAR* Domain, int32 PreviousValue, int32 NewValue, FName Reason, bool bAccepted) const;
 	void RefreshCameraForPilotControlModeChange(bool bWasRollControls);
 	void UpdateCameraTransition(float DeltaSeconds);
 	void StartCameraTransition(
@@ -669,6 +884,9 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UStaticMeshComponent* DroneBody;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	USphereComponent* DronePickupProxySphere;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	USceneComponent* CameraMount;
@@ -783,6 +1001,16 @@ protected:
 	float FlatBatteryPulseTime = 0.0f;
 	FVector FreeFlyCurrentVelocity = FVector::ZeroVector;
 	FRotator CameraTransitionStartRotation = FRotator::ZeroRotator;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UMaterialInstanceDynamic>> AccessoryEmissiveMaterialInstances;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UMaterialInstanceDynamic>> EyeEmissiveMaterialInstances;
+	bool bHideStaticMeshesFromOwnerCamera = false;
+	bool bTorchEnabled = false;
+	bool bTorchRuntimeActive = false;
+	bool bTorchHasAimTarget = false;
+	FVector TorchAimTargetLocation = FVector::ZeroVector;
+	bool bManualPowerOffRequested = false;
 	TWeakObjectPtr<UPrimitiveComponent> LiftAssistTargetComponent;
 	FVector LiftAssistLocalGrabOffset = FVector::ZeroVector;
 	FDroneLiftAssistForceTuning LiftAssistForceTuning;

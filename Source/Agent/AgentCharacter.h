@@ -15,6 +15,7 @@ class AStorageBin;
 class ATrolleyVehiclePawn;
 class UVehicleInteractionComponent;
 class UCameraComponent;
+class UDroneSwarmComponent;
 class UAnimInstance;
 class UInputAction;
 class UPhysicsHandleComponent;
@@ -28,6 +29,7 @@ struct FInputActionValue;
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
 
 enum class EDroneCompanionMode : uint8;
+enum class EDroneSwarmRoleSlot : uint8;
 
 UENUM(BlueprintType)
 enum class EAgentViewMode : uint8
@@ -93,6 +95,10 @@ class AAgentCharacter : public ACharacter
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UVehicleInteractionComponent* VehicleInteractionComponent;
 
+	/** Swarm registry and role-slot coordinator for all known drones */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	UDroneSwarmComponent* DroneSwarmComponent;
+
 protected:
 	UPROPERTY(EditAnywhere, Category="Input")
 	UInputAction* JumpAction;
@@ -120,18 +126,41 @@ protected:
 
 	void OnViewModeButtonPressed();
 	void OnViewModeButtonReleased();
+	void OnCycleActiveDronePressed();
+	void OnDroneTorchTogglePressed();
+	void OnLeftMouseButtonPressed();
+	void OnGamepadFaceButtonLeftPressed();
+	void OnGamepadLeftShoulderPressed();
 	void UpdateViewModeButtonHold(float DeltaSeconds);
 	void UpdateRollModeJumpHold(float DeltaSeconds);
 	void CycleViewMode();
 	void ApplyViewMode(EAgentViewMode NewMode, bool bBlend);
+	void SpawnInitialDroneFleet();
+	void DiscoverWorldDrones();
+	void SyncSwarmFromDroneFleet();
+	EDroneSwarmRoleSlot ResolveDesiredActiveSwarmRole() const;
+	void RefreshSwarmRoleAssignments();
+	EDroneCompanionMode ResolveCompanionModeForRole(EDroneSwarmRoleSlot InRole) const;
 	void SpawnDroneCompanion();
-	void SpawnDroneCompanionAtTransform(const FVector& SpawnLocation, const FRotator& SpawnRotation, EDroneCompanionMode InitialMode);
+	ADroneCompanion* SpawnDroneCompanionAtTransform(
+		const FVector& SpawnLocation,
+		const FRotator& SpawnRotation,
+		EDroneCompanionMode InitialMode,
+		bool bMakeActive = true);
 	void DespawnDroneCompanion();
+	void CleanupInvalidDroneCompanions();
+	void EnsureActiveDroneSelection();
+	bool IsDroneAvailableForActivation(const ADroneCompanion* CandidateDrone) const;
+	int32 FindNextDroneIndex(int32 StartIndex, int32 Direction, bool bPreferAvailable) const;
+	bool SetActiveDroneIndex(int32 NewActiveIndex, bool bUpdateViewTarget = true, bool bBlendViewTarget = true);
+	void CycleActiveDrone(int32 Direction = 1);
+	void ApplyDroneFleetContext(bool bUpdateViewTarget = false, bool bBlendViewTarget = true);
 	void ApplyDroneAssistState();
 	void EnterRollTransitionMode(bool bTrackHeldReturn, bool bFromCrashRecovery);
 	void ExitRollTransitionMode(bool bTryJumpLift);
 	void SyncDroneCompanionControlState(bool bAllowRollControls, bool bSuppressCameraMountRefresh = false);
 	void UpdateDroneCompanionThirdPersonTarget();
+	void UpdateDroneTorchTarget();
 	void UpdateDronePilotInputs(float DeltaSeconds);
 	void UpdateThirdPersonTransition(float DeltaSeconds);
 	bool GetThirdPersonDroneTarget(FVector& OutLocation, FRotator& OutRotation) const;
@@ -180,6 +209,7 @@ protected:
 	void UpdatePickupInteraction();
 	bool UpdatePickupCandidate();
 	void DrawPickupInfluenceDebug(const FVector& SphereCenter, const FColor& Color) const;
+	UPrimitiveComponent* ResolvePickupPhysicsComponent(UPrimitiveComponent* PrimitiveComponent) const;
 	bool CanPickupComponent(const UPrimitiveComponent* PrimitiveComponent) const;
 	bool TryBeginPickup();
 	void EndPickup();
@@ -193,6 +223,8 @@ protected:
 	float GetHeldPickupRotationLeverageMultiplier() const;
 	float GetHeldPickupRotationDriveScale() const;
 	void ApplyHeldPickupRotationPhysicsInput(const FVector& RotationAxis, float InputValue, float DeltaSeconds);
+	ADroneCompanion* GetHeldDroneFromPickup() const;
+	bool TryToggleHeldDronePowerFromPickup();
 	bool TryToggleDroneLiftAssist();
 	void SyncDroneLiftAssistTuning() const;
 	void AdjustDroneLiftAssistStrength(float Delta);
@@ -275,6 +307,21 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone")
 	TSubclassOf<ADroneCompanion> DroneCompanionClass;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Fleet", meta=(ClampMin="1", UIMin="1"))
+	int32 InitialDroneCount = 1;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Fleet", meta=(ClampMin="0.0", UIMin="0.0"))
+	float InitialInactiveDroneSpawnRadius = 220.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Fleet")
+	bool bCycleOnlyAvailableDrones = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Swarm")
+	bool bAutoAssignInactiveDronesAsHookWorkers = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Fleet", meta=(ClampMin="0.1", UIMin="0.1"))
+	float DroneWorldDiscoveryInterval = 1.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone")
 	FVector DroneSpawnOffset = FVector(-180.0f, 0.0f, 120.0f);
 
@@ -302,6 +349,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone")
 	float DroneEntryAssistReleaseThreshold = 0.05f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Torch")
+	bool bStartWithDroneTorchEnabled = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Torch", meta=(ClampMin="100.0", UIMin="100.0"))
+	float DroneTorchAimTraceDistance = 8000.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Crash")
 	bool bUseCrashRollRecovery = true;
 
@@ -327,7 +380,7 @@ public:
 	float ThirdPersonDroneTransitionDuration = 0.45f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera")
-	float ThirdPersonDroneProxyScale = 0.5f;
+	float ThirdPersonDroneProxyScale = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera")
 	float DroneViewHoldTime = 0.25f;
@@ -552,6 +605,12 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<ADroneCompanion> DroneCompanion = nullptr;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone|Fleet", meta=(AllowPrivateAccess="true"))
+	TArray<TObjectPtr<ADroneCompanion>> DroneCompanions;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone|Fleet", meta=(AllowPrivateAccess="true"))
+	int32 ActiveDroneIndex = INDEX_NONE;
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Placement", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<AConveyorPlacementPreview> ConveyorPlacementPreview = nullptr;
 
@@ -587,6 +646,9 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
 	bool bDroneEntryAssistActive = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone|Torch", meta=(AllowPrivateAccess="true"))
+	bool bPlayerDroneTorchEnabled = false;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Placement", meta=(AllowPrivateAccess="true"))
 	bool bConveyorPlacementModeActive = false;
@@ -685,6 +747,7 @@ protected:
 	bool bDefaultUseControllerRotationYaw = false;
 	bool bDefaultOrientRotationToMovement = true;
 	bool bThirdPersonTransitionActive = false;
+	bool bPendingThirdPersonSwapFromDroneCamera = false;
 	bool bViewModeButtonHeld = false;
 	bool bViewModeHoldTriggered = false;
 	bool bHasStoredDefaultViewPitchLimits = false;
@@ -703,6 +766,7 @@ protected:
 	float ViewModeButtonHeldDuration = 0.0f;
 	float KeyboardMapButtonHeldDuration = 0.0f;
 	float ControllerMapButtonHeldDuration = 0.0f;
+	float DroneWorldDiscoveryTimeRemaining = 0.0f;
 	float DefaultViewPitchMin = -89.9f;
 	float DefaultViewPitchMax = 89.9f;
 	float CrashRollRecoveryStableTime = 0.0f;
