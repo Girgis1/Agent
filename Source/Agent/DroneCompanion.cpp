@@ -4,6 +4,7 @@
 #include "Agent.h"
 #include "Camera/CameraComponent.h"
 #include "Components/MeshComponent.h"
+#include "Components/PrimitiveComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/SpotLightComponent.h"
 #include "Components/SphereComponent.h"
@@ -52,8 +53,7 @@ ADroneCompanion::ADroneCompanion()
 	DronePickupProxySphere->SetGenerateOverlapEvents(false);
 	DronePickupProxySphere->SetCanEverAffectNavigation(false);
 	DronePickupProxySphere->SetSphereRadius(PickupProxySphereRadius);
-	DronePickupProxySphere->SetHiddenInGame(true, true);
-	DronePickupProxySphere->SetVisibility(false, true);
+	ApplyPickupProxyVisualizationSettings();
 
 	CameraMount = CreateDefaultSubobject<USceneComponent>(TEXT("CameraMount"));
 	CameraMount->SetupAttachment(DroneBody);
@@ -61,7 +61,11 @@ ADroneCompanion::ADroneCompanion()
 	DroneCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("DroneCamera"));
 	DroneCamera->SetupAttachment(CameraMount);
 	DroneCamera->bUsePawnControlRotation = false;
+#if WITH_EDITORONLY_DATA
 	DroneCamera->bCameraMeshHiddenInGame = true;
+	DroneCamera->bDrawFrustumAllowed = false;
+	DroneCamera->SetCameraMesh(nullptr);
+#endif
 	DroneCamera->FieldOfView = PilotCameraFieldOfView;
 
 	DroneStatusLight = CreateDefaultSubobject<UPointLightComponent>(TEXT("DroneStatusLight"));
@@ -99,13 +103,12 @@ void ADroneCompanion::BeginPlay()
 		DronePickupProxySphere->SetCollisionEnabled(bUsePickupProxySphere ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
 		DronePickupProxySphere->SetCollisionObjectType(ECC_WorldDynamic);
 		DronePickupProxySphere->SetCollisionResponseToAllChannels(ECR_Block);
-		DronePickupProxySphere->SetHiddenInGame(true, true);
-		DronePickupProxySphere->SetVisibility(false, true);
+		ApplyPickupProxyVisualizationSettings();
 	}
 
 	if (DroneCamera)
 	{
-		DroneCamera->bCameraMeshHiddenInGame = true;
+		ApplyEditorCameraVisualizationSettings();
 	}
 
 	ApplyRuntimePhysicalMaterial();
@@ -127,6 +130,9 @@ void ADroneCompanion::Tick(float DeltaSeconds)
 	{
 		return;
 	}
+
+	ApplyEditorCameraVisualizationSettings();
+	ApplyPickupProxyVisualizationSettings();
 
 	PreviousLinearVelocity = DroneBody->GetPhysicsLinearVelocity();
 	RemoveAppliedConveyorSurfaceVelocity();
@@ -724,6 +730,8 @@ void ADroneCompanion::ApplyPhysicsProfile(bool bResetKinematics)
 		return;
 	}
 
+	ApplyEditorCameraVisualizationSettings();
+
 	DroneBody->SetCollisionObjectType(ECC_PhysicsBody);
 	DroneBody->SetCollisionResponseToAllChannels(ECR_Block);
 	DroneBody->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
@@ -737,6 +745,7 @@ void ADroneCompanion::ApplyPhysicsProfile(bool bResetKinematics)
 			bAllowPickupProxy
 				? ECollisionEnabled::QueryOnly
 				: ECollisionEnabled::NoCollision);
+		ApplyPickupProxyVisualizationSettings();
 	}
 
 	if (CurrentMobilityState == EDroneMobilityState::Anchored)
@@ -1187,31 +1196,65 @@ void ADroneCompanion::SetHideStaticMeshesFromOwnerCamera(bool bHide)
 
 void ADroneCompanion::ApplyStaticMeshOwnerVisibility()
 {
-	TInlineComponentArray<UStaticMeshComponent*> StaticMeshComponents(this);
-	for (UStaticMeshComponent* StaticMeshComponent : StaticMeshComponents)
+	if (!DroneBody)
 	{
-		if (!IsValid(StaticMeshComponent))
-		{
-			continue;
-		}
-
-#if WITH_EDITORONLY_DATA
-		// Ignore editor visualization meshes (camera helper/frustum) so we don't force them visible.
-		if (StaticMeshComponent->IsVisualizationComponent())
-		{
-			continue;
-		}
-#endif
-
-		// Shadow-catcher mode: hide render geometry globally while preserving shadow contribution.
-		StaticMeshComponent->SetOwnerNoSee(false);
-		StaticMeshComponent->SetHiddenInGame(bHideStaticMeshesFromOwnerCamera, true);
-		if (bHideStaticMeshesFromOwnerCamera)
-		{
-			StaticMeshComponent->SetCastShadow(true);
-		}
-		StaticMeshComponent->bCastHiddenShadow = bHideStaticMeshesFromOwnerCamera;
+		return;
 	}
+
+	// Only hide the primary drone body mesh in camera-driven modes.
+	// Lights and non-body components remain active/visible.
+	const bool bHideDroneBodyMesh = bHideStaticMeshesFromOwnerCamera;
+	DroneBody->SetOwnerNoSee(false);
+	DroneBody->SetHiddenInGame(bHideDroneBodyMesh, true);
+	DroneBody->SetVisibility(!bHideDroneBodyMesh, true);
+	if (bHideDroneBodyMesh)
+	{
+		DroneBody->SetCastShadow(true);
+	}
+	DroneBody->bCastHiddenShadow = bHideDroneBodyMesh;
+}
+
+void ADroneCompanion::ApplyEditorCameraVisualizationSettings()
+{
+#if WITH_EDITORONLY_DATA
+	if (!DroneCamera)
+	{
+		return;
+	}
+
+	DroneCamera->bCameraMeshHiddenInGame = true;
+	DroneCamera->bDrawFrustumAllowed = false;
+	DroneCamera->SetCameraMesh(nullptr);
+	DroneCamera->RefreshVisualRepresentation();
+
+	TInlineComponentArray<UPrimitiveComponent*> PrimitiveComponents(this);
+	for (UPrimitiveComponent* PrimitiveComponent : PrimitiveComponents)
+	{
+		if (!IsValid(PrimitiveComponent)
+			|| !PrimitiveComponent->IsVisualizationComponent()
+			|| PrimitiveComponent->GetAttachParent() != DroneCamera)
+		{
+			continue;
+		}
+
+		PrimitiveComponent->SetHiddenInGame(true, true);
+		PrimitiveComponent->SetVisibility(false, true);
+	}
+#endif
+}
+
+void ADroneCompanion::ApplyPickupProxyVisualizationSettings()
+{
+	if (!DronePickupProxySphere)
+	{
+		return;
+	}
+
+	// Pickup proxy should always be non-rendering; it exists only as an interaction collider.
+	DronePickupProxySphere->SetHiddenInGame(true, true);
+	DronePickupProxySphere->SetVisibility(false, true);
+	DronePickupProxySphere->SetCastShadow(false);
+	DronePickupProxySphere->bCastHiddenShadow = false;
 }
 
 void ADroneCompanion::SetTorchEnabled(bool bEnabled)
