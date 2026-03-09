@@ -52,7 +52,8 @@ ADroneCompanion::ADroneCompanion()
 	DronePickupProxySphere->SetGenerateOverlapEvents(false);
 	DronePickupProxySphere->SetCanEverAffectNavigation(false);
 	DronePickupProxySphere->SetSphereRadius(PickupProxySphereRadius);
-	DronePickupProxySphere->SetHiddenInGame(true);
+	DronePickupProxySphere->SetHiddenInGame(true, true);
+	DronePickupProxySphere->SetVisibility(false, true);
 
 	CameraMount = CreateDefaultSubobject<USceneComponent>(TEXT("CameraMount"));
 	CameraMount->SetupAttachment(DroneBody);
@@ -60,6 +61,7 @@ ADroneCompanion::ADroneCompanion()
 	DroneCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("DroneCamera"));
 	DroneCamera->SetupAttachment(CameraMount);
 	DroneCamera->bUsePawnControlRotation = false;
+	DroneCamera->bCameraMeshHiddenInGame = true;
 	DroneCamera->FieldOfView = PilotCameraFieldOfView;
 
 	DroneStatusLight = CreateDefaultSubobject<UPointLightComponent>(TEXT("DroneStatusLight"));
@@ -97,6 +99,13 @@ void ADroneCompanion::BeginPlay()
 		DronePickupProxySphere->SetCollisionEnabled(bUsePickupProxySphere ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
 		DronePickupProxySphere->SetCollisionObjectType(ECC_WorldDynamic);
 		DronePickupProxySphere->SetCollisionResponseToAllChannels(ECR_Block);
+		DronePickupProxySphere->SetHiddenInGame(true, true);
+		DronePickupProxySphere->SetVisibility(false, true);
+	}
+
+	if (DroneCamera)
+	{
+		DroneCamera->bCameraMeshHiddenInGame = true;
 	}
 
 	ApplyRuntimePhysicalMaterial();
