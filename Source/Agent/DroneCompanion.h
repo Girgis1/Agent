@@ -850,6 +850,8 @@ protected:
 		float BatteryAlpha,
 		bool bBatteryFlat);
 	void UpdateSpotlightVisuals(float DeltaSeconds = 0.0f);
+	void ApplyPickupProxyVisualizationSettings();
+	void ApplyEditorCameraVisualizationSettings();
 	void ApplyStaticMeshOwnerVisibility();
 	void RefreshTorchRuntimeState();
 	void RefreshStateDomains(FName Reason);
