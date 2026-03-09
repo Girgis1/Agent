@@ -400,7 +400,8 @@ void ADroneCompanion::UpdateBatteryState(float DeltaSeconds)
 
 	const float SafeDeltaSeconds = FMath::Max(0.0f, DeltaSeconds);
 	const float DrainRatePercentPerSecond = BatteryComponent->GetDrainRatePercentPerSecond();
-	const bool bTorchDrainActive = bTorchEnabled && CurrentPowerState == EDronePowerState::Active;
+	const bool bTorchDrainActive = bTorchEnabled
+		&& CurrentPowerState == EDronePowerState::Active;
 	float DrainScale = CurrentPowerState == EDronePowerState::PoweredOff
 		? FMath::Clamp(PoweredOffDrainMultiplier, 0.0f, 1.0f)
 		: 1.0f;
@@ -953,13 +954,34 @@ void ADroneCompanion::UpdateDynamicEmissiveMaterials(
 
 	const float EyeMinIntensity = FMath::Max(0.0f, EyeEmissiveMinIntensity);
 	const float EyeMaxIntensity = FMath::Max(EyeMinIntensity, EyeEmissiveMaxIntensity);
-	const float EyeRampAlpha = FMath::Pow(
-		FMath::Clamp(BatteryAlpha, 0.0f, 1.0f),
-		FMath::Max(0.1f, EyeEmissiveBatteryRampExponent));
-	float EyeIntensity = FMath::Lerp(EyeMinIntensity, EyeMaxIntensity, EyeRampAlpha);
-	if (CurrentPowerState == EDronePowerState::PoweredOff || bBatteryFlat)
+	const bool bFullChargeBlinkActive = bEyeBlinkGreenWhenFullyCharged
+		&& IsBatteryFullyCharged()
+		&& (!bEyeFullChargeBlinkRequiresChargerVolume || bIsInChargerVolume);
+
+	float EyeIntensity = 0.0f;
+	FLinearColor EyeColor = EyeEmissiveColor;
+	if (bFullChargeBlinkActive)
 	{
-		EyeIntensity = 0.0f;
+		const UWorld* World = GetWorld();
+		const float TimeSeconds = World ? World->GetTimeSeconds() : 0.0f;
+		const float BlinkWave = 0.5f + 0.5f * FMath::Sin(
+			TimeSeconds * FMath::Max(0.01f, EyeFullChargeBlinkFrequencyHz) * 2.0f * PI);
+		const float MinBlinkAlpha = FMath::Clamp(EyeFullChargeBlinkMinAlpha, 0.0f, 1.0f);
+		const float MaxBlinkAlpha = FMath::Max(MinBlinkAlpha, FMath::Clamp(EyeFullChargeBlinkMaxAlpha, 0.0f, 1.0f));
+		const float BlinkAlpha = FMath::Lerp(MinBlinkAlpha, MaxBlinkAlpha, BlinkWave);
+		EyeIntensity = FMath::Lerp(EyeMinIntensity, EyeMaxIntensity, BlinkAlpha);
+		EyeColor = EyeFullyChargedBlinkColor;
+	}
+	else
+	{
+		const float EyeRampAlpha = FMath::Pow(
+			FMath::Clamp(BatteryAlpha, 0.0f, 1.0f),
+			FMath::Max(0.1f, EyeEmissiveBatteryRampExponent));
+		EyeIntensity = FMath::Lerp(EyeMinIntensity, EyeMaxIntensity, EyeRampAlpha);
+		if (CurrentPowerState == EDronePowerState::PoweredOff || bBatteryFlat)
+		{
+			EyeIntensity = 0.0f;
+		}
 	}
 
 	for (UMaterialInstanceDynamic* DynamicMaterial : EyeEmissiveMaterialInstances)
@@ -969,13 +991,88 @@ void ADroneCompanion::UpdateDynamicEmissiveMaterials(
 			continue;
 		}
 
-		DynamicMaterial->SetVectorParameterValue(EyeEmissiveColorParameterName, EyeEmissiveColor);
+		DynamicMaterial->SetVectorParameterValue(EyeEmissiveColorParameterName, EyeColor);
 		DynamicMaterial->SetScalarParameterValue(EyeEmissiveIntensityParameterName, EyeIntensity);
 	}
 }
 
 void ADroneCompanion::UpdateSpotlightVisuals(float DeltaSeconds)
 {
+	const float SafeDeltaSeconds = FMath::Max(0.0f, DeltaSeconds);
+	const bool bBatteryEnabled = BatteryComponent && BatteryComponent->IsBatteryEnabled();
+	const float BatteryPercent = BatteryComponent ? BatteryComponent->GetBatteryPercent() : 0.0f;
+	const float MaxBatteryPercent = BatteryComponent ? FMath::Max(0.01f, BatteryComponent->GetMaxBatteryPercent()) : 100.0f;
+	const float TorchCutoffPercent = FMath::Clamp(TorchDisableAtLowBatteryPercent, 0.0f, MaxBatteryPercent);
+	const float TorchFlickerStartClamped = FMath::Clamp(
+		FMath::Max(TorchCutoffPercent, TorchFlickerStartPercent),
+		0.0f,
+		MaxBatteryPercent);
+	const bool bCanUseTorchFlickerRange =
+		bBatteryEnabled
+		&& TorchFlickerStartClamped > KINDA_SMALL_NUMBER
+		&& BatteryPercent > 0.0f
+		&& BatteryPercent <= TorchFlickerStartClamped;
+	const bool bTorchInLowBatteryRedMode =
+		bBatteryEnabled
+		&& BatteryPercent > 0.0f
+		&& BatteryPercent <= TorchCutoffPercent + KINDA_SMALL_NUMBER;
+
+	if (!bTorchRuntimeActive || !bCanUseTorchFlickerRange)
+	{
+		bTorchFlickerOn = true;
+		TorchFlickerTimeRemaining = 0.0f;
+	}
+	else
+	{
+		const float RawFlickerAlpha = 1.0f - FMath::Clamp(
+			BatteryPercent / FMath::Max(KINDA_SMALL_NUMBER, TorchFlickerStartClamped),
+			0.0f,
+			1.0f);
+		const float FlickerAlpha = FMath::Pow(
+			RawFlickerAlpha,
+			FMath::Max(0.1f, TorchFlickerRampExponent));
+
+		const float GapMin = FMath::Lerp(
+			FMath::Max(0.01f, TorchFlickerGapMinAtStartSeconds),
+			FMath::Max(0.01f, TorchFlickerGapMinAtCutoffSeconds),
+			FlickerAlpha);
+		const float GapMax = FMath::Lerp(
+			FMath::Max(GapMin, TorchFlickerGapMaxAtStartSeconds),
+			FMath::Max(0.01f, TorchFlickerGapMaxAtCutoffSeconds),
+			FlickerAlpha);
+		const float OffMin = FMath::Lerp(
+			FMath::Max(0.005f, TorchFlickerOffMinAtStartSeconds),
+			FMath::Max(0.005f, TorchFlickerOffMinAtCutoffSeconds),
+			FlickerAlpha);
+		const float OffMax = FMath::Lerp(
+			FMath::Max(OffMin, TorchFlickerOffMaxAtStartSeconds),
+			FMath::Max(0.005f, TorchFlickerOffMaxAtCutoffSeconds),
+			FlickerAlpha);
+		const float OutageChance = FMath::Lerp(
+			FMath::Clamp(TorchFlickerOutageChanceAtStart, 0.0f, 1.0f),
+			FMath::Clamp(TorchFlickerOutageChanceAtCutoff, 0.0f, 1.0f),
+			FlickerAlpha);
+
+		TorchFlickerTimeRemaining = FMath::Max(0.0f, TorchFlickerTimeRemaining - SafeDeltaSeconds);
+		if (TorchFlickerTimeRemaining <= KINDA_SMALL_NUMBER)
+		{
+			if (bTorchFlickerOn)
+			{
+				const bool bTriggerOutage = FMath::FRand() <= OutageChance;
+				bTorchFlickerOn = !bTriggerOutage;
+				TorchFlickerTimeRemaining = bTriggerOutage
+					? FMath::FRandRange(FMath::Min(OffMin, OffMax), FMath::Max(OffMin, OffMax))
+					: FMath::FRandRange(FMath::Min(GapMin, GapMax), FMath::Max(GapMin, GapMax));
+			}
+			else
+			{
+				bTorchFlickerOn = true;
+				TorchFlickerTimeRemaining = FMath::FRandRange(FMath::Min(GapMin, GapMax), FMath::Max(GapMin, GapMax));
+			}
+		}
+	}
+
+	const bool bTorchVisible = bTorchRuntimeActive && bTorchFlickerOn;
 	TInlineComponentArray<USpotLightComponent*> SpotLightComponents(this);
 	for (USpotLightComponent* SpotLightComponent : SpotLightComponents)
 	{
@@ -984,13 +1081,31 @@ void ADroneCompanion::UpdateSpotlightVisuals(float DeltaSeconds)
 			continue;
 		}
 
-		SpotLightComponent->SetVisibility(bTorchRuntimeActive, true);
-		if (!bTorchRuntimeActive)
+		TWeakObjectPtr<USpotLightComponent> SpotLightKey(SpotLightComponent);
+		float* ExistingBaseIntensity = TorchSpotlightBaseIntensityByComponent.Find(SpotLightKey);
+		if (!ExistingBaseIntensity)
+		{
+			TorchSpotlightBaseIntensityByComponent.Add(SpotLightKey, SpotLightComponent->Intensity);
+			ExistingBaseIntensity = TorchSpotlightBaseIntensityByComponent.Find(SpotLightKey);
+		}
+		const float BaseIntensity = ExistingBaseIntensity ? FMath::Max(0.0f, *ExistingBaseIntensity) : FMath::Max(0.0f, SpotLightComponent->Intensity);
+		const float CriticalLowBrightnessAlpha = FMath::Clamp(TorchLowBatteryBrightnessAlpha, 0.0f, 1.0f);
+		const float TargetIntensity = bTorchInLowBatteryRedMode
+			? BaseIntensity * CriticalLowBrightnessAlpha
+			: BaseIntensity;
+		SpotLightComponent->SetIntensity(TargetIntensity);
+
+		SpotLightComponent->SetVisibility(bTorchVisible, true);
+		if (!bTorchVisible)
 		{
 			continue;
 		}
 
-		if (bForceTorchSpotlightsWhite)
+		if (bTorchInLowBatteryRedMode)
+		{
+			SpotLightComponent->SetLightColor(TorchLowBatteryColor);
+		}
+		else if (bForceTorchSpotlightsWhite)
 		{
 			SpotLightComponent->SetLightColor(TorchSpotlightColor);
 		}
@@ -1101,9 +1216,30 @@ void ADroneCompanion::UpdateStatusLight(float DeltaSeconds)
 	else
 	{
 		FlatBatteryPulseTime = 0.0f;
-		FinalIntensity = bManuallyPoweredOff
-			? 0.0f
-			: (BaseIntensity * FlickerMultiplier);
+		if (bManuallyPoweredOff)
+		{
+			if (bUseManualOffHeartbeat)
+			{
+				ManualOffHeartbeatTime += SafeDeltaSeconds;
+				const float HeartbeatWave = 0.5f + 0.5f * FMath::Sin(
+					ManualOffHeartbeatTime * FMath::Max(0.01f, ManualOffHeartbeatFrequencyHz) * 2.0f * PI);
+				const float HeartbeatMinAlpha = FMath::Clamp(ManualOffHeartbeatMinBrightnessAlpha, 0.0f, 1.0f);
+				const float HeartbeatMaxAlpha = FMath::Max(
+					HeartbeatMinAlpha,
+					FMath::Clamp(ManualOffHeartbeatMaxBrightnessAlpha, 0.0f, 1.0f));
+				const float HeartbeatAlpha = FMath::Lerp(HeartbeatMinAlpha, HeartbeatMaxAlpha, HeartbeatWave);
+				FinalIntensity = MaxIntensity * HeartbeatAlpha;
+			}
+			else
+			{
+				FinalIntensity = 0.0f;
+			}
+		}
+		else
+		{
+			ManualOffHeartbeatTime = 0.0f;
+			FinalIntensity = BaseIntensity * FlickerMultiplier;
+		}
 	}
 
 	DroneStatusLight->SetIntensity(FinalIntensity);
@@ -1118,6 +1254,11 @@ void ADroneCompanion::UpdateStatusLight(float DeltaSeconds)
 	else if (bBatteryFlat || bInRedLightRange)
 	{
 		StatusColor = StatusLightLowBatteryColor;
+	}
+	else if (bInLowBatteryRange)
+	{
+		const float WarningBlendAlpha = FMath::Pow(FMath::Clamp(LowBatteryFlickerAlpha, 0.0f, 1.0f), 0.7f);
+		StatusColor = FLinearColor::LerpUsingHSV(StatusLightNormalColor, StatusLightLowBatteryWarningColor, WarningBlendAlpha);
 	}
 
 	DroneStatusLight->SetLightColor(StatusColor);
