@@ -1195,10 +1195,17 @@ void ADroneCompanion::ApplyStaticMeshOwnerVisibility()
 			continue;
 		}
 
+#if WITH_EDITORONLY_DATA
+		// Ignore editor visualization meshes (camera helper/frustum) so we don't force them visible.
+		if (StaticMeshComponent->IsVisualizationComponent())
+		{
+			continue;
+		}
+#endif
+
 		// Shadow-catcher mode: hide render geometry globally while preserving shadow contribution.
 		StaticMeshComponent->SetOwnerNoSee(false);
 		StaticMeshComponent->SetHiddenInGame(bHideStaticMeshesFromOwnerCamera, true);
-		StaticMeshComponent->SetVisibility(!bHideStaticMeshesFromOwnerCamera, true);
 		if (bHideStaticMeshesFromOwnerCamera)
 		{
 			StaticMeshComponent->SetCastShadow(true);
