@@ -78,6 +78,7 @@ protected:
 	bool CanEquipBackItem(const ABlackHoleBackpackActor* CandidateItem, float MaxRangeCm = -1.0f) const;
 	void UpdateMagnetRecall(float DeltaTime);
 	void StopMagnetRecall(bool bSnapAttach);
+	void ConfigureBackpackForMagnetPhysics(ABlackHoleBackpackActor* BackItem) const;
 	void DrawAttachDebug() const;
 
 protected:
@@ -157,6 +158,14 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(ClampMin="0.1", UIMin="0.1", EditCondition="bUseMagnetRecall"))
 	float MagnetAttachAngleDegrees = 8.0f;
+
+	/** Keep summoned backpack as a world physics actor while magnet-recalling/sticking (no no-collision hard-attach). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(EditCondition="bUseMagnetRecall"))
+	bool bMagnetRecallKeepsPhysicsActor = true;
+
+	/** Max speed used when steering a physics backpack toward the magnet target. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(ClampMin="100.0", UIMin="100.0", EditCondition="bUseMagnetRecall && bMagnetRecallKeepsPhysicsActor"))
+	float MagnetRecallMaxSpeed = 2500.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Debug")
 	bool bShowAttachDebug = false;
