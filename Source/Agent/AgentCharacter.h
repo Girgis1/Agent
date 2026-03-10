@@ -12,11 +12,9 @@ class AConveyorBeltStraight;
 class AConveyorPlacementPreview;
 class AMachineActor;
 class AStorageBin;
-class ATrolleyVehiclePawn;
 class UVehicleInteractionComponent;
 class UCameraComponent;
 class UDroneSwarmComponent;
-class UAnimInstance;
 class UInputAction;
 class UPhysicsHandleComponent;
 class UPrimitiveComponent;
@@ -289,17 +287,8 @@ protected:
 	void OnInteractPressed();
 	void OnInteractReleased();
 	void OnVehicleInteractPressed();
-	void ConfigureTrolleyPosePostProcess();
-	void UpdateTrolleyDriverPose(float DeltaSeconds);
-	ATrolleyVehiclePawn* GetControlledTrolleyVehicle() const;
-	FVector ResolveMeshSocketWorldLocation(FName SocketName) const;
-	FVector TransformWorldToMeshSpace(const FVector& WorldLocation) const;
-	FTransform TransformWorldToMeshSpace(const FTransform& WorldTransform) const;
-	void ResetTrolleyDriverPoseState();
 
 public:
-	virtual FVector GetVelocity() const override;
-
 	UFUNCTION(BlueprintCallable, Category="Input")
 	virtual void DoMove(float Right, float Forward);
 
@@ -531,87 +520,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
 	bool bShowPickupDebug = true;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose")
-	bool bEnableTrolleyDriverPoseSync = true;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose")
-	TSubclassOf<UAnimInstance> TrolleyPosePostProcessAnimClass;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose")
-	bool bEnableTrolleyBodyFacing = true;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose", meta=(ClampMin="0.0"))
-	float TrolleyBodyYawFollowSpeed = 10.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose")
-	float TrolleyBodyFacingYawOffset = 0.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose")
-	bool bUseHandleRotationForHandTargets = true;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose")
-	bool bEnableTrolleyHandIK = false;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose")
-	FRotator TrolleyLeftHandTargetRotationOffset = FRotator::ZeroRotator;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose")
-	FRotator TrolleyRightHandTargetRotationOffset = FRotator::ZeroRotator;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose")
-	bool bSmoothTrolleyRigTargets = true;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose", meta=(ClampMin="0.0"))
-	float TrolleyRigTargetLocationSmoothingSpeed = 22.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose", meta=(ClampMin="0.0"))
-	float TrolleyRigTargetRotationSmoothingSpeed = 20.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose", meta=(ClampMin="0.0"))
-	float TrolleyPoseBlendInSpeed = 9.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose", meta=(ClampMin="0.0"))
-	float TrolleyPoseBlendOutSpeed = 11.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose", meta=(ClampMin="0.0"))
-	float TrolleyHandIKBlendSpeed = 12.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose", meta=(ClampMin="0.0"))
-	float TrolleyLocomotionBlendSpeed = 8.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose", meta=(ClampMin="0.0"))
-	float TrolleyLeanBlendSpeed = 8.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose", meta=(ClampMin="0.0"))
-	float TrolleyMaxLeanDegrees = 14.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose", meta=(ClampMin="1.0"))
-	float TrolleyAccelerationForMaxLean = 1600.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose", meta=(ClampMin="0.0"))
-	float TrolleyGripBreakDistance = 48.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose", meta=(ClampMin="0.0"))
-	float TrolleyGripRegrabDistance = 24.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose", meta=(ClampMin="0.0"))
-	float TrolleyGripBreakAngularSpeedDeg = 240.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose", meta=(ClampMin="0.0"))
-	float TrolleyGripRegrabDelay = 0.25f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose", meta=(ClampMin="1.0"))
-	float TrolleySpeedForFullStrain = 700.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose")
-	FName TrolleyLeftHandSocketName = TEXT("hand_l");
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose")
-	FName TrolleyRightHandSocketName = TEXT("hand_r");
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Pose")
-	bool bDrawTrolleyPoseDebug = false;
-
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<ADroneCompanion> DroneCompanion = nullptr;
@@ -678,90 +586,6 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Placement", meta=(AllowPrivateAccess="true"))
 	bool bConveyorPlacementValid = false;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	bool bTrolleyPoseActive = false;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	bool bTrolleyGripBroken = false;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	float TrolleyPoseBlendAlpha = 0.0f;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	float TrolleyLeftHandIKAlpha = 0.0f;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	float TrolleyRightHandIKAlpha = 0.0f;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	FVector TrolleyHandleLeftWorld = FVector::ZeroVector;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	FVector TrolleyHandleRightWorld = FVector::ZeroVector;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	FVector TrolleyChestTargetWorld = FVector::ZeroVector;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	FTransform TrolleyHandleLeftWorldTransform = FTransform::Identity;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	FTransform TrolleyHandleRightWorldTransform = FTransform::Identity;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	FTransform TrolleyChestTargetWorldTransform = FTransform::Identity;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	FVector TrolleyHandleLeftMeshSpace = FVector::ZeroVector;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	FVector TrolleyHandleRightMeshSpace = FVector::ZeroVector;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	FVector TrolleyChestTargetMeshSpace = FVector::ZeroVector;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	FTransform TrolleyHandleLeftMeshTransform = FTransform::Identity;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	FTransform TrolleyHandleRightMeshTransform = FTransform::Identity;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	FTransform TrolleyChestTargetMeshTransform = FTransform::Identity;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	FRotator TrolleyDesiredBodyFacing = FRotator::ZeroRotator;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	float TrolleyForwardSpeedLocal = 0.0f;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	float TrolleyRightSpeedLocal = 0.0f;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	float TrolleySpeedNormalized = 0.0f;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	float TrolleyStrainAlpha = 0.0f;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	float TrolleyForwardBlend = 0.0f;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	float TrolleyRightBlend = 0.0f;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	float TrolleyLeanPitchDeg = 0.0f;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	float TrolleyLeanRollDeg = 0.0f;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	float TrolleyForwardInput = 0.0f;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Pose", meta=(AllowPrivateAccess="true"))
-	float TrolleyRightInput = 0.0f;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Placement", meta=(AllowPrivateAccess="true"))
 	EAgentFactoryPlacementType CurrentFactoryPlacementType = EAgentFactoryPlacementType::Conveyor;
@@ -834,92 +658,8 @@ protected:
 	bool bDroneThrottleUpHeld = false;
 	bool bDroneThrottleDownHeld = false;
 	bool bInteractKeyDrivingDroneThrottle = false;
-	float TrolleyGripRegrabCooldownRemaining = 0.0f;
-	float TrolleyPrevForwardSpeedLocal = 0.0f;
-	float TrolleyPrevRightSpeedLocal = 0.0f;
 
 public:
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	bool IsTrolleyPoseActive() const { return bTrolleyPoseActive; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	bool IsTrolleyGripBroken() const { return bTrolleyGripBroken; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	float GetTrolleyPoseBlendAlpha() const { return TrolleyPoseBlendAlpha; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	float GetTrolleyLeftHandIKAlpha() const { return TrolleyLeftHandIKAlpha; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	float GetTrolleyRightHandIKAlpha() const { return TrolleyRightHandIKAlpha; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	FVector GetTrolleyHandleLeftWorld() const { return TrolleyHandleLeftWorld; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	FVector GetTrolleyHandleRightWorld() const { return TrolleyHandleRightWorld; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	FVector GetTrolleyChestTargetWorld() const { return TrolleyChestTargetWorld; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	FVector GetTrolleyHandleLeftMeshSpace() const { return TrolleyHandleLeftMeshSpace; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	FVector GetTrolleyHandleRightMeshSpace() const { return TrolleyHandleRightMeshSpace; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	FVector GetTrolleyChestTargetMeshSpace() const { return TrolleyChestTargetMeshSpace; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	FTransform GetTrolleyHandleLeftWorldTransform() const { return TrolleyHandleLeftWorldTransform; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	FTransform GetTrolleyHandleRightWorldTransform() const { return TrolleyHandleRightWorldTransform; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	FTransform GetTrolleyChestTargetWorldTransform() const { return TrolleyChestTargetWorldTransform; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	FTransform GetTrolleyHandleLeftMeshTransform() const { return TrolleyHandleLeftMeshTransform; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	FTransform GetTrolleyHandleRightMeshTransform() const { return TrolleyHandleRightMeshTransform; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	FTransform GetTrolleyChestTargetMeshTransform() const { return TrolleyChestTargetMeshTransform; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	float GetTrolleyForwardBlend() const { return TrolleyForwardBlend; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	float GetTrolleyRightBlend() const { return TrolleyRightBlend; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	float GetTrolleyLeanPitchDeg() const { return TrolleyLeanPitchDeg; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	float GetTrolleyLeanRollDeg() const { return TrolleyLeanRollDeg; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	float GetTrolleyStrainAlpha() const { return TrolleyStrainAlpha; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	float GetTrolleySpeedNormalized() const { return TrolleySpeedNormalized; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	float GetTrolleyForwardSpeedLocal() const { return TrolleyForwardSpeedLocal; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	float GetTrolleyRightSpeedLocal() const { return TrolleyRightSpeedLocal; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	float GetTrolleyForwardInput() const { return TrolleyForwardInput; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Pose")
-	float GetTrolleyRightInput() const { return TrolleyRightInput; }
-
 	UFUNCTION(BlueprintPure, Category="Drone|Availability")
 	bool IsPrimaryDroneAvailable() const { return bPrimaryDroneAvailable; }
 
@@ -928,9 +668,6 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category="Drone|Availability")
 	void SetPrimaryDroneAvailable(bool bNewAvailable, bool bForceFirstPersonIfUnavailable = true);
-
-	bool ShouldUseAttachedLocomotionProxy() const;
-	FVector GetAttachedLocomotionVelocityWorld() const;
 
 	FORCEINLINE USpringArmComponent* GetCameraBoom() const { return CameraBoom; }
 	FORCEINLINE UCameraComponent* GetFollowCamera() const { return FollowCamera; }

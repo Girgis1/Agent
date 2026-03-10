@@ -10,7 +10,6 @@
 #include "Factory/FactoryPlacementHelpers.h"
 #include "Machine/MachineActor.h"
 #include "Factory/StorageBin.h"
-#include "Vehicle/Actors/TrolleyVehiclePawn.h"
 #include "Vehicle/Components/VehicleInteractionComponent.h"
 #include "Camera/CameraComponent.h"
 #include "CollisionShape.h"
@@ -118,7 +117,6 @@ AAgentCharacter::AAgentCharacter(const FObjectInitializer& ObjectInitializer)
 void AAgentCharacter::BeginPlay()
 {
 	Super::BeginPlay();
-	ConfigureTrolleyPosePostProcess();
 
 	bDefaultUseControllerRotationYaw = bUseControllerRotationYaw;
 	bDefaultOrientRotationToMovement = GetCharacterMovement() ? GetCharacterMovement()->bOrientRotationToMovement : true;
@@ -175,23 +173,9 @@ void AAgentCharacter::BeginPlay()
 	}
 }
 
-void AAgentCharacter::ConfigureTrolleyPosePostProcess()
-{
-	USkeletalMeshComponent* CharacterMesh = GetMesh();
-	if (!CharacterMesh)
-	{
-		return;
-	}
-
-	// Keep trolley Control Rig/post-process completely out of the runtime pose path.
-	CharacterMesh->SetOverridePostProcessAnimBP(nullptr, true);
-	CharacterMesh->SetDisablePostProcessBlueprint(true);
-}
-
 void AAgentCharacter::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	UpdateTrolleyDriverPose(DeltaSeconds);
 	CleanupInvalidDroneCompanions();
 	DroneWorldDiscoveryTimeRemaining -= FMath::Max(0.0f, DeltaSeconds);
 	if (DroneWorldDiscoveryTimeRemaining <= 0.0f)
@@ -3784,13 +3768,8 @@ void AAgentCharacter::DoMove(float Right, float Forward)
 
 	if (VehicleInteractionComponent && VehicleInteractionComponent->ApplyVehicleMoveInput(Forward, Right))
 	{
-		TrolleyForwardInput = FMath::Clamp(Forward, -1.0f, 1.0f);
-		TrolleyRightInput = FMath::Clamp(Right, -1.0f, 1.0f);
 		return;
 	}
-
-	TrolleyForwardInput = 0.0f;
-	TrolleyRightInput = 0.0f;
 
 	if (GetController() == nullptr)
 	{
@@ -4421,7 +4400,6 @@ void AAgentCharacter::OnVehicleInteractPressed()
 	if (VehicleInteractionComponent->IsControllingVehicle())
 	{
 		VehicleInteractionComponent->TryExitCurrentVehicle();
-		ResetTrolleyDriverPoseState();
 		return;
 	}
 
@@ -4433,352 +4411,3 @@ void AAgentCharacter::OnVehicleInteractPressed()
 	VehicleInteractionComponent->TryEnterNearestVehicle();
 }
 
-ATrolleyVehiclePawn* AAgentCharacter::GetControlledTrolleyVehicle() const
-{
-	if (VehicleInteractionComponent && VehicleInteractionComponent->IsControllingVehicle())
-	{
-		if (ATrolleyVehiclePawn* ControlledVehicle = Cast<ATrolleyVehiclePawn>(VehicleInteractionComponent->GetControlledVehicle()))
-		{
-			return ControlledVehicle;
-		}
-	}
-
-	// Fallback for cases where the seat attach succeeded but interaction state desynced.
-	if (AActor* AttachedParent = GetAttachParentActor())
-	{
-		if (ATrolleyVehiclePawn* AttachedTrolley = Cast<ATrolleyVehiclePawn>(AttachedParent))
-		{
-			return AttachedTrolley;
-		}
-	}
-
-	return nullptr;
-}
-
-FVector AAgentCharacter::ResolveMeshSocketWorldLocation(FName SocketName) const
-{
-	if (const USkeletalMeshComponent* CharacterMesh = GetMesh())
-	{
-		if (CharacterMesh->DoesSocketExist(SocketName))
-		{
-			return CharacterMesh->GetSocketLocation(SocketName);
-		}
-
-		return CharacterMesh->GetComponentLocation();
-	}
-
-	return GetActorLocation();
-}
-
-FVector AAgentCharacter::TransformWorldToMeshSpace(const FVector& WorldLocation) const
-{
-	const USkeletalMeshComponent* CharacterMesh = GetMesh();
-	return CharacterMesh
-		? CharacterMesh->GetComponentTransform().InverseTransformPosition(WorldLocation)
-		: FVector::ZeroVector;
-}
-
-FTransform AAgentCharacter::TransformWorldToMeshSpace(const FTransform& WorldTransform) const
-{
-	const USkeletalMeshComponent* CharacterMesh = GetMesh();
-	if (!CharacterMesh)
-	{
-		return FTransform::Identity;
-	}
-
-	return WorldTransform.GetRelativeTransform(CharacterMesh->GetComponentTransform());
-}
-
-void AAgentCharacter::ResetTrolleyDriverPoseState()
-{
-	bTrolleyPoseActive = false;
-	bTrolleyGripBroken = false;
-	TrolleyGripRegrabCooldownRemaining = 0.0f;
-	TrolleyPoseBlendAlpha = 0.0f;
-	TrolleyLeftHandIKAlpha = 0.0f;
-	TrolleyRightHandIKAlpha = 0.0f;
-	TrolleyHandleLeftWorld = FVector::ZeroVector;
-	TrolleyHandleRightWorld = FVector::ZeroVector;
-	TrolleyChestTargetWorld = FVector::ZeroVector;
-	TrolleyHandleLeftWorldTransform = FTransform::Identity;
-	TrolleyHandleRightWorldTransform = FTransform::Identity;
-	TrolleyChestTargetWorldTransform = FTransform::Identity;
-	TrolleyHandleLeftMeshSpace = FVector::ZeroVector;
-	TrolleyHandleRightMeshSpace = FVector::ZeroVector;
-	TrolleyChestTargetMeshSpace = FVector::ZeroVector;
-	TrolleyHandleLeftMeshTransform = FTransform::Identity;
-	TrolleyHandleRightMeshTransform = FTransform::Identity;
-	TrolleyChestTargetMeshTransform = FTransform::Identity;
-	TrolleyDesiredBodyFacing = FRotator::ZeroRotator;
-	TrolleyForwardSpeedLocal = 0.0f;
-	TrolleyRightSpeedLocal = 0.0f;
-	TrolleySpeedNormalized = 0.0f;
-	TrolleyStrainAlpha = 0.0f;
-	TrolleyForwardBlend = 0.0f;
-	TrolleyRightBlend = 0.0f;
-	TrolleyLeanPitchDeg = 0.0f;
-	TrolleyLeanRollDeg = 0.0f;
-	TrolleyForwardInput = 0.0f;
-	TrolleyRightInput = 0.0f;
-	TrolleyPrevForwardSpeedLocal = 0.0f;
-	TrolleyPrevRightSpeedLocal = 0.0f;
-}
-
-bool AAgentCharacter::ShouldUseAttachedLocomotionProxy() const
-{
-	return GetControlledTrolleyVehicle() != nullptr;
-}
-
-FVector AAgentCharacter::GetAttachedLocomotionVelocityWorld() const
-{
-	if (const ATrolleyVehiclePawn* ControlledTrolley = GetControlledTrolleyVehicle())
-	{
-		FVector ProxyVelocity = ControlledTrolley->GetPhysicsBodyLinearVelocity();
-		if (const UCharacterMovementComponent* MovementComp = GetCharacterMovement())
-		{
-			// Keep horizontal speed authored by trolley, but preserve the driver's vertical velocity for air states.
-			ProxyVelocity.Z = MovementComp->Velocity.Z;
-		}
-
-		return ProxyVelocity;
-	}
-
-	return FVector::ZeroVector;
-}
-
-FVector AAgentCharacter::GetVelocity() const
-{
-	if (ShouldUseAttachedLocomotionProxy())
-	{
-		return GetAttachedLocomotionVelocityWorld();
-	}
-
-	return Super::GetVelocity();
-}
-
-void AAgentCharacter::UpdateTrolleyDriverPose(float DeltaSeconds)
-{
-	const float ClampedDelta = FMath::Max(0.0f, DeltaSeconds);
-	const float IKInterpSpeed = FMath::Max(0.0f, TrolleyHandIKBlendSpeed);
-	ATrolleyVehiclePawn* ControlledTrolley = bEnableTrolleyDriverPoseSync ? GetControlledTrolleyVehicle() : nullptr;
-
-	const bool bShouldPoseBeActive = ControlledTrolley != nullptr;
-	bTrolleyPoseActive = bShouldPoseBeActive;
-
-	const float PoseInSpeed = FMath::Max(0.0f, TrolleyPoseBlendInSpeed);
-	const float PoseOutSpeed = FMath::Max(0.0f, TrolleyPoseBlendOutSpeed);
-	const float PoseBlendSpeed = bShouldPoseBeActive ? PoseInSpeed : PoseOutSpeed;
-	const float TargetPoseAlpha = bShouldPoseBeActive ? 1.0f : 0.0f;
-	TrolleyPoseBlendAlpha = FMath::FInterpTo(TrolleyPoseBlendAlpha, TargetPoseAlpha, ClampedDelta, PoseBlendSpeed);
-
-	if (!bShouldPoseBeActive)
-	{
-		bTrolleyGripBroken = false;
-		TrolleyGripRegrabCooldownRemaining = 0.0f;
-		TrolleyLeftHandIKAlpha = FMath::FInterpTo(TrolleyLeftHandIKAlpha, 0.0f, ClampedDelta, IKInterpSpeed);
-		TrolleyRightHandIKAlpha = FMath::FInterpTo(TrolleyRightHandIKAlpha, 0.0f, ClampedDelta, IKInterpSpeed);
-		TrolleyForwardSpeedLocal = 0.0f;
-		TrolleyRightSpeedLocal = 0.0f;
-		TrolleySpeedNormalized = 0.0f;
-		TrolleyStrainAlpha = 0.0f;
-		TrolleyForwardBlend = FMath::FInterpTo(TrolleyForwardBlend, 0.0f, ClampedDelta, FMath::Max(0.0f, TrolleyLocomotionBlendSpeed));
-		TrolleyRightBlend = FMath::FInterpTo(TrolleyRightBlend, 0.0f, ClampedDelta, FMath::Max(0.0f, TrolleyLocomotionBlendSpeed));
-		TrolleyLeanPitchDeg = FMath::FInterpTo(TrolleyLeanPitchDeg, 0.0f, ClampedDelta, FMath::Max(0.0f, TrolleyLeanBlendSpeed));
-		TrolleyLeanRollDeg = FMath::FInterpTo(TrolleyLeanRollDeg, 0.0f, ClampedDelta, FMath::Max(0.0f, TrolleyLeanBlendSpeed));
-		TrolleyHandleLeftWorldTransform = FTransform::Identity;
-		TrolleyHandleRightWorldTransform = FTransform::Identity;
-		TrolleyChestTargetWorldTransform = FTransform::Identity;
-		TrolleyHandleLeftMeshSpace = FVector::ZeroVector;
-		TrolleyHandleRightMeshSpace = FVector::ZeroVector;
-		TrolleyChestTargetMeshSpace = FVector::ZeroVector;
-		TrolleyHandleLeftMeshTransform = FTransform::Identity;
-		TrolleyHandleRightMeshTransform = FTransform::Identity;
-		TrolleyChestTargetMeshTransform = FTransform::Identity;
-		TrolleyForwardInput = 0.0f;
-		TrolleyRightInput = 0.0f;
-		TrolleyPrevForwardSpeedLocal = 0.0f;
-		TrolleyPrevRightSpeedLocal = 0.0f;
-		return;
-	}
-
-	FTransform RawLeftHandleWorld = ControlledTrolley->GetHandleLeftPointTransform();
-	FTransform RawRightHandleWorld = ControlledTrolley->GetHandleRightPointTransform();
-	const FTransform RawChestWorld = ControlledTrolley->GetDriverChestTargetTransform();
-
-	if (bUseHandleRotationForHandTargets)
-	{
-		RawLeftHandleWorld.ConcatenateRotation(TrolleyLeftHandTargetRotationOffset.Quaternion());
-		RawLeftHandleWorld.NormalizeRotation();
-		RawRightHandleWorld.ConcatenateRotation(TrolleyRightHandTargetRotationOffset.Quaternion());
-		RawRightHandleWorld.NormalizeRotation();
-	}
-
-	if (bSmoothTrolleyRigTargets)
-	{
-		const float LocationSmooth = FMath::Max(0.0f, TrolleyRigTargetLocationSmoothingSpeed);
-		const float RotationSmooth = FMath::Max(0.0f, TrolleyRigTargetRotationSmoothingSpeed);
-		const FVector SmoothedLeftLocation = FMath::VInterpTo(
-			TrolleyHandleLeftWorldTransform.GetLocation(),
-			RawLeftHandleWorld.GetLocation(),
-			ClampedDelta,
-			LocationSmooth);
-		const FVector SmoothedRightLocation = FMath::VInterpTo(
-			TrolleyHandleRightWorldTransform.GetLocation(),
-			RawRightHandleWorld.GetLocation(),
-			ClampedDelta,
-			LocationSmooth);
-		const FVector SmoothedChestLocation = FMath::VInterpTo(
-			TrolleyChestTargetWorldTransform.GetLocation(),
-			RawChestWorld.GetLocation(),
-			ClampedDelta,
-			LocationSmooth);
-		const FQuat SmoothedLeftRotation = FMath::QInterpTo(
-			TrolleyHandleLeftWorldTransform.GetRotation(),
-			RawLeftHandleWorld.GetRotation(),
-			ClampedDelta,
-			RotationSmooth);
-		const FQuat SmoothedRightRotation = FMath::QInterpTo(
-			TrolleyHandleRightWorldTransform.GetRotation(),
-			RawRightHandleWorld.GetRotation(),
-			ClampedDelta,
-			RotationSmooth);
-		const FQuat SmoothedChestRotation = FMath::QInterpTo(
-			TrolleyChestTargetWorldTransform.GetRotation(),
-			RawChestWorld.GetRotation(),
-			ClampedDelta,
-			RotationSmooth);
-
-		TrolleyHandleLeftWorldTransform = FTransform(SmoothedLeftRotation, SmoothedLeftLocation, FVector::OneVector);
-		TrolleyHandleRightWorldTransform = FTransform(SmoothedRightRotation, SmoothedRightLocation, FVector::OneVector);
-		TrolleyChestTargetWorldTransform = FTransform(SmoothedChestRotation, SmoothedChestLocation, FVector::OneVector);
-	}
-	else
-	{
-		TrolleyHandleLeftWorldTransform = RawLeftHandleWorld;
-		TrolleyHandleRightWorldTransform = RawRightHandleWorld;
-		TrolleyChestTargetWorldTransform = RawChestWorld;
-	}
-
-	TrolleyHandleLeftWorld = TrolleyHandleLeftWorldTransform.GetLocation();
-	TrolleyHandleRightWorld = TrolleyHandleRightWorldTransform.GetLocation();
-	TrolleyChestTargetWorld = TrolleyChestTargetWorldTransform.GetLocation();
-
-	TrolleyHandleLeftMeshTransform = TransformWorldToMeshSpace(TrolleyHandleLeftWorldTransform);
-	TrolleyHandleRightMeshTransform = TransformWorldToMeshSpace(TrolleyHandleRightWorldTransform);
-	TrolleyChestTargetMeshTransform = TransformWorldToMeshSpace(TrolleyChestTargetWorldTransform);
-	TrolleyHandleLeftMeshSpace = TrolleyHandleLeftMeshTransform.GetLocation();
-	TrolleyHandleRightMeshSpace = TrolleyHandleRightMeshTransform.GetLocation();
-	TrolleyChestTargetMeshSpace = TrolleyChestTargetMeshTransform.GetLocation();
-
-	const FVector TrolleyLinearVelocity = ControlledTrolley->GetPhysicsBodyLinearVelocity();
-	const FVector TrolleyAngularVelocityDeg = ControlledTrolley->GetPhysicsBodyAngularVelocityDeg();
-	const FVector TrolleyForward = ControlledTrolley->GetActorForwardVector();
-	const FVector TrolleyRight = ControlledTrolley->GetActorRightVector();
-	TrolleyForwardSpeedLocal = FVector::DotProduct(TrolleyLinearVelocity, TrolleyForward);
-	TrolleyRightSpeedLocal = FVector::DotProduct(TrolleyLinearVelocity, TrolleyRight);
-	TrolleySpeedNormalized = FMath::Clamp(
-		FMath::Abs(TrolleyForwardSpeedLocal) / FMath::Max(1.0f, TrolleySpeedForFullStrain),
-		0.0f,
-		1.0f);
-	TrolleyStrainAlpha = FMath::Clamp(
-		TrolleyLinearVelocity.Size2D() / FMath::Max(1.0f, TrolleySpeedForFullStrain),
-		0.0f,
-		1.0f);
-
-	const float TargetForwardBlend = FMath::Clamp(
-		TrolleyForwardSpeedLocal / FMath::Max(1.0f, TrolleySpeedForFullStrain),
-		-1.0f,
-		1.0f);
-	const float TargetRightBlend = FMath::Clamp(
-		TrolleyRightSpeedLocal / FMath::Max(1.0f, TrolleySpeedForFullStrain),
-		-1.0f,
-		1.0f);
-	const float LocomotionBlendSpeed = FMath::Max(0.0f, TrolleyLocomotionBlendSpeed);
-	TrolleyForwardBlend = FMath::FInterpTo(TrolleyForwardBlend, TargetForwardBlend, ClampedDelta, LocomotionBlendSpeed);
-	TrolleyRightBlend = FMath::FInterpTo(TrolleyRightBlend, TargetRightBlend, ClampedDelta, LocomotionBlendSpeed);
-
-	const float SafeDelta = FMath::Max(KINDA_SMALL_NUMBER, ClampedDelta);
-	const float ForwardAccel = (TrolleyForwardSpeedLocal - TrolleyPrevForwardSpeedLocal) / SafeDelta;
-	const float RightAccel = (TrolleyRightSpeedLocal - TrolleyPrevRightSpeedLocal) / SafeDelta;
-	TrolleyPrevForwardSpeedLocal = TrolleyForwardSpeedLocal;
-	TrolleyPrevRightSpeedLocal = TrolleyRightSpeedLocal;
-
-	const float MaxLean = FMath::Max(0.0f, TrolleyMaxLeanDegrees);
-	const float LeanAccelScale = FMath::Max(1.0f, TrolleyAccelerationForMaxLean);
-	const float TargetLeanPitch = FMath::Clamp(-ForwardAccel / LeanAccelScale, -1.0f, 1.0f) * MaxLean;
-	const float TargetLeanRoll = FMath::Clamp(-RightAccel / LeanAccelScale, -1.0f, 1.0f) * MaxLean;
-	const float LeanBlendSpeed = FMath::Max(0.0f, TrolleyLeanBlendSpeed);
-	TrolleyLeanPitchDeg = FMath::FInterpTo(TrolleyLeanPitchDeg, TargetLeanPitch, ClampedDelta, LeanBlendSpeed);
-	TrolleyLeanRollDeg = FMath::FInterpTo(TrolleyLeanRollDeg, TargetLeanRoll, ClampedDelta, LeanBlendSpeed);
-
-	const FVector LeftHandWorld = ResolveMeshSocketWorldLocation(TrolleyLeftHandSocketName);
-	const FVector RightHandWorld = ResolveMeshSocketWorldLocation(TrolleyRightHandSocketName);
-	const float LeftHandDistance = FVector::Dist(LeftHandWorld, TrolleyHandleLeftWorld);
-	const float RightHandDistance = FVector::Dist(RightHandWorld, TrolleyHandleRightWorld);
-	const float MaxGripDistance = FMath::Max(LeftHandDistance, RightHandDistance);
-	const float AngularSpeedDeg = TrolleyAngularVelocityDeg.Size();
-
-	const float BreakDistance = FMath::Max(0.0f, TrolleyGripBreakDistance);
-	const float RegrabDistance = FMath::Max(0.0f, TrolleyGripRegrabDistance);
-	const float BreakAngularSpeed = FMath::Max(0.0f, TrolleyGripBreakAngularSpeedDeg);
-	const float RegrabAngularSpeed = BreakAngularSpeed * 0.65f;
-
-	if (!bTrolleyGripBroken)
-	{
-		if (MaxGripDistance > BreakDistance || AngularSpeedDeg > BreakAngularSpeed)
-		{
-			bTrolleyGripBroken = true;
-			TrolleyGripRegrabCooldownRemaining = FMath::Max(0.0f, TrolleyGripRegrabDelay);
-		}
-	}
-	else
-	{
-		TrolleyGripRegrabCooldownRemaining = FMath::Max(0.0f, TrolleyGripRegrabCooldownRemaining - ClampedDelta);
-		const bool bCanRegrab = TrolleyGripRegrabCooldownRemaining <= KINDA_SMALL_NUMBER
-			&& MaxGripDistance <= RegrabDistance
-			&& AngularSpeedDeg <= RegrabAngularSpeed;
-		if (bCanRegrab)
-		{
-			bTrolleyGripBroken = false;
-		}
-	}
-
-	const float TargetIKAlpha = (bEnableTrolleyHandIK && !bTrolleyGripBroken ? 1.0f : 0.0f) * TrolleyPoseBlendAlpha;
-	TrolleyLeftHandIKAlpha = FMath::FInterpTo(TrolleyLeftHandIKAlpha, TargetIKAlpha, ClampedDelta, IKInterpSpeed);
-	TrolleyRightHandIKAlpha = FMath::FInterpTo(TrolleyRightHandIKAlpha, TargetIKAlpha, ClampedDelta, IKInterpSpeed);
-
-	const FVector DesiredFacingVector = (TrolleyChestTargetWorld - GetActorLocation()).GetSafeNormal2D();
-	if (!DesiredFacingVector.IsNearlyZero())
-	{
-		const float DesiredYaw = DesiredFacingVector.Rotation().Yaw + TrolleyBodyFacingYawOffset;
-		TrolleyDesiredBodyFacing = FRotator(0.0f, DesiredYaw, 0.0f);
-		if (bEnableTrolleyBodyFacing)
-		{
-			const float FacingInterpSpeed = FMath::Max(0.0f, TrolleyBodyYawFollowSpeed);
-			const FRotator NewBodyRotation = FMath::RInterpTo(
-				GetActorRotation(),
-				TrolleyDesiredBodyFacing,
-				ClampedDelta,
-				FacingInterpSpeed);
-			SetActorRotation(FRotator(0.0f, NewBodyRotation.Yaw, 0.0f));
-		}
-	}
-
-	if (bDrawTrolleyPoseDebug)
-	{
-		DrawDebugSphere(GetWorld(), TrolleyHandleLeftWorld, 4.0f, 8, bTrolleyGripBroken ? FColor::Red : FColor::Green, false, 0.0f, 0, 1.5f);
-		DrawDebugSphere(GetWorld(), TrolleyHandleRightWorld, 4.0f, 8, bTrolleyGripBroken ? FColor::Red : FColor::Green, false, 0.0f, 0, 1.5f);
-		DrawDebugLine(GetWorld(), LeftHandWorld, TrolleyHandleLeftWorld, FColor::Yellow, false, 0.0f, 0, 1.0f);
-		DrawDebugLine(GetWorld(), RightHandWorld, TrolleyHandleRightWorld, FColor::Yellow, false, 0.0f, 0, 1.0f);
-		DrawDebugDirectionalArrow(
-			GetWorld(),
-			GetActorLocation() + FVector(0.0f, 0.0f, 55.0f),
-			GetActorLocation() + FVector(0.0f, 0.0f, 55.0f) + (TrolleyDesiredBodyFacing.Vector() * 70.0f),
-			22.0f,
-			FColor::Cyan,
-			false,
-			0.0f,
-			0,
-			1.5f);
-	}
-}

@@ -18,7 +18,6 @@ class AGENT_API UVehicleSeatComponent : public UActorComponent
 
 public:
 	UVehicleSeatComponent();
-	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
 	UFUNCTION(BlueprintCallable, Category="Vehicle|Seat")
 	bool TryEnter(AActor* Interactor);
@@ -68,11 +67,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Seat")
 	bool bAttachDriverToVehicle = true;
 
-	// When false, the seat sync only follows XY and keeps the driver's current world Z.
-	// Useful for grounded vehicle-driving where the driver should still respond to gravity/falling.
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Seat")
-	bool bFollowSeatVerticalAxis = true;
-
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Seat")
 	bool bKeepDriverUprightWhileSeated = true;
 
@@ -84,17 +78,6 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Seat")
 	bool bDisableDriverCollisionWhileSeated = true;
-
-	// When enabled, the seated driver follows the attach point with swept capsule moves
-	// instead of a hard attachment, so world collision still matters while driving.
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Seat|Collision")
-	bool bUseCollisionAwareDriverSync = false;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Seat|Collision", meta=(EditCondition="bUseCollisionAwareDriverSync"))
-	bool bForceExitWhenDriverBlocked = true;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Seat|Collision", meta=(EditCondition="bUseCollisionAwareDriverSync", ClampMin="0.0"))
-	float DriverBlockedExitDistance = 35.0f;
 
 	// Keeps exit seamless by default: detach exactly where the driver currently is.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Vehicle|Seat|Exit")
@@ -116,9 +99,6 @@ protected:
 private:
 	bool TryExitInternal(AActor* Interactor, bool bAllowUnsafeFallback);
 	bool FindSafeExitTransform(APawn* DriverPawn, FTransform& OutExitTransform) const;
-	void UpdateSeatedDriverTransform(float DeltaTime);
-	FTransform GetDriverSeatTransform(const APawn* DriverPawn, const APlayerController* DriverController) const;
-	void SetDriverVehicleCollisionIgnored(APawn* DriverPawn, bool bShouldIgnore) const;
 
 	UPROPERTY(Transient)
 	TWeakObjectPtr<APawn> CachedVehiclePawn;
@@ -146,7 +126,4 @@ private:
 
 	UPROPERTY(Transient)
 	bool bDriverRootUsedAbsoluteRotation = false;
-
-	UPROPERTY(Transient)
-	bool bDriverCollisionAwareSyncActive = false;
 };

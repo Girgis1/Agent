@@ -39,48 +39,6 @@ public:
 	virtual void SetVehicleMoveInput_Implementation(AActor* Interactor, float ForwardInput, float RightInput) override;
 	virtual void SetVehicleHandbrakeInput_Implementation(AActor* Interactor, bool bHandbrakeActive) override;
 
-	UFUNCTION(BlueprintPure, Category="Vehicle|Rig")
-	USceneComponent* GetDriverAttachPointComponent() const { return DriverAttachPoint; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Rig")
-	USceneComponent* GetHandleLeftPointComponent() const { return HandleLeftPoint; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Rig")
-	USceneComponent* GetHandleRightPointComponent() const { return HandleRightPoint; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Rig")
-	USceneComponent* GetDriverChestTargetComponent() const { return DriverChestTargetPoint; }
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Rig")
-	FVector GetDriverAttachPointLocation() const;
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Rig")
-	FTransform GetDriverAttachPointTransform() const;
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Rig")
-	FVector GetHandleLeftPointLocation() const;
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Rig")
-	FTransform GetHandleLeftPointTransform() const;
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Rig")
-	FVector GetHandleRightPointLocation() const;
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Rig")
-	FTransform GetHandleRightPointTransform() const;
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Rig")
-	FVector GetDriverChestTargetLocation() const;
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Rig")
-	FTransform GetDriverChestTargetTransform() const;
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Movement")
-	FVector GetPhysicsBodyLinearVelocity() const;
-
-	UFUNCTION(BlueprintPure, Category="Vehicle|Movement")
-	FVector GetPhysicsBodyAngularVelocityDeg() const;
-
 protected:
 	virtual void BeginPlay() override;
 
@@ -135,15 +93,6 @@ private:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<USceneComponent> DriverAttachPoint = nullptr;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Rig", meta=(AllowPrivateAccess="true"))
-	TObjectPtr<USceneComponent> HandleLeftPoint = nullptr;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Rig", meta=(AllowPrivateAccess="true"))
-	TObjectPtr<USceneComponent> HandleRightPoint = nullptr;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Rig", meta=(AllowPrivateAccess="true"))
-	TObjectPtr<USceneComponent> DriverChestTargetPoint = nullptr;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Vehicle|Cargo", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<UBoxComponent> CargoMassVolume = nullptr;
