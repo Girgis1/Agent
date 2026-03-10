@@ -9,6 +9,7 @@
 class AFactoryPayloadActor;
 class AActor;
 class UArrowComponent;
+class UStorageVolumeComponent;
 
 UCLASS(ClassGroup=(Machine), meta=(BlueprintSpawnableComponent))
 class UOutputVolume : public UBoxComponent
@@ -26,6 +27,12 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category="Machine|Output")
 	void SetOutputPureMaterials(bool bInOutputPureMaterials);
+
+	UFUNCTION(BlueprintCallable, Category="Machine|Output|Storage")
+	void SetAttachedStorageVolume(UStorageVolumeComponent* InStorageVolume);
+
+	UFUNCTION(BlueprintPure, Category="Machine|Output|Storage")
+	UStorageVolumeComponent* GetAttachedStorageVolume() const { return AttachedStorageVolume; }
 
 	int32 QueueResourceScaled(FName ResourceId, int32 QuantityScaled, TSubclassOf<AActor> OutputActorClassOverride);
 	int32 QueueResourceScaled(FName ResourceId, int32 QuantityScaled);
@@ -55,16 +62,22 @@ protected:
 	};
 
 	bool ResolveOutputArrow();
+	UStorageVolumeComponent* ResolveAttachedStorageVolume();
 	FVector GetSpawnLocation() const;
 	FRotator GetSpawnRotation() const;
 	TSubclassOf<AActor> ResolveSpawnClassForResource(FName ResourceId);
 	void RebuildResourceOutputClassLookup();
+	int32 TryStoreResourceInAttachedStorage(FName ResourceId, int32 QuantityScaled);
+	bool TryStoreMixedOutputInAttachedStorage(const FMixedMaterialOutputRequest& MixedRequest);
 	bool TrySpawnOnePayload();
 
 	float TimeUntilNextSpawn = 0.0f;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UArrowComponent> OutputArrow = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UStorageVolumeComponent> AttachedStorageVolume = nullptr;
 
 	UPROPERTY(Transient)
 	TMap<FName, TSubclassOf<AActor>> ResourceOutputActorClassById;
@@ -98,6 +111,16 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Output")
 	float SpawnImpulse = 150.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Output|Storage")
+	bool bRouteOutputToAttachedStorage = true;
+
+	/** If false, queued output stays buffered when attached storage is full or unavailable. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Output|Storage", meta=(EditCondition="bRouteOutputToAttachedStorage"))
+	bool bAllowWorldSpawnWhenStorageUnavailable = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Output|Storage", meta=(EditCondition="bRouteOutputToAttachedStorage"))
+	bool bAutoResolveAttachedStorage = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Output")
 	FName OutputArrowComponentName = TEXT("OutputArrow");

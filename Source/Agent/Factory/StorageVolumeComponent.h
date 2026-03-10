@@ -16,6 +16,12 @@ class UStorageVolumeComponent : public UFactoryVolumeComponentBase
 public:
 	UStorageVolumeComponent();
 
+	UFUNCTION(BlueprintCallable, Category="Factory|Storage")
+	int32 StoreResourceScaledDirect(FName ResourceId, int32 QuantityScaled, int32 ItemCount = 1);
+
+	UFUNCTION(BlueprintCallable, Category="Factory|Storage")
+	bool StoreResourcesScaledDirect(const TMap<FName, int32>& ResourceQuantitiesScaled, int32 ItemCount = 1);
+
 	UFUNCTION(BlueprintPure, Category="Factory|Storage")
 	int32 GetStoredItemCount(FName ResourceId) const;
 

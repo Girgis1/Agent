@@ -1,6 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "AgentCharacter.h"
+#include "Backpack/Actors/BlackHoleBackpackActor.h"
+#include "Backpack/Components/BackAttachmentComponent.h"
 #include "DroneCompanion.h"
 #include "DroneSwarmComponent.h"
 #include "Factory/ConveyorBeltStraight.h"
@@ -84,6 +86,7 @@ AAgentCharacter::AAgentCharacter(const FObjectInitializer& ObjectInitializer)
 
 	PickupPhysicsHandle = CreateDefaultSubobject<UPhysicsHandleComponent>(TEXT("PickupPhysicsHandle"));
 	VehicleInteractionComponent = CreateDefaultSubobject<UVehicleInteractionComponent>(TEXT("VehicleInteractionComponent"));
+	BackAttachmentComponent = CreateDefaultSubobject<UBackAttachmentComponent>(TEXT("BackAttachmentComponent"));
 	DroneSwarmComponent = CreateDefaultSubobject<UDroneSwarmComponent>(TEXT("DroneSwarmComponent"));
 
 	ThirdPersonDroneProxyMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ThirdPersonDroneProxyMesh"));
@@ -193,6 +196,7 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 	UpdateViewModeButtonHold(DeltaSeconds);
 	UpdateKeyboardMapButtonHold(DeltaSeconds);
 	UpdateControllerMapButtonHold(DeltaSeconds);
+	UpdateBackpackDeployButtonHold(DeltaSeconds);
 	UpdateHookJobButtonHold(DeltaSeconds);
 	UpdateRollModeJumpHold(DeltaSeconds);
 	UpdateDronePilotCameraLimits();
@@ -319,7 +323,8 @@ void AAgentCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	PlayerInputComponent->BindKey(EKeys::SpaceBar, IE_Released, this, &AAgentCharacter::DoJumpEnd);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Bottom, IE_Pressed, this, &AAgentCharacter::DoJumpStart);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Bottom, IE_Released, this, &AAgentCharacter::DoJumpEnd);
-	PlayerInputComponent->BindKey(EKeys::B, IE_Pressed, this, &AAgentCharacter::OnDroneControlModeTogglePressed);
+	PlayerInputComponent->BindKey(EKeys::B, IE_Pressed, this, &AAgentCharacter::OnBackpackOrDroneModePressed);
+	PlayerInputComponent->BindKey(EKeys::B, IE_Released, this, &AAgentCharacter::OnBackpackOrDroneModeReleased);
 	PlayerInputComponent->BindKey(EKeys::M, IE_Pressed, this, &AAgentCharacter::OnKeyboardMapButtonPressed);
 	PlayerInputComponent->BindKey(EKeys::M, IE_Released, this, &AAgentCharacter::OnKeyboardMapButtonReleased);
 	PlayerInputComponent->BindKey(EKeys::W, IE_Pressed, this, &AAgentCharacter::OnDronePitchForwardPressed);
@@ -353,7 +358,8 @@ void AAgentCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	PlayerInputComponent->BindKey(EKeys::Gamepad_Special_Left, IE_Pressed, this, &AAgentCharacter::OnControllerMapButtonPressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_Special_Left, IE_Released, this, &AAgentCharacter::OnControllerMapButtonReleased);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_DPad_Up, IE_Pressed, this, &AAgentCharacter::OnDroneCameraTiltUpPressed);
-	PlayerInputComponent->BindKey(EKeys::Gamepad_DPad_Down, IE_Pressed, this, &AAgentCharacter::OnDroneCameraTiltDownPressed);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_DPad_Down, IE_Pressed, this, &AAgentCharacter::OnBackpackOrDroneCameraDownPressed);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_DPad_Down, IE_Released, this, &AAgentCharacter::OnBackpackOrDroneCameraDownReleased);
 }
 
 void AAgentCharacter::Move(const FInputActionValue& Value)
@@ -3002,6 +3008,97 @@ void AAgentCharacter::UpdateHookJobButtonHold(float DeltaSeconds)
 	TryReleaseAllHookJobDrones();
 }
 
+bool AAgentCharacter::CanUseBackpackDeployInput() const
+{
+	return CanUseCharacterInteraction();
+}
+
+void AAgentCharacter::UpdateBackpackDeployButtonHold(float DeltaSeconds)
+{
+	if (!CanUseBackpackDeployInput())
+	{
+		ResetBackpackDeployButtonHoldState();
+		return;
+	}
+
+	const float HoldTime = FMath::Max(0.05f, BackpackDeployHoldTime);
+	const float SafeDelta = FMath::Max(0.0f, DeltaSeconds);
+
+	if (bBackpackKeyboardButtonHeld && !bBackpackKeyboardHoldTriggered)
+	{
+		BackpackKeyboardButtonHeldDuration += SafeDelta;
+		if (BackpackKeyboardButtonHeldDuration >= HoldTime)
+		{
+			bBackpackKeyboardHoldTriggered = true;
+			TryToggleBackpackDeployState();
+		}
+	}
+
+	if (bBackpackControllerButtonHeld && !bBackpackControllerHoldTriggered)
+	{
+		BackpackControllerButtonHeldDuration += SafeDelta;
+		if (BackpackControllerButtonHeldDuration >= HoldTime)
+		{
+			bBackpackControllerHoldTriggered = true;
+			TryToggleBackpackDeployState();
+		}
+	}
+}
+
+void AAgentCharacter::ResetBackpackDeployButtonHoldState()
+{
+	bBackpackKeyboardButtonHeld = false;
+	bBackpackKeyboardHoldTriggered = false;
+	BackpackKeyboardButtonHeldDuration = 0.0f;
+
+	bBackpackControllerButtonHeld = false;
+	bBackpackControllerHoldTriggered = false;
+	BackpackControllerButtonHeldDuration = 0.0f;
+}
+
+void AAgentCharacter::TryToggleBackpackDeployState()
+{
+	if (!BackAttachmentComponent)
+	{
+		return;
+	}
+
+	const ABlackHoleBackpackActor* EquippedBackpack = BackAttachmentComponent->GetBackItemActor();
+	if (EquippedBackpack && !EquippedBackpack->IsItemDeployed())
+	{
+		const UCharacterMovementComponent* CharacterMovementComponent = GetCharacterMovement();
+		if (CharacterMovementComponent && !CharacterMovementComponent->IsMovingOnGround())
+		{
+			return;
+		}
+	}
+
+	bool bHandledHeldBackItemEquip = false;
+	if (UPrimitiveComponent* HeldComponent = HeldPickupComponent.Get())
+	{
+		if (ABlackHoleBackpackActor* HeldBackItem = Cast<ABlackHoleBackpackActor>(HeldComponent->GetOwner()))
+		{
+			EndPickup();
+			bHandledHeldBackItemEquip = BackAttachmentComponent->EquipBackpack(HeldBackItem, true);
+		}
+	}
+
+	if (bHandledHeldBackItemEquip)
+	{
+		// Prevent duplicate toggles while either hold button remains pressed.
+		bBackpackKeyboardHoldTriggered = true;
+		bBackpackControllerHoldTriggered = true;
+		return;
+	}
+
+	if (BackAttachmentComponent->ToggleBackItemDeployment())
+	{
+		// Prevent duplicate toggles while either hold button remains pressed.
+		bBackpackKeyboardHoldTriggered = true;
+		bBackpackControllerHoldTriggered = true;
+	}
+}
+
 void AAgentCharacter::SyncDroneLiftAssistTuning() const
 {
 	if (!DroneCompanion)
@@ -4087,6 +4184,56 @@ void AAgentCharacter::OnDroneCameraTiltDownPressed()
 	}
 }
 
+void AAgentCharacter::OnBackpackOrDroneModePressed()
+{
+	if (CanUseBackpackDeployInput())
+	{
+		bBackpackKeyboardButtonHeld = true;
+		bBackpackKeyboardHoldTriggered = false;
+		BackpackKeyboardButtonHeldDuration = 0.0f;
+		return;
+	}
+
+	OnDroneControlModeTogglePressed();
+}
+
+void AAgentCharacter::OnBackpackOrDroneModeReleased()
+{
+	if (!bBackpackKeyboardButtonHeld)
+	{
+		return;
+	}
+
+	bBackpackKeyboardButtonHeld = false;
+	bBackpackKeyboardHoldTriggered = false;
+	BackpackKeyboardButtonHeldDuration = 0.0f;
+}
+
+void AAgentCharacter::OnBackpackOrDroneCameraDownPressed()
+{
+	if (CanUseBackpackDeployInput())
+	{
+		bBackpackControllerButtonHeld = true;
+		bBackpackControllerHoldTriggered = false;
+		BackpackControllerButtonHeldDuration = 0.0f;
+		return;
+	}
+
+	OnDroneCameraTiltDownPressed();
+}
+
+void AAgentCharacter::OnBackpackOrDroneCameraDownReleased()
+{
+	if (!bBackpackControllerButtonHeld)
+	{
+		return;
+	}
+
+	bBackpackControllerButtonHeld = false;
+	bBackpackControllerHoldTriggered = false;
+	BackpackControllerButtonHeldDuration = 0.0f;
+}
+
 void AAgentCharacter::OnDroneControlModeTogglePressed()
 {
 	if (bConveyorPlacementModeActive)
@@ -4264,7 +4411,10 @@ void AAgentCharacter::OnPickupOrDroneYawRightPressed()
 	{
 		if (CanUsePickupInteraction() && TryBeginPickup())
 		{
-			bKeyboardPickupHeld = true;
+			if (HeldPickupComponent.IsValid())
+			{
+				bKeyboardPickupHeld = true;
+			}
 			return;
 		}
 
@@ -4277,7 +4427,10 @@ void AAgentCharacter::OnPickupOrDroneYawRightPressed()
 
 	if (CanUsePickupInteraction() && TryBeginPickup())
 	{
-		bKeyboardPickupHeld = true;
+		if (HeldPickupComponent.IsValid())
+		{
+			bKeyboardPickupHeld = true;
+		}
 		return;
 	}
 
@@ -4311,6 +4464,32 @@ void AAgentCharacter::OnPickupOrPlacePressed()
 	{
 		if (CanUsePickupInteraction() && TryBeginPickup())
 		{
+			if (HeldPickupComponent.IsValid())
+			{
+				bControllerPickupHeld = true;
+				const bool bWasPickupRotationModeActive = bPickupRotationModeActive;
+				bPickupRotationModeActive = HeldPickupComponent.IsValid()
+					&& DroneGamepadLeftTriggerInput >= FMath::Max(0.0f, PickupRotationTriggerThreshold);
+				if (bWasPickupRotationModeActive != bPickupRotationModeActive)
+				{
+					if (bPickupRotationModeActive)
+					{
+						RebaseHeldPickupRotationToView();
+					}
+					RefreshHeldPickupConstraintMode();
+				}
+			}
+
+			return;
+		}
+
+		return;
+	}
+
+	if (CanUsePickupInteraction() && TryBeginPickup())
+	{
+		if (HeldPickupComponent.IsValid())
+		{
 			bControllerPickupHeld = true;
 			const bool bWasPickupRotationModeActive = bPickupRotationModeActive;
 			bPickupRotationModeActive = HeldPickupComponent.IsValid()
@@ -4326,22 +4505,6 @@ void AAgentCharacter::OnPickupOrPlacePressed()
 		}
 
 		return;
-	}
-
-	if (CanUsePickupInteraction() && TryBeginPickup())
-	{
-		bControllerPickupHeld = true;
-		const bool bWasPickupRotationModeActive = bPickupRotationModeActive;
-		bPickupRotationModeActive = HeldPickupComponent.IsValid()
-			&& DroneGamepadLeftTriggerInput >= FMath::Max(0.0f, PickupRotationTriggerThreshold);
-		if (bWasPickupRotationModeActive != bPickupRotationModeActive)
-		{
-			if (bPickupRotationModeActive)
-			{
-				RebaseHeldPickupRotationToView();
-			}
-			RefreshHeldPickupConstraintMode();
-		}
 	}
 }
 
