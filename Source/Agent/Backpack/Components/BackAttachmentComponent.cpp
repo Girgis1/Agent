@@ -5,6 +5,7 @@
 #include "Components/ChildActorComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -87,12 +88,13 @@ bool UBackAttachmentComponent::EquipBackpack(ABlackHoleBackpackActor* InBackpack
 
 	if (bUseMagnetLerp)
 	{
-		if (BackItemActor->IsItemDeployed())
+		BackItemActor->SetDeployedState(false);
+		BackItemActor->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+		if (bMagnetRecallKeepsPhysicsActor)
 		{
-			BackItemActor->SetDeployedState(false);
+			ConfigureBackpackForMagnetPhysics(BackItemActor);
 		}
 
-		BackItemActor->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
 		bMagnetRecallActive = true;
 		return true;
 	}
@@ -255,6 +257,14 @@ void UBackAttachmentComponent::RefreshBackItemAttachment()
 	FName AttachSocket = NAME_None;
 	if (!BackItem || !ResolveAttachTarget(AttachParent, AttachSocket) || BackItem->IsItemDeployed())
 	{
+		return;
+	}
+
+	if (bUseMagnetRecall && bMagnetRecallKeepsPhysicsActor)
+	{
+		BackItem->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+		ConfigureBackpackForMagnetPhysics(BackItem);
+		bMagnetRecallActive = true;
 		return;
 	}
 
@@ -561,6 +571,24 @@ void UBackAttachmentComponent::UpdateMagnetRecall(float DeltaTime)
 		DeltaTime,
 		FMath::Max(0.01f, MagnetRotationInterpSpeed));
 
+	if (bMagnetRecallKeepsPhysicsActor)
+	{
+		ConfigureBackpackForMagnetPhysics(BackItem);
+
+		if (UStaticMeshComponent* ItemMesh = BackItem->GetItemMesh())
+		{
+			const FVector ToTarget = TargetWorldTransform.GetLocation() - CurrentWorldTransform.GetLocation();
+			const float TargetSpeed = FMath::Min(
+				ToTarget.Size() * FMath::Max(0.01f, MagnetMoveInterpSpeed),
+				FMath::Max(100.0f, MagnetRecallMaxSpeed));
+			const FVector DesiredVelocity = ToTarget.GetSafeNormal() * TargetSpeed;
+			ItemMesh->SetPhysicsLinearVelocity(DesiredVelocity, false, NAME_None);
+		}
+
+		BackItem->SetActorRotation(NewRotation, ETeleportType::TeleportPhysics);
+		return;
+	}
+
 	BackItem->SetActorLocationAndRotation(NewLocation, NewRotation, false, nullptr, ETeleportType::TeleportPhysics);
 
 	const float DistanceToTarget = FVector::Distance(NewLocation, TargetWorldTransform.GetLocation());
@@ -586,6 +614,11 @@ void UBackAttachmentComponent::StopMagnetRecall(bool bSnapAttach)
 		return;
 	}
 
+	if (bMagnetRecallKeepsPhysicsActor)
+	{
+		return;
+	}
+
 	ABlackHoleBackpackActor* BackItem = BackItemActor.Get();
 	USceneComponent* AttachParent = nullptr;
 	FName AttachSocket = NAME_None;
@@ -595,6 +628,32 @@ void UBackAttachmentComponent::StopMagnetRecall(bool bSnapAttach)
 	}
 
 	BackItem->AttachToCarrier(AttachParent, AttachSocket, BuildAttachFineTuneTransform());
+}
+
+void UBackAttachmentComponent::ConfigureBackpackForMagnetPhysics(ABlackHoleBackpackActor* BackItem) const
+{
+	if (!BackItem)
+	{
+		return;
+	}
+
+	UStaticMeshComponent* ItemMesh = BackItem->GetItemMesh();
+	if (!ItemMesh)
+	{
+		return;
+	}
+
+	if (!BackItem->DeployedCollisionProfileName.IsNone())
+	{
+		ItemMesh->SetCollisionProfileName(BackItem->DeployedCollisionProfileName);
+	}
+
+	ItemMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	ItemMesh->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
+	ItemMesh->SetGenerateOverlapEvents(true);
+	ItemMesh->SetSimulatePhysics(true);
+	ItemMesh->SetEnableGravity(true);
+	ItemMesh->WakeAllRigidBodies();
 }
 
 void UBackAttachmentComponent::DrawAttachDebug() const
