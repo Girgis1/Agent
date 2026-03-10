@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "Material/AgentResourceTypes.h"
 #include "MachineComponent.generated.h"
 
 class UInputVolume;
@@ -46,6 +47,7 @@ public:
 	bool AddInputResourcesScaledAtomic(const TMap<FName, int32>& ResourceQuantitiesScaled);
 	bool AddInputActorContentsScaledAtomic(AActor* SourceActor, const TMap<FName, int32>& ResourceQuantitiesScaled);
 	bool IsItemClassReferencedByAnyRecipe(const UClass* ItemActorClass) const;
+	bool ConsumeStoredResourcesScaledAtomic(const TMap<FName, int32>& ResourceQuantitiesScaled);
 
 	UFUNCTION(BlueprintCallable, Category="Machine")
 	int32 AddInputResourceUnits(FName ResourceId, int32 QuantityUnits);
@@ -58,6 +60,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category="Machine")
 	float GetStoredMassKg() const;
+
+	UFUNCTION(BlueprintPure, Category="Machine")
+	void GetStoredResourceSnapshot(TArray<FResourceStorageEntry>& OutEntries) const;
 
 	UFUNCTION(BlueprintPure, Category="Machine")
 	int32 GetStoredItemCount(TSubclassOf<AActor> ItemActorClass) const;
@@ -112,6 +117,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine")
 	FName MachineTag = TEXT("Machine");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Output")
+	bool bOutputPureMaterials = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Mass")
 	bool bApplyStoredMassToOwner = false;

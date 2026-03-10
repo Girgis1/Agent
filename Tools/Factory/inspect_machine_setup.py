@@ -31,6 +31,18 @@ def _obj_path(obj) -> str:
         return str(obj)
 
 
+def _resolved_material_id(material):
+    if not material:
+        return None
+    for fn in ("get_resolved_material_id", "get_resolved_resource_id"):
+        try:
+            resolver = getattr(material, fn)
+            return resolver()
+        except Exception:
+            pass
+    return None
+
+
 def _dump_recipe(recipe):
     if not recipe:
         _warn("  Recipe: None")
@@ -52,11 +64,10 @@ def _dump_recipe(recipe):
             qty_units = _prop(entry, ["quantity_units", "quantityUnits", "QuantityUnits"])
             rid = None
             if resource:
-                try:
-                    rid = resource.get_resolved_resource_id()
-                except Exception:
-                    rid = "<no get_resolved_resource_id>"
-            _log(f"      [{idx}] Resource={_obj_path(resource)} ResourceId={rid} QuantityUnits={qty_units}")
+                rid = _resolved_material_id(resource)
+                if rid is None:
+                    rid = "<no get_resolved_material_id>"
+            _log(f"      [{idx}] Resource={_obj_path(resource)} MaterialId={rid} QuantityUnits={qty_units}")
 
     dump_entries("Inputs", inputs)
     dump_entries("Outputs", outputs)
@@ -125,12 +136,12 @@ def _dump_machine_blueprint(bp_path: str):
         _log(f"    MachineTag={machine_tag} CapacityUnits={capacity_units}")
         _log(f"    UseWhitelist={b_whitelist} WhitelistCount={len(whitelist)}")
         for i, item in enumerate(whitelist):
-            rid = item.get_resolved_resource_id() if item else None
-            _log(f"      whitelist[{i}] {_obj_path(item)} ResourceId={rid}")
+            rid = _resolved_material_id(item)
+            _log(f"      whitelist[{i}] {_obj_path(item)} MaterialId={rid}")
         _log(f"    UseBlacklist={b_blacklist} BlacklistCount={len(blacklist)}")
         for i, item in enumerate(blacklist):
-            rid = item.get_resolved_resource_id() if item else None
-            _log(f"      blacklist[{i}] {_obj_path(item)} ResourceId={rid}")
+            rid = _resolved_material_id(item)
+            _log(f"      blacklist[{i}] {_obj_path(item)} MaterialId={rid}")
         _log(f"    RecipesCount={len(recipes)}")
         for i, recipe in enumerate(recipes):
             _log(f"      recipes[{i}] {_obj_path(recipe)}")

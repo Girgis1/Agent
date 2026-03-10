@@ -7,6 +7,7 @@
 #include "Factory/FactoryPayloadActor.h"
 #include "Material/MaterialComponent.h"
 #include "Material/MaterialDefinitionAsset.h"
+#include "Material/MixedMaterialActor.h"
 #include "Material/AgentResourceTypes.h"
 #include "UObject/UObjectIterator.h"
 
@@ -49,7 +50,7 @@ void UOutputVolume::TickComponent(float DeltaTime, ELevelTick TickType, FActorCo
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	if (!bEnabled || !bAutoOutput || PendingOutputScaled.Num() == 0)
+	if (!bEnabled || !bAutoOutput || (PendingOutputScaled.Num() == 0 && PendingMixedMaterialOutputs.Num() == 0))
 	{
 		return;
 	}
@@ -69,6 +70,17 @@ void UOutputVolume::TickComponent(float DeltaTime, ELevelTick TickType, FActorCo
 void UOutputVolume::SetOutputArrow(UArrowComponent* InOutputArrow)
 {
 	OutputArrow = InOutputArrow;
+}
+
+void UOutputVolume::SetOutputPureMaterials(bool bInOutputPureMaterials)
+{
+	if (bOutputPureMaterials == bInOutputPureMaterials)
+	{
+		return;
+	}
+
+	bOutputPureMaterials = bInOutputPureMaterials;
+	RebuildResourceOutputClassLookup();
 }
 
 int32 UOutputVolume::QueueResourceScaled(FName ResourceId, int32 QuantityScaled, TSubclassOf<AActor> OutputActorClassOverride)
@@ -91,6 +103,42 @@ int32 UOutputVolume::QueueResourceScaled(FName ResourceId, int32 QuantityScaled,
 int32 UOutputVolume::QueueResourceScaled(FName ResourceId, int32 QuantityScaled)
 {
 	return QueueResourceScaled(ResourceId, QuantityScaled, nullptr);
+}
+
+bool UOutputVolume::QueueMixedMaterialScaled(
+	const TMap<FName, int32>& CompositionScaled,
+	TSubclassOf<AActor> OutputActorClassOverride,
+	float MinUnitsForScale,
+	float MaxUnitsForScale,
+	float MinVisualScale,
+	float MaxVisualScale)
+{
+	TMap<FName, int32> SanitizedCompositionScaled;
+	for (const TPair<FName, int32>& Pair : CompositionScaled)
+	{
+		const FName ResourceId = Pair.Key;
+		const int32 QuantityScaled = FMath::Max(0, Pair.Value);
+		if (ResourceId.IsNone() || QuantityScaled <= 0)
+		{
+			continue;
+		}
+
+		SanitizedCompositionScaled.FindOrAdd(ResourceId) += QuantityScaled;
+	}
+
+	if (SanitizedCompositionScaled.Num() == 0)
+	{
+		return false;
+	}
+
+	FMixedMaterialOutputRequest& Request = PendingMixedMaterialOutputs.Emplace_GetRef();
+	Request.CompositionScaled = MoveTemp(SanitizedCompositionScaled);
+	Request.OutputActorClassOverride = OutputActorClassOverride;
+	Request.MinUnitsForScale = FMath::Max(0.01f, MinUnitsForScale);
+	Request.MaxUnitsForScale = FMath::Max(Request.MinUnitsForScale, MaxUnitsForScale);
+	Request.MinVisualScale = FMath::Max(0.05f, MinVisualScale);
+	Request.MaxVisualScale = FMath::Max(Request.MinVisualScale, MaxVisualScale);
+	return true;
 }
 
 void UOutputVolume::QueueResourceUnits(FName ResourceId, int32 QuantityUnits)
@@ -181,12 +229,12 @@ TSubclassOf<AActor> UOutputVolume::ResolveSpawnClassForResource(FName ResourceId
 		for (TObjectIterator<UMaterialDefinitionAsset> It; It; ++It)
 		{
 			const UMaterialDefinitionAsset* ResourceDefinition = *It;
-			if (!ResourceDefinition || ResourceDefinition->GetResolvedResourceId() != ResourceId)
+			if (!ResourceDefinition || ResourceDefinition->GetResolvedMaterialId() != ResourceId)
 			{
 				continue;
 			}
 
-			if (const TSubclassOf<AActor> ResourceOutputClass = ResourceDefinition->ResolveOutputActorClass())
+			if (const TSubclassOf<AActor> ResourceOutputClass = ResourceDefinition->ResolveOutputActorClass(bOutputPureMaterials ? EMaterialOutputForm::Pure : EMaterialOutputForm::Raw))
 			{
 				ResourceOutputActorClassById.Add(ResourceId, ResourceOutputClass);
 				return ResourceOutputClass;
@@ -211,13 +259,13 @@ void UOutputVolume::RebuildResourceOutputClassLookup()
 			continue;
 		}
 
-		const FName ResourceId = ResourceDefinition->GetResolvedResourceId();
+		const FName ResourceId = ResourceDefinition->GetResolvedMaterialId();
 		if (ResourceId.IsNone())
 		{
 			continue;
 		}
 
-		if (const TSubclassOf<AActor> ResourceOutputClass = ResourceDefinition->ResolveOutputActorClass())
+		if (const TSubclassOf<AActor> ResourceOutputClass = ResourceDefinition->ResolveOutputActorClass(bOutputPureMaterials ? EMaterialOutputForm::Pure : EMaterialOutputForm::Raw))
 		{
 			ResourceOutputActorClassById.Add(ResourceId, ResourceOutputClass);
 		}
@@ -227,12 +275,93 @@ void UOutputVolume::RebuildResourceOutputClassLookup()
 bool UOutputVolume::TrySpawnOnePayload()
 {
 	UWorld* World = GetWorld();
-	if (!World || PendingOutputScaled.Num() == 0)
+	if (!World || (PendingOutputScaled.Num() == 0 && PendingMixedMaterialOutputs.Num() == 0))
 	{
 		return false;
 	}
 
 	ResolveOutputArrow();
+
+	if (PendingMixedMaterialOutputs.Num() > 0)
+	{
+		const FMixedMaterialOutputRequest& MixedRequest = PendingMixedMaterialOutputs[0];
+		TSubclassOf<AActor> SpawnClassType = MixedRequest.OutputActorClassOverride.Get()
+			? MixedRequest.OutputActorClassOverride
+			: TSubclassOf<AActor>(AMixedMaterialActor::StaticClass());
+		UClass* SpawnClass = SpawnClassType.Get() ? SpawnClassType.Get() : AMixedMaterialActor::StaticClass();
+
+		FActorSpawnParameters SpawnParameters;
+		SpawnParameters.Owner = GetOwner();
+		SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+		AActor* SpawnedActor = World->SpawnActor<AActor>(
+			SpawnClass,
+			GetSpawnLocation(),
+			GetSpawnRotation(),
+			SpawnParameters);
+
+		if (!SpawnedActor)
+		{
+			return false;
+		}
+
+		bool bConfiguredMixedMaterial = false;
+		if (AMixedMaterialActor* MixedMaterialActor = Cast<AMixedMaterialActor>(SpawnedActor))
+		{
+			bConfiguredMixedMaterial = MixedMaterialActor->ConfigureMixedMaterialPayload(
+				MixedRequest.CompositionScaled,
+				MixedRequest.MinUnitsForScale,
+				MixedRequest.MaxUnitsForScale,
+				MixedRequest.MinVisualScale,
+				MixedRequest.MaxVisualScale);
+		}
+
+		if (!bConfiguredMixedMaterial)
+		{
+			if (UMaterialComponent* MaterialComponent = SpawnedActor->FindComponentByClass<UMaterialComponent>())
+			{
+				bConfiguredMixedMaterial = MaterialComponent->ConfigureResourcesById(MixedRequest.CompositionScaled);
+			}
+		}
+
+		if (!bConfiguredMixedMaterial)
+		{
+			SpawnedActor->Destroy();
+
+			AMixedMaterialActor* FallbackMixedMaterialActor = World->SpawnActor<AMixedMaterialActor>(
+				AMixedMaterialActor::StaticClass(),
+				GetSpawnLocation(),
+				GetSpawnRotation(),
+				SpawnParameters);
+
+			if (!FallbackMixedMaterialActor)
+			{
+				return false;
+			}
+
+			bConfiguredMixedMaterial = FallbackMixedMaterialActor->ConfigureMixedMaterialPayload(
+				MixedRequest.CompositionScaled,
+				MixedRequest.MinUnitsForScale,
+				MixedRequest.MaxUnitsForScale,
+				MixedRequest.MinVisualScale,
+				MixedRequest.MaxVisualScale);
+			SpawnedActor = FallbackMixedMaterialActor;
+		}
+
+		if (!bConfiguredMixedMaterial)
+		{
+			SpawnedActor->Destroy();
+			return false;
+		}
+
+		if (UPrimitiveComponent* PayloadPrimitive = Cast<UPrimitiveComponent>(SpawnedActor->GetRootComponent()))
+		{
+			PayloadPrimitive->AddImpulse(GetSpawnRotation().Vector() * FMath::Max(0.0f, SpawnImpulse), NAME_None, true);
+		}
+
+		PendingMixedMaterialOutputs.RemoveAt(0);
+		return true;
+	}
 
 	TArray<FName> ResourceIds;
 	PendingOutputScaled.GetKeys(ResourceIds);

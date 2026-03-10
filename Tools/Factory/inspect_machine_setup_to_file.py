@@ -27,6 +27,18 @@ def to_name(value):
     return str(value)
 
 
+def resolved_material_id(material):
+    if not material:
+        return ""
+    for fn in ("get_resolved_material_id", "get_resolved_resource_id"):
+        try:
+            resolver = getattr(material, fn)
+            return to_name(resolver())
+        except Exception:
+            pass
+    return ""
+
+
 def dump_recipe(recipe):
     if not recipe:
         return None
@@ -43,32 +55,22 @@ def dump_recipe(recipe):
 
     for entry in prop(recipe, ["inputs", "Inputs"], []) or []:
         resource = prop(entry, ["resource", "Resource"])
-        resource_id = ""
-        if resource:
-            try:
-                resource_id = to_name(resource.get_resolved_resource_id())
-            except Exception:
-                resource_id = ""
+        material_id = resolved_material_id(resource)
         result["inputs"].append(
             {
                 "resource": obj_path(resource),
-                "resource_id": resource_id,
+                "material_id": material_id,
                 "quantity_units": prop(entry, ["quantity_units", "QuantityUnits"], 0),
             }
         )
 
     for entry in prop(recipe, ["outputs", "Outputs"], []) or []:
         resource = prop(entry, ["resource", "Resource"])
-        resource_id = ""
-        if resource:
-            try:
-                resource_id = to_name(resource.get_resolved_resource_id())
-            except Exception:
-                resource_id = ""
+        material_id = resolved_material_id(resource)
         result["outputs"].append(
             {
                 "resource": obj_path(resource),
-                "resource_id": resource_id,
+                "material_id": material_id,
                 "quantity_units": prop(entry, ["quantity_units", "QuantityUnits"], 0),
             }
         )
@@ -136,23 +138,15 @@ def dump_machine_blueprint(bp_path):
 
         whitelist = prop(machine_component, ["whitelist_resources", "WhitelistResources"], []) or []
         for item in whitelist:
-            rid = ""
-            if item:
-                try:
-                    rid = to_name(item.get_resolved_resource_id())
-                except Exception:
-                    pass
-            result["machine_component"]["whitelist_resources"].append({"path": obj_path(item), "resource_id": rid})
+            result["machine_component"]["whitelist_resources"].append(
+                {"path": obj_path(item), "material_id": resolved_material_id(item)}
+            )
 
         blacklist = prop(machine_component, ["blacklist_resources", "BlacklistResources"], []) or []
         for item in blacklist:
-            rid = ""
-            if item:
-                try:
-                    rid = to_name(item.get_resolved_resource_id())
-                except Exception:
-                    pass
-            result["machine_component"]["blacklist_resources"].append({"path": obj_path(item), "resource_id": rid})
+            result["machine_component"]["blacklist_resources"].append(
+                {"path": obj_path(item), "material_id": resolved_material_id(item)}
+            )
     else:
         result["machine_component"] = None
 
@@ -215,16 +209,11 @@ def dump_resource_actor(bp_path):
     rows = []
     for entry in materials:
         res = prop(entry, ["resource", "Resource"])
-        rid = ""
-        if res:
-            try:
-                rid = to_name(res.get_resolved_resource_id())
-            except Exception:
-                pass
+        material_id = resolved_material_id(res)
         rows.append(
             {
                 "resource_path": obj_path(res),
-                "resource_id": rid,
+                "material_id": material_id,
                 "use_range": prop(entry, ["b_use_range", "bUseRange"]),
                 "units": prop(entry, ["units", "Units"]),
                 "min_units": prop(entry, ["min_units", "MinUnits"]),

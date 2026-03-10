@@ -60,6 +60,9 @@ public:
 	bool BuildResolvedResourceQuantitiesScaled(UPrimitiveComponent* SourcePrimitive, TMap<FName, int32>& OutQuantitiesScaled);
 
 	UFUNCTION(BlueprintCallable, Category="Factory|Materials")
+	bool ConfigureResourcesById(const TMap<FName, int32>& ResourceQuantitiesScaled);
+
+	UFUNCTION(BlueprintCallable, Category="Factory|Materials")
 	bool ConfigureSingleResourceById(FName ResourceId, int32 QuantityScaled);
 
 	UFUNCTION(BlueprintCallable, Category="Factory|Materials")

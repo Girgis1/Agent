@@ -2,20 +2,18 @@
 
 #include "Material/MaterialDefinitionAsset.h"
 #include "GameFramework/Actor.h"
+#include "Materials/MaterialInterface.h"
 
-FName UMaterialDefinitionAsset::GetResolvedResourceId() const
+namespace
 {
-	return ResourceId.IsNone() ? GetFName() : ResourceId;
-}
-
-TSubclassOf<AActor> UMaterialDefinitionAsset::ResolveOutputActorClass() const
+TSubclassOf<AActor> ResolveSoftOutputActorClass(const TSoftClassPtr<AActor>& SoftClass)
 {
-	if (OutputActorClass.IsNull())
+	if (SoftClass.IsNull())
 	{
 		return nullptr;
 	}
 
-	UClass* LoadedClass = OutputActorClass.LoadSynchronous();
+	UClass* LoadedClass = SoftClass.LoadSynchronous();
 	if (!LoadedClass || !LoadedClass->IsChildOf(AActor::StaticClass()))
 	{
 		return nullptr;
@@ -23,9 +21,83 @@ TSubclassOf<AActor> UMaterialDefinitionAsset::ResolveOutputActorClass() const
 
 	return LoadedClass;
 }
+}
+
+FName UMaterialDefinitionAsset::GetResolvedMaterialId() const
+{
+	if (!MaterialId.IsNone())
+	{
+		return MaterialId;
+	}
+
+	return GetFName();
+}
+
+TSubclassOf<AActor> UMaterialDefinitionAsset::ResolveOutputActorClass(EMaterialOutputForm OutputForm) const
+{
+	if (OutputForm == EMaterialOutputForm::Pure)
+	{
+		if (const TSubclassOf<AActor> PureClass = ResolveSoftOutputActorClass(PureOutputActorClass))
+		{
+			return PureClass;
+		}
+
+		if (const TSubclassOf<AActor> RawClass = ResolveSoftOutputActorClass(RawOutputActorClass))
+		{
+			return RawClass;
+		}
+	}
+	else
+	{
+		if (const TSubclassOf<AActor> RawClass = ResolveSoftOutputActorClass(RawOutputActorClass))
+		{
+			return RawClass;
+		}
+	}
+
+	if (OutputForm == EMaterialOutputForm::Raw)
+	{
+		if (const TSubclassOf<AActor> PureFallbackClass = ResolveSoftOutputActorClass(PureOutputActorClass))
+		{
+			return PureFallbackClass;
+		}
+	}
+
+	return nullptr;
+}
+
+FName UMaterialDefinitionAsset::GetResolvedColorId() const
+{
+	if (!ColorId.IsNone())
+	{
+		return ColorId;
+	}
+
+	return GetResolvedMaterialId();
+}
+
+FLinearColor UMaterialDefinitionAsset::GetResolvedVisualColor() const
+{
+	if (!VisualColor.Equals(FLinearColor::White, KINDA_SMALL_NUMBER) || DebugColor.Equals(FLinearColor::White, KINDA_SMALL_NUMBER))
+	{
+		return VisualColor;
+	}
+
+	return DebugColor;
+}
+
+UMaterialInterface* UMaterialDefinitionAsset::ResolveVisualMaterial() const
+{
+	if (VisualMaterial.IsNull())
+	{
+		return nullptr;
+	}
+
+	return VisualMaterial.LoadSynchronous();
+}
 
 FPrimaryAssetId UMaterialDefinitionAsset::GetPrimaryAssetId() const
 {
-	return FPrimaryAssetId(TEXT("Material"), GetResolvedResourceId());
+	return FPrimaryAssetId(TEXT("Material"), GetResolvedMaterialId());
 }
 

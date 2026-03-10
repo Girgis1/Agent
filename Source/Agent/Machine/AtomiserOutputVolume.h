@@ -27,6 +27,9 @@ public:
 	void SetOutputArrow(UArrowComponent* InOutputArrow);
 
 	UFUNCTION(BlueprintCallable, Category="Machine|AtomiserOutput")
+	void SetOutputPureMaterials(bool bInOutputPureMaterials);
+
+	UFUNCTION(BlueprintCallable, Category="Machine|AtomiserOutput")
 	bool EmitOnce();
 
 	UFUNCTION(BlueprintPure, Category="Machine|AtomiserOutput")
@@ -70,6 +73,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|AtomiserOutput")
 	bool bPreferMaterialOutputActorClass = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|AtomiserOutput")
+	bool bOutputPureMaterials = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|AtomiserOutput")
 	bool bTreatMaterialOutputClassAsSelfContained = true;
