@@ -7,6 +7,7 @@
 #include "DroneChargerVolume.generated.h"
 
 class ADroneCompanion;
+class ABlackHoleBackpackActor;
 class UPrimitiveComponent;
 
 UCLASS(ClassGroup=(Machine), meta=(BlueprintSpawnableComponent))
@@ -39,9 +40,13 @@ protected:
 		int32 OtherBodyIndex);
 
 	void TrackDroneOverlap(ADroneCompanion* DroneCompanion, bool bIsEntering);
+	void TrackBackpackOverlap(ABlackHoleBackpackActor* BackpackActor, bool bIsEntering);
 
 	UPROPERTY(Transient)
 	TSet<TWeakObjectPtr<ADroneCompanion>> OverlappingDrones;
+
+	UPROPERTY(Transient)
+	TSet<TWeakObjectPtr<ABlackHoleBackpackActor>> OverlappingBackpacks;
 
 public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|DroneCharger")
@@ -49,4 +54,10 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|DroneCharger", meta=(ClampMin="0.0", UIMin="0.0"))
 	float ChargeRatePercentPerSecond = 20.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|BackpackCharger")
+	bool bChargeBackpacks = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|BackpackCharger")
+	bool bRequireBackpackDeployedForCharge = true;
 };

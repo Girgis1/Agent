@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Machine/DroneChargerVolume.h"
+#include "Backpack/Actors/BlackHoleBackpackActor.h"
 #include "Components/PrimitiveComponent.h"
 #include "DroneCompanion.h"
 
@@ -38,7 +39,16 @@ void UDroneChargerVolume::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		}
 	}
 
+	for (const TWeakObjectPtr<ABlackHoleBackpackActor>& BackpackPtr : OverlappingBackpacks)
+	{
+		if (ABlackHoleBackpackActor* BackpackActor = BackpackPtr.Get())
+		{
+			BackpackActor->SetExternalChargingFromSource(this, false);
+		}
+	}
+
 	OverlappingDrones.Reset();
+	OverlappingBackpacks.Reset();
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -46,27 +56,39 @@ void UDroneChargerVolume::TickComponent(float DeltaTime, ELevelTick TickType, FA
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	if (!bEnabled || ChargeRatePercentPerSecond <= 0.0f || OverlappingDrones.Num() == 0)
-	{
-		return;
-	}
-
+	const bool bCanChargeDrones = bEnabled && ChargeRatePercentPerSecond > 0.0f;
 	const float ChargeAmount = FMath::Max(0.0f, ChargeRatePercentPerSecond) * FMath::Max(0.0f, DeltaTime);
-	if (ChargeAmount <= KINDA_SMALL_NUMBER)
+	if (bCanChargeDrones && ChargeAmount > KINDA_SMALL_NUMBER && OverlappingDrones.Num() > 0)
 	{
-		return;
+		for (auto It = OverlappingDrones.CreateIterator(); It; ++It)
+		{
+			ADroneCompanion* DroneCompanion = It->Get();
+			if (!IsValid(DroneCompanion))
+			{
+				It.RemoveCurrent();
+				continue;
+			}
+
+			DroneCompanion->ChargeBatteryPercent(ChargeAmount);
+		}
 	}
 
-	for (auto It = OverlappingDrones.CreateIterator(); It; ++It)
+	if (OverlappingBackpacks.Num() > 0)
 	{
-		ADroneCompanion* DroneCompanion = It->Get();
-		if (!IsValid(DroneCompanion))
+		const bool bAllowBackpackCharge = bEnabled && bChargeBackpacks;
+		for (auto It = OverlappingBackpacks.CreateIterator(); It; ++It)
 		{
-			It.RemoveCurrent();
-			continue;
-		}
+			ABlackHoleBackpackActor* BackpackActor = It->Get();
+			if (!IsValid(BackpackActor))
+			{
+				It.RemoveCurrent();
+				continue;
+			}
 
-		DroneCompanion->ChargeBatteryPercent(ChargeAmount);
+			const bool bShouldChargeThisBackpack = bAllowBackpackCharge
+				&& (!bRequireBackpackDeployedForCharge || BackpackActor->IsItemDeployed());
+			BackpackActor->SetExternalChargingFromSource(this, bShouldChargeThisBackpack);
+		}
 	}
 }
 
@@ -90,6 +112,7 @@ void UDroneChargerVolume::HandleBeginOverlap(
 	}
 
 	TrackDroneOverlap(Cast<ADroneCompanion>(OtherActor), true);
+	TrackBackpackOverlap(Cast<ABlackHoleBackpackActor>(OtherActor), true);
 }
 
 void UDroneChargerVolume::HandleEndOverlap(
@@ -103,6 +126,7 @@ void UDroneChargerVolume::HandleEndOverlap(
 	(void)OtherBodyIndex;
 
 	TrackDroneOverlap(Cast<ADroneCompanion>(OtherActor), false);
+	TrackBackpackOverlap(Cast<ABlackHoleBackpackActor>(OtherActor), false);
 }
 
 void UDroneChargerVolume::TrackDroneOverlap(ADroneCompanion* DroneCompanion, bool bIsEntering)
@@ -127,5 +151,29 @@ void UDroneChargerVolume::TrackDroneOverlap(ADroneCompanion* DroneCompanion, boo
 	if (OverlappingDrones.Remove(DronePtr) > 0)
 	{
 		DroneCompanion->NotifyExitedChargerVolume();
+	}
+}
+
+void UDroneChargerVolume::TrackBackpackOverlap(ABlackHoleBackpackActor* BackpackActor, bool bIsEntering)
+{
+	if (!BackpackActor)
+	{
+		return;
+	}
+
+	const TWeakObjectPtr<ABlackHoleBackpackActor> BackpackPtr(BackpackActor);
+	if (bIsEntering)
+	{
+		OverlappingBackpacks.Add(BackpackPtr);
+		const bool bShouldChargeThisBackpack = bEnabled
+			&& bChargeBackpacks
+			&& (!bRequireBackpackDeployedForCharge || BackpackActor->IsItemDeployed());
+		BackpackActor->SetExternalChargingFromSource(this, bShouldChargeThisBackpack);
+		return;
+	}
+
+	if (OverlappingBackpacks.Remove(BackpackPtr) > 0)
+	{
+		BackpackActor->SetExternalChargingFromSource(this, false);
 	}
 }

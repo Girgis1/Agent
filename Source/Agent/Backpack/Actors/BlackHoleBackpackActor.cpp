@@ -45,7 +45,7 @@ ABlackHoleBackpackActor::ABlackHoleBackpackActor()
 	BackpackBattery->DrainRatePerSecond = 5.0f;
 	BackpackBattery->ChargeRatePerSecond = 7.5f;
 	BackpackBattery->bAutoDrainEnabled = false;
-	BackpackBattery->bAutoChargeEnabled = true;
+	BackpackBattery->bAutoChargeEnabled = false;
 
 	PortalStateLight = CreateDefaultSubobject<UPointLightComponent>(TEXT("PortalStateLight"));
 	PortalStateLight->SetupAttachment(ItemMesh);
@@ -75,7 +75,9 @@ void ABlackHoleBackpackActor::BeginPlay()
 		BackpackBattery->OnBatteryChargeChanged.AddDynamic(this, &ABlackHoleBackpackActor::HandlePortalBatteryChargeChanged);
 	}
 
-	bPortalEnabled = bStartPortalEnabled;
+	ExternalChargeSources.Reset();
+	ExternalChargeAnonymousSourceCount = 0;
+	bPortalEnabled = bForcePortalOffOnBeginPlay ? false : bStartPortalEnabled;
 	InitializeAccessoryChargeMaterialInstances();
 	RefreshPortalStateVisuals();
 
@@ -242,13 +244,55 @@ bool ABlackHoleBackpackActor::IsPortalBatteryDepleted() const
 	return BackpackBattery ? BackpackBattery->IsDepleted() : true;
 }
 
+void ABlackHoleBackpackActor::SetExternalChargingFromSource(UObject* SourceContext, bool bEnable)
+{
+	bool bChanged = false;
+	if (SourceContext)
+	{
+		const int32 PreviousNum = ExternalChargeSources.Num();
+		if (bEnable)
+		{
+			ExternalChargeSources.Add(SourceContext);
+		}
+		else
+		{
+			ExternalChargeSources.Remove(SourceContext);
+		}
+
+		bChanged = ExternalChargeSources.Num() != PreviousNum;
+	}
+	else if (bEnable)
+	{
+		++ExternalChargeAnonymousSourceCount;
+		bChanged = true;
+	}
+	else if (ExternalChargeAnonymousSourceCount > 0)
+	{
+		--ExternalChargeAnonymousSourceCount;
+		bChanged = true;
+	}
+
+	if (!bChanged)
+	{
+		return;
+	}
+
+	UpdatePortalBatteryRuntimeState();
+	RefreshAccessoryChargeMaterialState();
+}
+
+bool ABlackHoleBackpackActor::IsExternalChargingActive() const
+{
+	return bEnableChargeFromExternalSources && HasAnyValidExternalChargeSource();
+}
+
 void ABlackHoleBackpackActor::HandleDeploymentStateChanged(bool bNowDeployed)
 {
 	RefreshIntakeVolumeState();
 
 	if (bNowDeployed)
 	{
-		if (bEnablePortalWhenDeployed)
+		if (!bRequireManualEnableWhenDeployed && bEnablePortalWhenDeployed)
 		{
 			SetPortalEnabled(true);
 		}
@@ -346,8 +390,10 @@ void ABlackHoleBackpackActor::UpdatePortalBatteryRuntimeState()
 		return;
 	}
 
+	const bool bCanChargeFromExternalSources = bEnableChargeFromExternalSources && HasAnyValidExternalChargeSource();
+	const bool bShouldCharge = !bPortalEnabled && (bEnableSelfRecharge || bCanChargeFromExternalSources);
 	BackpackBattery->SetDrainEnabled(bPortalEnabled);
-	BackpackBattery->SetChargeEnabled(!bPortalEnabled);
+	BackpackBattery->SetChargeEnabled(bShouldCharge);
 }
 
 void ABlackHoleBackpackActor::HandlePortalBatteryDepleted()
@@ -395,8 +441,27 @@ bool ABlackHoleBackpackActor::IsBackpackCharging() const
 	}
 
 	return !bPortalEnabled
+		&& BackpackBattery->IsChargeEnabled()
 		&& !BackpackBattery->IsFullyCharged()
 		&& BackpackBattery->GetChargeRatePerSecond() > KINDA_SMALL_NUMBER;
+}
+
+bool ABlackHoleBackpackActor::HasAnyValidExternalChargeSource() const
+{
+	if (ExternalChargeAnonymousSourceCount > 0)
+	{
+		return true;
+	}
+
+	for (const TWeakObjectPtr<UObject>& SourcePtr : ExternalChargeSources)
+	{
+		if (SourcePtr.IsValid())
+		{
+			return true;
+		}
+	}
+
+	return false;
 }
 
 void ABlackHoleBackpackActor::RefreshAccessoryChargeMaterialState()

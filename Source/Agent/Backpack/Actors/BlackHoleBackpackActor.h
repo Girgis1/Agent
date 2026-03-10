@@ -48,6 +48,13 @@ public:
 	UFUNCTION(BlueprintPure, Category="BlackHole|Backpack|Battery")
 	bool IsPortalBatteryDepleted() const;
 
+	/** Called by charger pads/volumes to enable or disable external charging for this backpack. */
+	UFUNCTION(BlueprintCallable, Category="BlackHole|Backpack|Battery")
+	void SetExternalChargingFromSource(UObject* SourceContext, bool bEnable);
+
+	UFUNCTION(BlueprintPure, Category="BlackHole|Backpack|Battery")
+	bool IsExternalChargingActive() const;
+
 	UFUNCTION(BlueprintPure, Category="Backpack")
 	bool IsItemDeployed() const { return bIsDeployed; }
 
@@ -82,6 +89,7 @@ protected:
 	void InitializeAccessoryChargeMaterialInstances();
 	void RefreshAccessoryChargeMaterialState();
 	bool IsBackpackCharging() const;
+	bool HasAnyValidExternalChargeSource() const;
 
 	UFUNCTION()
 	void HandlePortalBatteryDepleted();
@@ -134,10 +142,18 @@ public:
 	bool bEnableIntakeWhenDeployed = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BlackHole|Backpack|Portal")
-	bool bStartPortalEnabled = true;
+	bool bStartPortalEnabled = false;
+
+	/** When enabled, backpack will always initialize with portal disabled regardless of start flags. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BlackHole|Backpack|Portal")
+	bool bForcePortalOffOnBeginPlay = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BlackHole|Backpack|Portal")
-	bool bEnablePortalWhenDeployed = true;
+	bool bEnablePortalWhenDeployed = false;
+
+	/** Manual-chaos mode: when deployed to world, backpack only turns on via explicit player toggle. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BlackHole|Backpack|Portal")
+	bool bRequireManualEnableWhenDeployed = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BlackHole|Backpack|Portal")
 	bool bDisablePortalWhenAttached = true;
@@ -185,6 +201,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BlackHole|Backpack|Charge|Material", meta=(ClampMin="0.0", UIMin="0.0"))
 	float AccessoryIdleEmissiveIntensity = 0.0f;
 
+	/** Upgrade toggle: allows portal battery to self-charge while portal is off, without needing a charge pad. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BlackHole|Backpack|Battery|Charge")
+	bool bEnableSelfRecharge = false;
+
+	/** Allows charging via external volumes/pads that call SetExternalChargingFromSource. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BlackHole|Backpack|Battery|Charge")
+	bool bEnableChargeFromExternalSources = true;
+
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Backpack")
 	bool bIsDeployed = false;
@@ -197,4 +221,10 @@ protected:
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UMaterialInstanceDynamic>> AccessoryChargeMaterialInstances;
+
+	UPROPERTY(Transient)
+	TSet<TWeakObjectPtr<UObject>> ExternalChargeSources;
+
+	UPROPERTY(Transient)
+	int32 ExternalChargeAnonymousSourceCount = 0;
 };
