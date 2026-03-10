@@ -49,6 +49,36 @@ bool UBlackHoleOutputSinkComponent::IsSinkReady() const
 	return IsValid(OutputVolume) && !LinkId.IsNone();
 }
 
+bool UBlackHoleOutputSinkComponent::QueueTeleportActor(TSubclassOf<AActor> ActorClass, const TMap<FName, int32>& ResourceQuantitiesScaled, float StoredMassKg)
+{
+	if (!ResolveOutputVolume() || !ActorClass.Get())
+	{
+		return false;
+	}
+
+	return OutputVolume->QueueTeleportActor(ActorClass, ResourceQuantitiesScaled, StoredMassKg);
+}
+
+void UBlackHoleOutputSinkComponent::SetMachineActivated(bool bInActivated)
+{
+	if (!ResolveOutputVolume())
+	{
+		return;
+	}
+
+	OutputVolume->SetTeleportMachineActivated(bInActivated);
+}
+
+bool UBlackHoleOutputSinkComponent::IsMachineActivated() const
+{
+	return IsValid(OutputVolume) ? OutputVolume->IsTeleportMachineActivated() : false;
+}
+
+bool UBlackHoleOutputSinkComponent::CanAcceptTeleportInput() const
+{
+	return IsValid(OutputVolume) ? OutputVolume->CanAcceptTeleportInput() : false;
+}
+
 void UBlackHoleOutputSinkComponent::RefreshSinkRegistration()
 {
 	UnregisterFromEndpointRegistry();
@@ -104,4 +134,3 @@ void UBlackHoleOutputSinkComponent::UnregisterFromEndpointRegistry()
 
 	bIsRegistered = false;
 }
-

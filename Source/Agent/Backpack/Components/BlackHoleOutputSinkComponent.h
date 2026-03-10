@@ -35,6 +35,18 @@ public:
 	UFUNCTION(BlueprintPure, Category="BlackHole|Sink")
 	bool IsSinkReady() const;
 
+	UFUNCTION(BlueprintCallable, Category="BlackHole|Sink|Teleport")
+	bool QueueTeleportActor(TSubclassOf<AActor> ActorClass, const TMap<FName, int32>& ResourceQuantitiesScaled, float StoredMassKg = 0.0f);
+
+	UFUNCTION(BlueprintCallable, Category="BlackHole|Sink|Teleport")
+	void SetMachineActivated(bool bInActivated);
+
+	UFUNCTION(BlueprintPure, Category="BlackHole|Sink|Teleport")
+	bool IsMachineActivated() const;
+
+	UFUNCTION(BlueprintPure, Category="BlackHole|Sink|Teleport")
+	bool CanAcceptTeleportInput() const;
+
 	UFUNCTION(BlueprintCallable, Category="BlackHole|Sink")
 	void RefreshSinkRegistration();
 

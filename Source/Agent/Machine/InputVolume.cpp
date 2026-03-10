@@ -131,6 +131,11 @@ bool UInputVolume::ResolveMachineComponent()
 		return true;
 	}
 
+	if (!bAutoResolveMachineComponent)
+	{
+		return false;
+	}
+
 	const AActor* OwnerActor = GetOwner();
 	if (!OwnerActor)
 	{

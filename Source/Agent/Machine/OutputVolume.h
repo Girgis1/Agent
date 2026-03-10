@@ -19,6 +19,13 @@ class UOutputVolume : public UBoxComponent
 public:
 	UOutputVolume();
 
+	struct FTeleportOutputRequest
+	{
+		TSubclassOf<AActor> ActorClass;
+		TMap<FName, int32> ResourceQuantitiesScaled;
+		float StoredMassKg = 0.0f;
+	};
+
 	virtual void BeginPlay() override;
 	virtual void TickComponent(float DeltaTime, enum ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
@@ -33,6 +40,18 @@ public:
 
 	UFUNCTION(BlueprintPure, Category="Machine|Output|Storage")
 	UStorageVolumeComponent* GetAttachedStorageVolume() const { return AttachedStorageVolume; }
+
+	UFUNCTION(BlueprintCallable, Category="Machine|Output|Teleport")
+	bool QueueTeleportActor(TSubclassOf<AActor> ActorClass, const TMap<FName, int32>& ResourceQuantitiesScaled, float StoredMassKg = 0.0f);
+
+	UFUNCTION(BlueprintCallable, Category="Machine|Output|Teleport")
+	void SetTeleportMachineActivated(bool bInActivated);
+
+	UFUNCTION(BlueprintPure, Category="Machine|Output|Teleport")
+	bool IsTeleportMachineActivated() const { return bTeleportMachineActivated; }
+
+	UFUNCTION(BlueprintPure, Category="Machine|Output|Teleport")
+	bool CanAcceptTeleportInput() const { return !bTeleportMachineActivated; }
 
 	int32 QueueResourceScaled(FName ResourceId, int32 QuantityScaled, TSubclassOf<AActor> OutputActorClassOverride);
 	int32 QueueResourceScaled(FName ResourceId, int32 QuantityScaled);
@@ -69,6 +88,7 @@ protected:
 	void RebuildResourceOutputClassLookup();
 	int32 TryStoreResourceInAttachedStorage(FName ResourceId, int32 QuantityScaled);
 	bool TryStoreMixedOutputInAttachedStorage(const FMixedMaterialOutputRequest& MixedRequest);
+	bool TryEmitOneTeleportItem();
 	bool TrySpawnOnePayload();
 
 	float TimeUntilNextSpawn = 0.0f;
@@ -84,6 +104,8 @@ protected:
 
 	UPROPERTY(Transient)
 	TMap<FName, TSubclassOf<AActor>> PendingOutputActorClassOverrideById;
+
+	TArray<FTeleportOutputRequest> PendingTeleportOutputs;
 
 	TArray<FMixedMaterialOutputRequest> PendingMixedMaterialOutputs;
 
@@ -121,6 +143,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Output|Storage", meta=(EditCondition="bRouteOutputToAttachedStorage"))
 	bool bAutoResolveAttachedStorage = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Output|Teleport")
+	bool bTeleportMachineActivated = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Output")
 	FName OutputArrowComponentName = TEXT("OutputArrow");

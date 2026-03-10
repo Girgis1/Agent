@@ -68,7 +68,7 @@ UMaterialDefinitionAsset* FindMaterialDefinitionById(FName ResourceId)
 	return nullptr;
 }
 
-float ResolvePrimitiveMassKgWithoutPhysicsWarning(const UPrimitiveComponent* PrimitiveComponent)
+float ResolvePrimitiveMassKgWithoutPhysicsWarningForMaterial(const UPrimitiveComponent* PrimitiveComponent)
 {
 	if (!PrimitiveComponent)
 	{
@@ -162,7 +162,7 @@ bool UMaterialComponent::HasMaterialEntries() const
 
 float UMaterialComponent::ResolveEffectiveMassKg(const UPrimitiveComponent* SourcePrimitive) const
 {
-	return ResolvePrimitiveMassKgWithoutPhysicsWarning(SourcePrimitive);
+	return ResolvePrimitiveMassKgWithoutPhysicsWarningForMaterial(SourcePrimitive);
 }
 
 void UMaterialComponent::InitializeRuntimeResourceState(UPrimitiveComponent* SourcePrimitive)
@@ -536,7 +536,7 @@ float UMaterialComponent::ResolveBaseMassKgForFormula(UPrimitiveComponent* Sourc
 
 	if (!bBaseMassResolved)
 	{
-		CachedBaseMassKg = ResolvePrimitiveMassKgWithoutPhysicsWarning(SourcePrimitive);
+		CachedBaseMassKg = ResolvePrimitiveMassKgWithoutPhysicsWarningForMaterial(SourcePrimitive);
 		bBaseMassResolved = true;
 	}
 

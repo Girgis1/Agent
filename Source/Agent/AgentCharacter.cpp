@@ -438,6 +438,11 @@ void AAgentCharacter::OnDroneTorchTogglePressed()
 
 void AAgentCharacter::OnLeftMouseButtonPressed()
 {
+	if (TryToggleHeldBackpackPortalFromPickup())
+	{
+		return;
+	}
+
 	if (TryToggleHeldDronePowerFromPickup())
 	{
 		return;
@@ -448,6 +453,11 @@ void AAgentCharacter::OnLeftMouseButtonPressed()
 
 void AAgentCharacter::OnGamepadFaceButtonLeftPressed()
 {
+	if (TryToggleHeldBackpackPortalFromPickup())
+	{
+		return;
+	}
+
 	if (TryToggleHeldDronePowerFromPickup())
 	{
 		return;
@@ -2823,6 +2833,42 @@ ADroneCompanion* AAgentCharacter::GetHeldDroneFromPickup() const
 	}
 
 	return Cast<ADroneCompanion>(HeldComponent->GetOwner());
+}
+
+bool AAgentCharacter::TryToggleHeldBackpackPortalFromPickup()
+{
+	UPrimitiveComponent* HeldComponent = HeldPickupComponent.Get();
+	if (!HeldComponent && PickupPhysicsHandle)
+	{
+		HeldComponent = PickupPhysicsHandle->GetGrabbedComponent();
+	}
+
+	if (!HeldComponent)
+	{
+		return false;
+	}
+
+	ABlackHoleBackpackActor* HeldBackpack = Cast<ABlackHoleBackpackActor>(HeldComponent->GetOwner());
+	if (!HeldBackpack)
+	{
+		return false;
+	}
+
+	const bool bWasPortalEnabled = HeldBackpack->IsPortalEnabled();
+	HeldBackpack->TogglePortalEnabled();
+
+	if (GEngine)
+	{
+		GEngine->AddOnScreenDebugMessage(
+			static_cast<uint64>(GetUniqueID()) + 20510ULL,
+			1.25f,
+			bWasPortalEnabled ? FColor::Yellow : FColor::Green,
+			bWasPortalEnabled
+				? TEXT("Held backpack portal OFF")
+				: TEXT("Held backpack portal ON"));
+	}
+
+	return true;
 }
 
 bool AAgentCharacter::TryToggleHeldDronePowerFromPickup()

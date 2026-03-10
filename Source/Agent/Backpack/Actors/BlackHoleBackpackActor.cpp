@@ -1,11 +1,12 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Backpack/Actors/BlackHoleBackpackActor.h"
+#include "Battery/AgentBatteryComponent.h"
 #include "Backpack/Components/BlackHoleBackpackLinkComponent.h"
+#include "Components/PointLightComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Machine/InputVolume.h"
-#include "Machine/MachineComponent.h"
 #include "UObject/ConstructorHelpers.h"
 
 ABlackHoleBackpackActor::ABlackHoleBackpackActor()
@@ -34,12 +35,21 @@ ABlackHoleBackpackActor::ABlackHoleBackpackActor()
 	InputVolume->SetRelativeLocation(FVector(-42.0f, 0.0f, 16.0f));
 	InputVolume->IntakeInterval = 0.05f;
 
-	MachineComponent = CreateDefaultSubobject<UMachineComponent>(TEXT("MachineComponent"));
-	MachineComponent->bRecipeAny = true;
-	MachineComponent->Recipes.Reset();
-	MachineComponent->bOutputPureMaterials = false;
-
 	LinkComponent = CreateDefaultSubobject<UBlackHoleBackpackLinkComponent>(TEXT("LinkComponent"));
+
+	BackpackBattery = CreateDefaultSubobject<UAgentBatteryComponent>(TEXT("BackpackBattery"));
+	BackpackBattery->MaxCharge = 100.0f;
+	BackpackBattery->CurrentCharge = 100.0f;
+	BackpackBattery->FullThresholdCharge = 100.0f;
+	BackpackBattery->DrainRatePerSecond = 5.0f;
+	BackpackBattery->ChargeRatePerSecond = 7.5f;
+	BackpackBattery->bAutoDrainEnabled = false;
+	BackpackBattery->bAutoChargeEnabled = true;
+
+	PortalStateLight = CreateDefaultSubobject<UPointLightComponent>(TEXT("PortalStateLight"));
+	PortalStateLight->SetupAttachment(ItemMesh);
+	PortalStateLight->SetRelativeLocation(FVector(0.0f, 0.0f, 28.0f));
+	PortalStateLight->SetCanEverAffectNavigation(false);
 
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> BackpackMeshAsset(
 		TEXT("/Engine/BasicShapes/Cube.Cube"));
@@ -58,19 +68,30 @@ void ABlackHoleBackpackActor::BeginPlay()
 		BaseItemMeshRelativeScale = ItemMesh->GetRelativeScale3D();
 	}
 
+	if (BackpackBattery)
+	{
+		BackpackBattery->OnBatteryDepleted.AddDynamic(this, &ABlackHoleBackpackActor::HandlePortalBatteryDepleted);
+	}
+
+	bPortalEnabled = bStartPortalEnabled;
+	RefreshPortalStateVisuals();
+
 	SetDeployedState(bStartDeployed);
 
-	if (MachineComponent)
+	if (InputVolume)
 	{
-		MachineComponent->SetInputVolume(InputVolume);
+		// Teleporter backpack intake is handled by the link component; keep InputVolume sensor-only.
+		InputVolume->bAutoResolveMachineComponent = false;
+		InputVolume->SetMachineComponent(nullptr);
 	}
 
 	if (LinkComponent)
 	{
-		LinkComponent->SetSourceMachineComponent(MachineComponent);
+		LinkComponent->SetSourceMachineComponent(nullptr);
 		LinkComponent->SetLinkId(LinkId);
 	}
 
+	SetPortalEnabled(bPortalEnabled);
 	HandleDeploymentStateChanged(IsItemDeployed());
 }
 
@@ -138,6 +159,34 @@ void ABlackHoleBackpackActor::SetDeployedState(bool bInDeployed, const FVector& 
 	HandleDeploymentStateChanged(false);
 }
 
+void ABlackHoleBackpackActor::SetPortalEnabled(bool bInEnabled)
+{
+	bool bResolvedEnable = bInEnabled;
+	if (bResolvedEnable
+		&& BackpackBattery
+		&& BackpackBattery->IsBatteryEnabled()
+		&& BackpackBattery->IsDepleted())
+	{
+		bResolvedEnable = false;
+	}
+
+	bPortalEnabled = bResolvedEnable;
+
+	if (LinkComponent)
+	{
+		LinkComponent->SetBlackHoleEnabled(bPortalEnabled);
+	}
+
+	RefreshIntakeVolumeState();
+	UpdatePortalBatteryRuntimeState();
+	RefreshPortalStateVisuals();
+}
+
+void ABlackHoleBackpackActor::TogglePortalEnabled()
+{
+	SetPortalEnabled(!bPortalEnabled);
+}
+
 FTransform ABlackHoleBackpackActor::GetSnapAnchorLocalTransform() const
 {
 	return SnapAnchor ? SnapAnchor->GetRelativeTransform() : FTransform::Identity;
@@ -178,16 +227,49 @@ void ABlackHoleBackpackActor::SetSnapAnchorLocalRotation(const FRotator& NewLoca
 	SnapAnchor->SetRelativeRotation(NewLocalRotation);
 }
 
+float ABlackHoleBackpackActor::GetPortalBatteryPercent() const
+{
+	return BackpackBattery ? BackpackBattery->GetChargePercent() : 0.0f;
+}
+
+bool ABlackHoleBackpackActor::IsPortalBatteryDepleted() const
+{
+	return BackpackBattery ? BackpackBattery->IsDepleted() : true;
+}
+
 void ABlackHoleBackpackActor::HandleDeploymentStateChanged(bool bNowDeployed)
 {
-	if (InputVolume)
+	RefreshIntakeVolumeState();
+
+	if (bNowDeployed)
 	{
-		const bool bEnableIntake = bNowDeployed ? bEnableIntakeWhenDeployed : bEnableIntakeWhenAttached;
-		InputVolume->bEnabled = bEnableIntake;
-		InputVolume->SetComponentTickEnabled(bEnableIntake);
-		InputVolume->SetGenerateOverlapEvents(bEnableIntake);
-		InputVolume->SetCollisionEnabled(bEnableIntake ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
+		if (bEnablePortalWhenDeployed)
+		{
+			SetPortalEnabled(true);
+		}
 	}
+	else
+	{
+		if (bDisablePortalWhenAttached)
+		{
+			SetPortalEnabled(false);
+		}
+	}
+}
+
+void ABlackHoleBackpackActor::RefreshIntakeVolumeState()
+{
+	if (!InputVolume)
+	{
+		return;
+	}
+
+	const bool bAllowByDeployment = bIsDeployed ? bEnableIntakeWhenDeployed : bEnableIntakeWhenAttached;
+	const bool bEnableIntake = bAllowByDeployment && bPortalEnabled;
+	InputVolume->bEnabled = bEnableIntake;
+	InputVolume->SetComponentTickEnabled(bEnableIntake);
+	InputVolume->SetGenerateOverlapEvents(bEnableIntake);
+	InputVolume->SetCollisionEnabled(bEnableIntake ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
 }
 
 FTransform ABlackHoleBackpackActor::ResolveAttachParentWorldTransform(const USceneComponent* CarrierComponent, FName SocketName) const
@@ -250,4 +332,44 @@ void ABlackHoleBackpackActor::SetMeshCollisionForCurrentState() const
 	{
 		ItemMesh->SetCollisionProfileName(DesiredProfile);
 	}
+}
+
+void ABlackHoleBackpackActor::UpdatePortalBatteryRuntimeState()
+{
+	if (!BackpackBattery || !BackpackBattery->IsBatteryEnabled())
+	{
+		return;
+	}
+
+	BackpackBattery->SetDrainEnabled(bPortalEnabled);
+	BackpackBattery->SetChargeEnabled(!bPortalEnabled);
+}
+
+void ABlackHoleBackpackActor::HandlePortalBatteryDepleted()
+{
+	SetPortalEnabled(false);
+}
+
+void ABlackHoleBackpackActor::RefreshPortalStateVisuals()
+{
+	if (!PortalStateLight)
+	{
+		return;
+	}
+
+	if (!bEnablePortalStateLight)
+	{
+		PortalStateLight->SetVisibility(false, true);
+		return;
+	}
+
+	if (bUseManualPortalLightSettings)
+	{
+		PortalStateLight->SetVisibility(bPortalEnabled, true);
+		return;
+	}
+
+	PortalStateLight->SetVisibility(true, true);
+	PortalStateLight->SetIntensity(bPortalEnabled ? FMath::Max(0.0f, PortalLightOnIntensity) : FMath::Max(0.0f, PortalLightOffIntensity));
+	PortalStateLight->SetLightColor((bPortalEnabled ? PortalLightOnColor : PortalLightOffColor).ToFColor(true));
 }
