@@ -44,6 +44,8 @@ public:
 	int32 AddInputResourceScaled(FName ResourceId, int32 QuantityScaled);
 
 	bool AddInputResourcesScaledAtomic(const TMap<FName, int32>& ResourceQuantitiesScaled);
+	bool AddInputActorContentsScaledAtomic(AActor* SourceActor, const TMap<FName, int32>& ResourceQuantitiesScaled);
+	bool IsItemClassReferencedByAnyRecipe(const UClass* ItemActorClass) const;
 
 	UFUNCTION(BlueprintCallable, Category="Machine")
 	int32 AddInputResourceUnits(FName ResourceId, int32 QuantityUnits);
@@ -56,6 +58,12 @@ public:
 
 	UFUNCTION(BlueprintPure, Category="Machine")
 	float GetStoredMassKg() const;
+
+	UFUNCTION(BlueprintPure, Category="Machine")
+	int32 GetStoredItemCount(TSubclassOf<AActor> ItemActorClass) const;
+
+	UFUNCTION(BlueprintPure, Category="Machine")
+	int32 GetTotalStoredItemCount() const;
 
 	UFUNCTION(BlueprintPure, Category="Machine")
 	float GetCraftProgress01() const;
@@ -124,14 +132,32 @@ public:
 	int32 TotalStoredScaled = 0;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Machine")
+	TMap<FName, int32> StoredItemCountsByClassKey;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Machine")
+	int32 TotalStoredItemCount = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Machine")
 	TMap<FName, int32> PendingOutputScaled;
 
 protected:
+	struct FAnyMaterialRequirement
+	{
+		int32 QuantityScaled = 0;
+		bool bUseWhitelist = false;
+		bool bUseBlacklist = false;
+		TSet<FName> WhitelistMaterialIds;
+		TSet<FName> BlacklistMaterialIds;
+	};
+
 	struct FRecipeView
 	{
 		const URecipeAsset* Asset = nullptr;
 		float CraftTimeSeconds = 0.0f;
 		TMap<FName, int32> InputScaled;
+		TMap<FName, int32> InputItemCountsByClassKey;
+		TMap<FName, TSubclassOf<AActor>> InputItemClassByKey;
+		TArray<FAnyMaterialRequirement> AnyMaterialInputs;
 		TMap<FName, int32> OutputScaled;
 		TMap<FName, TSubclassOf<AActor>> OutputActorClassByResourceId;
 		bool bIsValid = false;
@@ -141,20 +167,26 @@ protected:
 	bool IsResourceAllowed(FName ResourceId) const;
 	int32 GetRemainingCapacityScaled() const;
 	bool ConsumeResourceScaled(FName ResourceId, int32 QuantityScaled);
+	bool AddInputContentsScaledAtomic(const TMap<FName, int32>& ResourceQuantitiesScaled, const TMap<FName, int32>& ItemCountsByClassKey, const TMap<FName, TSubclassOf<AActor>>& ItemClassByKey);
 	bool BuildRecipeView(const URecipeAsset* RecipeAsset, FRecipeView& OutRecipeView) const;
 	const UMaterialDefinitionAsset* ResolveResourceDefinition(FName ResourceId) const;
 	bool CanCraftRecipe(const FRecipeView& RecipeView) const;
 	bool SelectCraftableRecipe(FRecipeView& OutRecipeView) const;
 	bool TryStartCraft(const FRecipeView& RecipeView);
-	void AdvanceCraft(float DeltaTime);
+	void AdvanceCraft(float DeltaTime, float EffectiveCraftSpeed);
 	void CompleteCraft();
 	void FlushPendingOutput();
 	void SetRuntimeState(EMachineRuntimeState NewState, const TCHAR* Message);
 	void RebuildResourceMassLookup();
 	void RegisterResourceMass(const UMaterialDefinitionAsset* ResourceDefinition);
 	float ResolveResourceMassPerUnitKg(FName ResourceId) const;
+	float ResolveGlobalFactorySpeed() const;
+	float ResolveEffectiveCraftSpeed() const;
 	void ApplyStoredMassToOwner();
 	float ComputeStoredMassKg() const;
+	bool IsMaterialAllowedForAnyRequirement(const FAnyMaterialRequirement& Requirement, FName ResourceId) const;
+	int32 ResolveAnyMaterialAvailableScaled(const FAnyMaterialRequirement& Requirement) const;
+	bool TryConsumeAnyMaterialRequirementFromMap(const FAnyMaterialRequirement& Requirement, TMap<FName, int32>& InOutResourcesScaled, int32& InOutTotalScaled) const;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UInputVolume> InputVolume = nullptr;
@@ -173,6 +205,9 @@ protected:
 
 	UPROPERTY(Transient)
 	float CachedOwnerBaseMassKg = 0.0f;
+
+	UPROPERTY(Transient)
+	TMap<FName, TSubclassOf<AActor>> StoredItemClassByKey;
 
 	FRecipeView CurrentCraftRecipe;
 

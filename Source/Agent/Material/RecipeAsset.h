@@ -9,20 +9,53 @@
 class AActor;
 class UMaterialDefinitionAsset;
 
+UENUM(BlueprintType)
+enum class ERecipeInputType : uint8
+{
+	SpecificMaterial UMETA(DisplayName="Specific Material"),
+	AnyMaterial UMETA(DisplayName="Any Material"),
+	ItemBlueprint UMETA(DisplayName="Item Blueprint")
+};
+
 USTRUCT(BlueprintType)
 struct FRecipeMaterialInputEntry
 {
 	GENERATED_BODY()
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Factory|Recipe|Inputs")
+	ERecipeInputType InputType = ERecipeInputType::SpecificMaterial;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Factory|Recipe|Inputs")
 	TObjectPtr<UMaterialDefinitionAsset> Material = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Factory|Recipe|Inputs", meta=(DisplayName="Item Blueprint Class", EditCondition="InputType==ERecipeInputType::ItemBlueprint", EditConditionHides))
+	TSoftClassPtr<AActor> ItemActorClass;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Factory|Recipe|Inputs", meta=(DisplayName="Units", ClampMin="1", UIMin="1"))
 	int32 QuantityUnits = 1;
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Factory|Recipe|Inputs|Any Material", meta=(EditCondition="InputType==ERecipeInputType::AnyMaterial", EditConditionHides))
+	bool bUseWhitelist = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Factory|Recipe|Inputs|Any Material", meta=(EditCondition="InputType==ERecipeInputType::AnyMaterial&&bUseWhitelist", EditConditionHides))
+	TArray<TObjectPtr<UMaterialDefinitionAsset>> WhitelistMaterials;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Factory|Recipe|Inputs|Any Material", meta=(EditCondition="InputType==ERecipeInputType::AnyMaterial", EditConditionHides))
+	bool bUseBlacklist = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Factory|Recipe|Inputs|Any Material", meta=(EditCondition="InputType==ERecipeInputType::AnyMaterial&&bUseBlacklist", EditConditionHides))
+	TArray<TObjectPtr<UMaterialDefinitionAsset>> BlacklistMaterials;
+
 	bool IsDefined() const;
+	bool IsSpecificMaterialInput() const;
+	bool IsAnyMaterialInput() const;
+	bool IsItemBlueprintInput() const;
 	FName GetResolvedMaterialId() const;
+	TSubclassOf<AActor> ResolveItemActorClass() const;
 	int32 GetQuantityScaled() const;
+	int32 GetRequiredItemCount() const;
+	void BuildResolvedWhitelist(TSet<FName>& OutWhitelistMaterialIds) const;
+	void BuildResolvedBlacklist(TSet<FName>& OutBlacklistMaterialIds) const;
 };
 
 USTRUCT(BlueprintType)
