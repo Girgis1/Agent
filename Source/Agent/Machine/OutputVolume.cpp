@@ -79,7 +79,32 @@ void UOutputVolume::TickComponent(float DeltaTime, ELevelTick TickType, FActorCo
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	if (!bEnabled || !bAutoOutput || (PendingOutputScaled.Num() == 0 && PendingMixedMaterialOutputs.Num() == 0))
+	if (!bEnabled || !bAutoOutput)
+	{
+		return;
+	}
+
+	if (PendingTeleportOutputs.Num() > 0)
+	{
+		if (!bTeleportMachineActivated)
+		{
+			return;
+		}
+
+		TimeUntilNextSpawn = FMath::Max(0.0f, TimeUntilNextSpawn - FMath::Max(0.0f, DeltaTime));
+		if (TimeUntilNextSpawn > 0.0f)
+		{
+			return;
+		}
+
+		if (TryEmitOneTeleportItem())
+		{
+			TimeUntilNextSpawn = FMath::Max(0.0f, SpawnInterval);
+		}
+		return;
+	}
+
+	if (PendingOutputScaled.Num() == 0 && PendingMixedMaterialOutputs.Num() == 0)
 	{
 		return;
 	}
@@ -115,6 +140,37 @@ void UOutputVolume::SetOutputPureMaterials(bool bInOutputPureMaterials)
 void UOutputVolume::SetAttachedStorageVolume(UStorageVolumeComponent* InStorageVolume)
 {
 	AttachedStorageVolume = InStorageVolume;
+}
+
+bool UOutputVolume::QueueTeleportActor(TSubclassOf<AActor> ActorClass, const TMap<FName, int32>& ResourceQuantitiesScaled, float StoredMassKg)
+{
+	if (!ActorClass.Get() || bTeleportMachineActivated)
+	{
+		return false;
+	}
+
+	FTeleportOutputRequest& PendingTeleport = PendingTeleportOutputs.Emplace_GetRef();
+	PendingTeleport.ActorClass = ActorClass;
+	PendingTeleport.StoredMassKg = FMath::Max(0.0f, StoredMassKg);
+	PendingTeleport.ResourceQuantitiesScaled.Reset();
+	for (const TPair<FName, int32>& Pair : ResourceQuantitiesScaled)
+	{
+		const FName ResourceId = Pair.Key;
+		const int32 QuantityScaled = FMath::Max(0, Pair.Value);
+		if (ResourceId.IsNone() || QuantityScaled <= 0)
+		{
+			continue;
+		}
+
+		PendingTeleport.ResourceQuantitiesScaled.FindOrAdd(ResourceId) += QuantityScaled;
+	}
+
+	return true;
+}
+
+void UOutputVolume::SetTeleportMachineActivated(bool bInActivated)
+{
+	bTeleportMachineActivated = bInActivated;
 }
 
 int32 UOutputVolume::QueueResourceScaled(FName ResourceId, int32 QuantityScaled, TSubclassOf<AActor> OutputActorClassOverride)
@@ -364,6 +420,91 @@ bool UOutputVolume::TryStoreMixedOutputInAttachedStorage(const FMixedMaterialOut
 	}
 
 	return StorageVolume->StoreResourcesScaledDirect(MixedRequest.CompositionScaled, 1);
+}
+
+bool UOutputVolume::TryEmitOneTeleportItem()
+{
+	if (PendingTeleportOutputs.Num() == 0)
+	{
+		return false;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return false;
+	}
+
+	ResolveOutputArrow();
+
+	const FTeleportOutputRequest& TeleportRequest = PendingTeleportOutputs[0];
+	if (!TeleportRequest.ActorClass.Get())
+	{
+		PendingTeleportOutputs.RemoveAt(0);
+		return true;
+	}
+
+	if (bRouteOutputToAttachedStorage)
+	{
+		UStorageVolumeComponent* StorageVolume = ResolveAttachedStorageVolume();
+		if (StorageVolume && TeleportRequest.ResourceQuantitiesScaled.Num() > 0)
+		{
+			if (StorageVolume->StoreResourcesScaledDirect(TeleportRequest.ResourceQuantitiesScaled, 1))
+			{
+				PendingTeleportOutputs.RemoveAt(0);
+				return true;
+			}
+
+			if (!bAllowWorldSpawnWhenStorageUnavailable)
+			{
+				return false;
+			}
+		}
+	}
+
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.Owner = GetOwner();
+	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	AActor* SpawnedActor = World->SpawnActor<AActor>(
+		TeleportRequest.ActorClass.Get(),
+		GetSpawnLocation(),
+		GetSpawnRotation(),
+		SpawnParameters);
+
+	if (!SpawnedActor)
+	{
+		return false;
+	}
+
+	if (TeleportRequest.ResourceQuantitiesScaled.Num() > 0)
+	{
+		if (UMaterialComponent* MaterialComponent = SpawnedActor->FindComponentByClass<UMaterialComponent>())
+		{
+			MaterialComponent->ConfigureResourcesById(TeleportRequest.ResourceQuantitiesScaled);
+		}
+		else if (AFactoryPayloadActor* PayloadActor = Cast<AFactoryPayloadActor>(SpawnedActor))
+		{
+			if (TeleportRequest.ResourceQuantitiesScaled.Num() == 1)
+			{
+				const auto ResourceIterator = TeleportRequest.ResourceQuantitiesScaled.CreateConstIterator();
+				const FName ResourceId = ResourceIterator->Key;
+				const int32 QuantityScaled = ResourceIterator->Value;
+				FResourceAmount PayloadResource;
+				PayloadResource.ResourceId = ResourceId;
+				PayloadResource.SetScaledQuantity(QuantityScaled);
+				PayloadActor->SetPayloadResource(PayloadResource);
+			}
+		}
+	}
+
+	if (UPrimitiveComponent* PayloadPrimitive = Cast<UPrimitiveComponent>(SpawnedActor->GetRootComponent()))
+	{
+		PayloadPrimitive->AddImpulse(GetSpawnRotation().Vector() * FMath::Max(0.0f, SpawnImpulse), NAME_None, true);
+	}
+
+	PendingTeleportOutputs.RemoveAt(0);
+	return true;
 }
 
 void UOutputVolume::RebuildResourceOutputClassLookup()

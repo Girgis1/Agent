@@ -230,6 +230,7 @@ protected:
 	float GetHeldPickupRotationDriveScale() const;
 	void ApplyHeldPickupRotationPhysicsInput(const FVector& RotationAxis, float InputValue, float DeltaSeconds);
 	ADroneCompanion* GetHeldDroneFromPickup() const;
+	bool TryToggleHeldBackpackPortalFromPickup();
 	bool TryToggleHeldDronePowerFromPickup();
 	bool TryToggleDroneLiftAssist();
 	void SyncDroneLiftAssistTuning() const;

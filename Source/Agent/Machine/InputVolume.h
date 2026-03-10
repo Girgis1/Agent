@@ -35,6 +35,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Input")
 	bool bEnabled = true;
 
+	/** When false, this volume will not auto-discover a machine component from its owner. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Input")
+	bool bAutoResolveMachineComponent = true;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Input", meta=(ClampMin="0.0", UIMin="0.0"))
 	float IntakeInterval = 0.1f;
 

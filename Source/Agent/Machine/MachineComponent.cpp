@@ -59,7 +59,7 @@ FString ResolveItemClassDisplayName(const TSubclassOf<AActor>& ItemClass)
 	return TEXT("Item");
 }
 
-float ResolvePrimitiveMassKgWithoutPhysicsWarning(const UPrimitiveComponent* PrimitiveComponent)
+float ResolvePrimitiveMassKgWithoutPhysicsWarningForMachine(const UPrimitiveComponent* PrimitiveComponent)
 {
 	if (!PrimitiveComponent)
 	{
@@ -104,7 +104,7 @@ void UMachineComponent::BeginPlay()
 		CachedOwnerPrimitive = Cast<UPrimitiveComponent>(OwnerActor->GetRootComponent());
 		if (CachedOwnerPrimitive)
 		{
-			CachedOwnerBaseMassKg = ResolvePrimitiveMassKgWithoutPhysicsWarning(CachedOwnerPrimitive);
+			CachedOwnerBaseMassKg = ResolvePrimitiveMassKgWithoutPhysicsWarningForMachine(CachedOwnerPrimitive);
 		}
 	}
 
@@ -1391,7 +1391,7 @@ void UMachineComponent::ApplyStoredMassToOwner()
 
 	if (CachedOwnerBaseMassKg <= KINDA_SMALL_NUMBER)
 	{
-		CachedOwnerBaseMassKg = ResolvePrimitiveMassKgWithoutPhysicsWarning(CachedOwnerPrimitive);
+		CachedOwnerBaseMassKg = ResolvePrimitiveMassKgWithoutPhysicsWarningForMachine(CachedOwnerPrimitive);
 	}
 
 	const float FinalMassKg = FMath::Max(0.01f, CachedOwnerBaseMassKg + ComputeStoredMassKg() * FMath::Max(0.0f, StoredMassMultiplier));
