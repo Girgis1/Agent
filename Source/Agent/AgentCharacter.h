@@ -13,6 +13,7 @@ class AConveyorPlacementPreview;
 class AMachineActor;
 class AStorageBin;
 class UVehicleInteractionComponent;
+class UBackAttachmentComponent;
 class UCameraComponent;
 class UDroneSwarmComponent;
 class UInputAction;
@@ -92,6 +93,10 @@ class AAgentCharacter : public ACharacter
 	/** Dedicated vehicle entry interaction for possession-based vehicles */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UVehicleInteractionComponent* VehicleInteractionComponent;
+
+	/** Reusable backpack deploy/recall manager used by carried world items */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	UBackAttachmentComponent* BackAttachmentComponent;
 
 	/** Swarm registry and role-slot coordinator for all known drones */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
@@ -234,6 +239,10 @@ protected:
 	bool TryAssignActiveDroneToHookJob(bool bCycleAfterAssign);
 	bool TryReleaseAllHookJobDrones();
 	void UpdateHookJobButtonHold(float DeltaSeconds);
+	bool CanUseBackpackDeployInput() const;
+	void UpdateBackpackDeployButtonHold(float DeltaSeconds);
+	void ResetBackpackDeployButtonHoldState();
+	void TryToggleBackpackDeployState();
 
 	void OnDronePitchForwardPressed();
 	void OnDronePitchForwardReleased();
@@ -260,6 +269,10 @@ protected:
 	void OnDroneGamepadRightTriggerAxis(float Value);
 	void OnDroneCameraTiltUpPressed();
 	void OnDroneCameraTiltDownPressed();
+	void OnBackpackOrDroneModePressed();
+	void OnBackpackOrDroneModeReleased();
+	void OnBackpackOrDroneCameraDownPressed();
+	void OnBackpackOrDroneCameraDownReleased();
 	void OnDroneControlModeTogglePressed();
 	void OnDroneHoverModePressed();
 	void OnDroneStabilizerTogglePressed();
@@ -396,6 +409,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Map")
 	float ControllerMapButtonHoldTime = 0.35f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Backpack", meta=(ClampMin="0.05", UIMin="0.05"))
+	float BackpackDeployHoldTime = 0.35f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
 	TSubclassOf<AConveyorBeltStraight> ConveyorBeltClass;
@@ -602,6 +618,10 @@ protected:
 	bool bKeyboardMapButtonTriggeredMiniMap = false;
 	bool bControllerMapButtonHeld = false;
 	bool bControllerMapButtonTriggeredMiniMap = false;
+	bool bBackpackKeyboardButtonHeld = false;
+	bool bBackpackKeyboardHoldTriggered = false;
+	bool bBackpackControllerButtonHeld = false;
+	bool bBackpackControllerHoldTriggered = false;
 	bool bHookJobButtonHeld = false;
 	bool bHookJobButtonTriggeredHoldRelease = false;
 	bool bRollModeHoldStartedInFlight = false;
@@ -615,6 +635,8 @@ protected:
 	float ViewModeButtonHeldDuration = 0.0f;
 	float KeyboardMapButtonHeldDuration = 0.0f;
 	float ControllerMapButtonHeldDuration = 0.0f;
+	float BackpackKeyboardButtonHeldDuration = 0.0f;
+	float BackpackControllerButtonHeldDuration = 0.0f;
 	float HookJobButtonHeldDuration = 0.0f;
 	float DroneWorldDiscoveryTimeRemaining = 0.0f;
 	float DefaultViewPitchMin = -89.9f;
@@ -668,6 +690,9 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category="Drone|Availability")
 	void SetPrimaryDroneAvailable(bool bNewAvailable, bool bForceFirstPersonIfUnavailable = true);
+
+	UFUNCTION(BlueprintPure, Category="Interaction|Backpack")
+	UBackAttachmentComponent* GetBackAttachmentComponent() const { return BackAttachmentComponent; }
 
 	FORCEINLINE USpringArmComponent* GetCameraBoom() const { return CameraBoom; }
 	FORCEINLINE UCameraComponent* GetFollowCamera() const { return FollowCamera; }

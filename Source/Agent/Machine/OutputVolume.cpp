@@ -5,6 +5,8 @@
 #include "Components/PrimitiveComponent.h"
 #include "Engine/World.h"
 #include "Factory/FactoryPayloadActor.h"
+#include "Factory/StorageVolumeComponent.h"
+#include "GameFramework/Actor.h"
 #include "Material/MaterialComponent.h"
 #include "Material/MaterialDefinitionAsset.h"
 #include "Material/MixedMaterialActor.h"
@@ -23,6 +25,33 @@ bool IsRecipeClassOnlyOutputKey(const FName& ResourceId)
 	}
 
 	return ResourceId.ToString().StartsWith(OutputVolumeRecipeClassOutputPrefix);
+}
+
+TSubclassOf<AActor> ResolveRecipeClassOutputActor(FName ResourceId)
+{
+	if (!IsRecipeClassOnlyOutputKey(ResourceId))
+	{
+		return nullptr;
+	}
+
+	FString ResourceKey = ResourceId.ToString();
+	if (!ResourceKey.RemoveFromStart(OutputVolumeRecipeClassOutputPrefix) || ResourceKey.IsEmpty())
+	{
+		return nullptr;
+	}
+
+	UClass* LoadedClass = FindObject<UClass>(nullptr, *ResourceKey);
+	if (!LoadedClass)
+	{
+		LoadedClass = LoadObject<UClass>(nullptr, *ResourceKey);
+	}
+
+	if (!LoadedClass || !LoadedClass->IsChildOf(AActor::StaticClass()))
+	{
+		return nullptr;
+	}
+
+	return LoadedClass;
 }
 }
 
@@ -81,6 +110,11 @@ void UOutputVolume::SetOutputPureMaterials(bool bInOutputPureMaterials)
 
 	bOutputPureMaterials = bInOutputPureMaterials;
 	RebuildResourceOutputClassLookup();
+}
+
+void UOutputVolume::SetAttachedStorageVolume(UStorageVolumeComponent* InStorageVolume)
+{
+	AttachedStorageVolume = InStorageVolume;
 }
 
 int32 UOutputVolume::QueueResourceScaled(FName ResourceId, int32 QuantityScaled, TSubclassOf<AActor> OutputActorClassOverride)
@@ -192,6 +226,59 @@ bool UOutputVolume::ResolveOutputArrow()
 	return false;
 }
 
+UStorageVolumeComponent* UOutputVolume::ResolveAttachedStorageVolume()
+{
+	if (IsValid(AttachedStorageVolume.Get()))
+	{
+		return AttachedStorageVolume.Get();
+	}
+
+	AttachedStorageVolume = nullptr;
+	if (!bAutoResolveAttachedStorage)
+	{
+		return nullptr;
+	}
+
+	AActor* OwnerActor = GetOwner();
+	if (!OwnerActor)
+	{
+		return nullptr;
+	}
+
+	if (UStorageVolumeComponent* LocalStorageVolume = OwnerActor->FindComponentByClass<UStorageVolumeComponent>())
+	{
+		AttachedStorageVolume = LocalStorageVolume;
+		return AttachedStorageVolume.Get();
+	}
+
+	TArray<AActor*> AttachedActors;
+	OwnerActor->GetAttachedActors(AttachedActors, true);
+	for (AActor* AttachedActor : AttachedActors)
+	{
+		if (!AttachedActor)
+		{
+			continue;
+		}
+
+		if (UStorageVolumeComponent* AttachedStorage = AttachedActor->FindComponentByClass<UStorageVolumeComponent>())
+		{
+			AttachedStorageVolume = AttachedStorage;
+			return AttachedStorageVolume.Get();
+		}
+	}
+
+	if (AActor* ParentActor = OwnerActor->GetAttachParentActor())
+	{
+		if (UStorageVolumeComponent* ParentStorageVolume = ParentActor->FindComponentByClass<UStorageVolumeComponent>())
+		{
+			AttachedStorageVolume = ParentStorageVolume;
+			return AttachedStorageVolume.Get();
+		}
+	}
+
+	return nullptr;
+}
+
 FVector UOutputVolume::GetSpawnLocation() const
 {
 	if (OutputArrow)
@@ -216,7 +303,7 @@ TSubclassOf<AActor> UOutputVolume::ResolveSpawnClassForResource(FName ResourceId
 {
 	if (IsRecipeClassOnlyOutputKey(ResourceId))
 	{
-		return nullptr;
+		return ResolveRecipeClassOutputActor(ResourceId);
 	}
 
 	if (!ResourceId.IsNone())
@@ -245,6 +332,38 @@ TSubclassOf<AActor> UOutputVolume::ResolveSpawnClassForResource(FName ResourceId
 	}
 
 	return nullptr;
+}
+
+int32 UOutputVolume::TryStoreResourceInAttachedStorage(FName ResourceId, int32 QuantityScaled)
+{
+	if (!bRouteOutputToAttachedStorage || ResourceId.IsNone() || QuantityScaled <= 0 || IsRecipeClassOnlyOutputKey(ResourceId))
+	{
+		return 0;
+	}
+
+	UStorageVolumeComponent* StorageVolume = ResolveAttachedStorageVolume();
+	if (!StorageVolume)
+	{
+		return 0;
+	}
+
+	return StorageVolume->StoreResourceScaledDirect(ResourceId, QuantityScaled, 1);
+}
+
+bool UOutputVolume::TryStoreMixedOutputInAttachedStorage(const FMixedMaterialOutputRequest& MixedRequest)
+{
+	if (!bRouteOutputToAttachedStorage || MixedRequest.CompositionScaled.Num() == 0)
+	{
+		return false;
+	}
+
+	UStorageVolumeComponent* StorageVolume = ResolveAttachedStorageVolume();
+	if (!StorageVolume)
+	{
+		return false;
+	}
+
+	return StorageVolume->StoreResourcesScaledDirect(MixedRequest.CompositionScaled, 1);
 }
 
 void UOutputVolume::RebuildResourceOutputClassLookup()
@@ -285,6 +404,21 @@ bool UOutputVolume::TrySpawnOnePayload()
 	if (PendingMixedMaterialOutputs.Num() > 0)
 	{
 		const FMixedMaterialOutputRequest& MixedRequest = PendingMixedMaterialOutputs[0];
+		if (bRouteOutputToAttachedStorage)
+		{
+			UStorageVolumeComponent* StorageVolume = ResolveAttachedStorageVolume();
+			if (StorageVolume && TryStoreMixedOutputInAttachedStorage(MixedRequest))
+			{
+				PendingMixedMaterialOutputs.RemoveAt(0);
+				return true;
+			}
+
+			if (StorageVolume && !bAllowWorldSpawnWhenStorageUnavailable)
+			{
+				return false;
+			}
+		}
+
 		TSubclassOf<AActor> SpawnClassType = MixedRequest.OutputActorClassOverride.Get()
 			? MixedRequest.OutputActorClassOverride
 			: TSubclassOf<AActor>(AMixedMaterialActor::StaticClass());
@@ -388,7 +522,40 @@ bool UOutputVolume::TrySpawnOnePayload()
 			continue;
 		}
 
-		const int32 SpawnQuantityScaled = FMath::Min(PendingScaled, FMath::Max(1, ChunkSizeScaled));
+		const int32 RequestedSpawnQuantityScaled = FMath::Min(PendingScaled, FMath::Max(1, ChunkSizeScaled));
+		int32 SpawnQuantityScaled = RequestedSpawnQuantityScaled;
+		if (bRouteOutputToAttachedStorage)
+		{
+			UStorageVolumeComponent* StorageVolume = ResolveAttachedStorageVolume();
+			if (StorageVolume && !IsRecipeClassOnlyOutputKey(ResourceId))
+			{
+				const int32 StoredScaled = TryStoreResourceInAttachedStorage(ResourceId, RequestedSpawnQuantityScaled);
+				if (StoredScaled > 0)
+				{
+					const int32 RemainingAfterStoreScaled = FMath::Max(0, PendingScaled - StoredScaled);
+					*FoundQuantityScaled = RemainingAfterStoreScaled;
+					if (RemainingAfterStoreScaled == 0)
+					{
+						PendingOutputScaled.Remove(ResourceId);
+						PendingOutputActorClassOverrideById.Remove(ResourceId);
+						return true;
+					}
+
+					SpawnQuantityScaled = FMath::Max(0, RequestedSpawnQuantityScaled - StoredScaled);
+				}
+
+				if (SpawnQuantityScaled <= 0)
+				{
+					return true;
+				}
+
+				if (!bAllowWorldSpawnWhenStorageUnavailable)
+				{
+					return StoredScaled > 0;
+				}
+			}
+		}
+
 		TSubclassOf<AActor> SpawnClassType = PendingOutputActorClassOverrideById.FindRef(ResourceId);
 		if (!SpawnClassType.Get())
 		{
@@ -461,7 +628,7 @@ bool UOutputVolume::TrySpawnOnePayload()
 			PayloadPrimitive->AddImpulse(GetSpawnRotation().Vector() * FMath::Max(0.0f, SpawnImpulse), NAME_None, true);
 		}
 
-		*FoundQuantityScaled = FMath::Max(0, PendingScaled - SpawnQuantityScaled);
+		*FoundQuantityScaled = FMath::Max(0, *FoundQuantityScaled - SpawnQuantityScaled);
 		if (*FoundQuantityScaled == 0)
 		{
 			PendingOutputScaled.Remove(ResourceId);

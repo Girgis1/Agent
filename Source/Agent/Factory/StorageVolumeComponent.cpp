@@ -30,6 +30,86 @@ UStorageVolumeComponent::UStorageVolumeComponent()
 	DebugName = TEXT("Storage");
 }
 
+int32 UStorageVolumeComponent::StoreResourceScaledDirect(FName ResourceId, int32 QuantityScaled, int32 ItemCount)
+{
+	if (ResourceId.IsNone() || QuantityScaled <= 0 || IsResourceBlocked(ResourceId))
+	{
+		return 0;
+	}
+
+	const int32 RequestedScaled = FMath::Max(0, QuantityScaled);
+	const int32 MaxQuantityScaled = GetMaxQuantityScaled();
+	const int32 RemainingCapacityScaled = MaxQuantityScaled > 0
+		? FMath::Max(0, MaxQuantityScaled - GetCurrentStoredQuantityScaled())
+		: RequestedScaled;
+	const int32 AcceptedScaled = MaxQuantityScaled > 0
+		? FMath::Min(RequestedScaled, RemainingCapacityScaled)
+		: RequestedScaled;
+	if (AcceptedScaled <= 0)
+	{
+		return 0;
+	}
+
+	StoredResourceQuantitiesScaled.FindOrAdd(ResourceId) += AcceptedScaled;
+	TotalStoredQuantityScaled += AcceptedScaled;
+
+	const int32 SafeItemCount = FMath::Max(0, ItemCount);
+	if (SafeItemCount > 0)
+	{
+		StoredItemCounts.FindOrAdd(ResourceId) += SafeItemCount;
+		TotalStoredItemCount += SafeItemCount;
+	}
+
+	return AcceptedScaled;
+}
+
+bool UStorageVolumeComponent::StoreResourcesScaledDirect(const TMap<FName, int32>& ResourceQuantitiesScaled, int32 ItemCount)
+{
+	if (ResourceQuantitiesScaled.Num() == 0)
+	{
+		return false;
+	}
+
+	int32 TotalAdditionalScaled = 0;
+	for (const TPair<FName, int32>& Pair : ResourceQuantitiesScaled)
+	{
+		const FName ResourceId = Pair.Key;
+		const int32 QuantityScaled = FMath::Max(0, Pair.Value);
+		if (ResourceId.IsNone() || QuantityScaled <= 0 || IsResourceBlocked(ResourceId))
+		{
+			return false;
+		}
+
+		TotalAdditionalScaled += QuantityScaled;
+	}
+
+	if (!HasCapacityForAdditionalQuantity(TotalAdditionalScaled))
+	{
+		return false;
+	}
+
+	for (const TPair<FName, int32>& Pair : ResourceQuantitiesScaled)
+	{
+		const FName ResourceId = Pair.Key;
+		const int32 QuantityScaled = FMath::Max(0, Pair.Value);
+		if (QuantityScaled <= 0)
+		{
+			continue;
+		}
+
+		StoredResourceQuantitiesScaled.FindOrAdd(ResourceId) += QuantityScaled;
+		TotalStoredQuantityScaled += QuantityScaled;
+	}
+
+	const int32 SafeItemCount = FMath::Max(0, ItemCount);
+	if (SafeItemCount > 0)
+	{
+		TotalStoredItemCount += SafeItemCount;
+	}
+
+	return true;
+}
+
 int32 UStorageVolumeComponent::GetStoredItemCount(FName ResourceId) const
 {
 	if (ResourceId.IsNone())
