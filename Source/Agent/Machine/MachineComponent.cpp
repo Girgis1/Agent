@@ -2,17 +2,20 @@
 
 #include "Machine/MachineComponent.h"
 #include "Components/PrimitiveComponent.h"
+#include "Factory/FactoryWorldConfig.h"
 #include "Material/MaterialDefinitionAsset.h"
 #include "Material/AgentResourceTypes.h"
 #include "Machine/InputVolume.h"
 #include "Machine/OutputVolume.h"
 #include "Material/RecipeAsset.h"
 #include "UObject/UObjectIterator.h"
+#include "EngineUtils.h"
 #include <limits>
 
 namespace
 {
 const TCHAR* MachineRecipeClassOutputPrefix = TEXT("__RecipeClassOutput__:");
+const TCHAR* MachineItemClassInputPrefix = TEXT("__ItemClassInput__:");
 
 FString FormatUnitsText(int32 QuantityScaled)
 {
@@ -33,6 +36,26 @@ FName BuildRecipeClassOutputKey(const UClass* OutputClass)
 	}
 
 	return FName(*FString::Printf(TEXT("%s%s"), MachineRecipeClassOutputPrefix, *OutputClass->GetPathName()));
+}
+
+FName BuildItemClassInputKey(const UClass* ItemClass)
+{
+	if (!ItemClass)
+	{
+		return NAME_None;
+	}
+
+	return FName(*FString::Printf(TEXT("%s%s"), MachineItemClassInputPrefix, *ItemClass->GetPathName()));
+}
+
+FString ResolveItemClassDisplayName(const TSubclassOf<AActor>& ItemClass)
+{
+	if (ItemClass.Get())
+	{
+		return ItemClass->GetName();
+	}
+
+	return TEXT("Item");
 }
 }
 
@@ -81,10 +104,23 @@ void UMachineComponent::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 		return;
 	}
 
+	if (ResolveEffectiveCraftSpeed() <= KINDA_SMALL_NUMBER)
+	{
+		SetRuntimeState(EMachineRuntimeState::Paused, TEXT("Paused (global factory speed)"));
+		return;
+	}
+
 	if (CurrentCraftRecipe.bIsValid && CurrentCraftDurationSeconds > KINDA_SMALL_NUMBER)
 	{
+		const float EffectiveCraftSpeed = ResolveEffectiveCraftSpeed();
+		if (EffectiveCraftSpeed <= KINDA_SMALL_NUMBER)
+		{
+			SetRuntimeState(EMachineRuntimeState::Paused, TEXT("Paused (global factory speed)"));
+			return;
+		}
+
 		SetRuntimeState(EMachineRuntimeState::Crafting, TEXT("Crafting"));
-		AdvanceCraft(DeltaTime);
+		AdvanceCraft(DeltaTime, EffectiveCraftSpeed);
 		return;
 	}
 
@@ -130,6 +166,8 @@ void UMachineComponent::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 		}
 		else
 		{
+			bool bHasMissingRequirement = false;
+
 			for (const TPair<FName, int32>& RequiredPair : PreviewRecipe.InputScaled)
 			{
 				const int32 RequiredScaled = FMath::Max(0, RequiredPair.Value);
@@ -141,7 +179,52 @@ void UMachineComponent::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 
 				const int32 MissingScaled = RequiredScaled - HaveScaled;
 				WaitingReason = FString::Printf(TEXT("Need %s %s"), *FormatUnitsText(MissingScaled), *RequiredPair.Key.ToString());
+				bHasMissingRequirement = true;
 				break;
+			}
+
+			if (!bHasMissingRequirement)
+			{
+				for (const FAnyMaterialRequirement& AnyRequirement : PreviewRecipe.AnyMaterialInputs)
+				{
+					const int32 RequiredScaled = FMath::Max(0, AnyRequirement.QuantityScaled);
+					const int32 HaveScaled = ResolveAnyMaterialAvailableScaled(AnyRequirement);
+					if (HaveScaled >= RequiredScaled)
+					{
+						continue;
+					}
+
+					const int32 MissingScaled = RequiredScaled - HaveScaled;
+					WaitingReason = FString::Printf(TEXT("Need %s any material"), *FormatUnitsText(MissingScaled));
+					bHasMissingRequirement = true;
+					break;
+				}
+			}
+
+			if (!bHasMissingRequirement)
+			{
+				TArray<FName> ItemRequirementKeys;
+				PreviewRecipe.InputItemCountsByClassKey.GetKeys(ItemRequirementKeys);
+				ItemRequirementKeys.Sort([](const FName& Left, const FName& Right)
+				{
+					return Left.LexicalLess(Right);
+				});
+
+				for (const FName& ItemClassKey : ItemRequirementKeys)
+				{
+					const int32 RequiredCount = FMath::Max(0, PreviewRecipe.InputItemCountsByClassKey.FindRef(ItemClassKey));
+					const int32 HaveCount = FMath::Max(0, StoredItemCountsByClassKey.FindRef(ItemClassKey));
+					if (HaveCount >= RequiredCount)
+					{
+						continue;
+					}
+
+					const int32 MissingCount = RequiredCount - HaveCount;
+					const FString ItemLabel = ResolveItemClassDisplayName(PreviewRecipe.InputItemClassByKey.FindRef(ItemClassKey));
+					WaitingReason = FString::Printf(TEXT("Need %d x %s"), MissingCount, *ItemLabel);
+					bHasMissingRequirement = true;
+					break;
+				}
 			}
 		}
 	}
@@ -195,7 +278,63 @@ int32 UMachineComponent::AddInputResourceScaled(FName ResourceId, int32 Quantity
 
 bool UMachineComponent::AddInputResourcesScaledAtomic(const TMap<FName, int32>& ResourceQuantitiesScaled)
 {
-	if (ResourceQuantitiesScaled.Num() == 0)
+	return AddInputContentsScaledAtomic(ResourceQuantitiesScaled, {}, {});
+}
+
+bool UMachineComponent::AddInputActorContentsScaledAtomic(AActor* SourceActor, const TMap<FName, int32>& ResourceQuantitiesScaled)
+{
+	if (!SourceActor)
+	{
+		return AddInputContentsScaledAtomic(ResourceQuantitiesScaled, {}, {});
+	}
+
+	TMap<FName, int32> ItemCountsByClassKey;
+	TMap<FName, TSubclassOf<AActor>> ItemClassByKey;
+
+	if (UClass* SourceClass = SourceActor->GetClass())
+	{
+		const FName ItemClassKey = BuildItemClassInputKey(SourceClass);
+		if (!ItemClassKey.IsNone())
+		{
+			ItemCountsByClassKey.Add(ItemClassKey, 1);
+			ItemClassByKey.Add(ItemClassKey, SourceClass);
+		}
+	}
+
+	return AddInputContentsScaledAtomic(ResourceQuantitiesScaled, ItemCountsByClassKey, ItemClassByKey);
+}
+
+bool UMachineComponent::IsItemClassReferencedByAnyRecipe(const UClass* ItemActorClass) const
+{
+	const FName ItemClassKey = BuildItemClassInputKey(ItemActorClass);
+	if (ItemClassKey.IsNone())
+	{
+		return false;
+	}
+
+	for (const TObjectPtr<URecipeAsset>& RecipeAssetPtr : Recipes)
+	{
+		FRecipeView RecipeView;
+		if (!BuildRecipeView(RecipeAssetPtr.Get(), RecipeView))
+		{
+			continue;
+		}
+
+		if (RecipeView.InputItemCountsByClassKey.Contains(ItemClassKey))
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+bool UMachineComponent::AddInputContentsScaledAtomic(
+	const TMap<FName, int32>& ResourceQuantitiesScaled,
+	const TMap<FName, int32>& ItemCountsByClassKey,
+	const TMap<FName, TSubclassOf<AActor>>& ItemClassByKey)
+{
+	if (ResourceQuantitiesScaled.Num() == 0 && ItemCountsByClassKey.Num() == 0)
 	{
 		return false;
 	}
@@ -224,6 +363,29 @@ bool UMachineComponent::AddInputResourcesScaledAtomic(const TMap<FName, int32>& 
 		}
 	}
 
+	int64 IncomingItemCount = 0;
+	for (const TPair<FName, int32>& ItemPair : ItemCountsByClassKey)
+	{
+		const FName ItemClassKey = ItemPair.Key;
+		const int32 ItemCount = FMath::Max(0, ItemPair.Value);
+		if (ItemClassKey.IsNone() || ItemCount <= 0)
+		{
+			return false;
+		}
+
+		const int64 ExistingCount = static_cast<int64>(StoredItemCountsByClassKey.FindRef(ItemClassKey));
+		if (ExistingCount + static_cast<int64>(ItemCount) > TNumericLimits<int32>::Max())
+		{
+			return false;
+		}
+
+		IncomingItemCount += static_cast<int64>(ItemCount);
+		if (IncomingItemCount > TNumericLimits<int32>::Max())
+		{
+			return false;
+		}
+	}
+
 	const int64 RemainingCapacityScaled = static_cast<int64>(GetRemainingCapacityScaled());
 	if (RemainingCapacityScaled < RequiredTotalScaled)
 	{
@@ -232,6 +394,12 @@ bool UMachineComponent::AddInputResourcesScaledAtomic(const TMap<FName, int32>& 
 
 	const int64 NewTotalScaled = static_cast<int64>(TotalStoredScaled) + RequiredTotalScaled;
 	if (NewTotalScaled > TNumericLimits<int32>::Max())
+	{
+		return false;
+	}
+
+	const int64 NewTotalItemCount = static_cast<int64>(TotalStoredItemCount) + IncomingItemCount;
+	if (NewTotalItemCount > TNumericLimits<int32>::Max())
 	{
 		return false;
 	}
@@ -249,7 +417,31 @@ bool UMachineComponent::AddInputResourcesScaledAtomic(const TMap<FName, int32>& 
 		StoredQuantityScaled += QuantityScaled;
 	}
 
+	for (const TPair<FName, int32>& ItemPair : ItemCountsByClassKey)
+	{
+		const FName ItemClassKey = ItemPair.Key;
+		const int32 ItemCount = FMath::Max(0, ItemPair.Value);
+		if (ItemCount <= 0)
+		{
+			continue;
+		}
+
+		int32& StoredCount = StoredItemCountsByClassKey.FindOrAdd(ItemClassKey);
+		StoredCount += ItemCount;
+	}
+
+	for (const TPair<FName, TSubclassOf<AActor>>& ItemClassPair : ItemClassByKey)
+	{
+		if (ItemClassPair.Key.IsNone() || !ItemClassPair.Value.Get())
+		{
+			continue;
+		}
+
+		StoredItemClassByKey.FindOrAdd(ItemClassPair.Key) = ItemClassPair.Value;
+	}
+
 	TotalStoredScaled = static_cast<int32>(NewTotalScaled);
+	TotalStoredItemCount = static_cast<int32>(NewTotalItemCount);
 	ApplyStoredMassToOwner();
 	return true;
 }
@@ -275,6 +467,22 @@ float UMachineComponent::GetStoredMassKg() const
 	return ComputeStoredMassKg();
 }
 
+int32 UMachineComponent::GetStoredItemCount(TSubclassOf<AActor> ItemActorClass) const
+{
+	const FName ItemClassKey = BuildItemClassInputKey(ItemActorClass.Get());
+	if (ItemClassKey.IsNone())
+	{
+		return 0;
+	}
+
+	return FMath::Max(0, StoredItemCountsByClassKey.FindRef(ItemClassKey));
+}
+
+int32 UMachineComponent::GetTotalStoredItemCount() const
+{
+	return FMath::Max(0, TotalStoredItemCount);
+}
+
 float UMachineComponent::GetCraftProgress01() const
 {
 	if (!CurrentCraftRecipe.bIsValid || CurrentCraftDurationSeconds <= KINDA_SMALL_NUMBER)
@@ -292,13 +500,23 @@ float UMachineComponent::GetCraftRemainingSeconds() const
 		return 0.0f;
 	}
 
-	return FMath::Max(0.0f, CurrentCraftDurationSeconds - CurrentCraftElapsedSeconds);
+	const float RemainingWorkSeconds = FMath::Max(0.0f, CurrentCraftDurationSeconds - CurrentCraftElapsedSeconds);
+	const float EffectiveCraftSpeed = ResolveEffectiveCraftSpeed();
+	if (EffectiveCraftSpeed <= KINDA_SMALL_NUMBER)
+	{
+		return TNumericLimits<float>::Max();
+	}
+
+	return RemainingWorkSeconds / EffectiveCraftSpeed;
 }
 
 void UMachineComponent::ClearStoredResources()
 {
 	StoredResourcesScaled.Reset();
 	TotalStoredScaled = 0;
+	StoredItemCountsByClassKey.Reset();
+	StoredItemClassByKey.Reset();
+	TotalStoredItemCount = 0;
 	ApplyStoredMassToOwner();
 }
 
@@ -421,7 +639,67 @@ bool UMachineComponent::BuildRecipeView(const URecipeAsset* RecipeAsset, FRecipe
 		}
 
 		OutRecipeView.CraftTimeSeconds = Recipe->GetResolvedCraftTimeSeconds();
-		Recipe->BuildInputRequirementsScaled(OutRecipeView.InputScaled);
+		OutRecipeView.InputScaled.Reset();
+		OutRecipeView.InputItemCountsByClassKey.Reset();
+		OutRecipeView.InputItemClassByKey.Reset();
+		OutRecipeView.AnyMaterialInputs.Reset();
+
+		for (const FRecipeMaterialInputEntry& InputEntry : Recipe->Inputs)
+		{
+			if (!InputEntry.IsDefined())
+			{
+				continue;
+			}
+
+			if (InputEntry.IsSpecificMaterialInput())
+			{
+				const FName ResourceId = InputEntry.GetResolvedMaterialId();
+				if (ResourceId.IsNone())
+				{
+					continue;
+				}
+
+				OutRecipeView.InputScaled.FindOrAdd(ResourceId) += InputEntry.GetQuantityScaled();
+				continue;
+			}
+
+			if (InputEntry.IsAnyMaterialInput())
+			{
+				FAnyMaterialRequirement AnyRequirement;
+				AnyRequirement.QuantityScaled = InputEntry.GetQuantityScaled();
+				AnyRequirement.bUseWhitelist = InputEntry.bUseWhitelist;
+				AnyRequirement.bUseBlacklist = InputEntry.bUseBlacklist;
+				InputEntry.BuildResolvedWhitelist(AnyRequirement.WhitelistMaterialIds);
+				InputEntry.BuildResolvedBlacklist(AnyRequirement.BlacklistMaterialIds);
+
+				if (AnyRequirement.QuantityScaled <= 0)
+				{
+					continue;
+				}
+
+				if (AnyRequirement.bUseWhitelist && AnyRequirement.WhitelistMaterialIds.Num() == 0)
+				{
+					continue;
+				}
+
+				OutRecipeView.AnyMaterialInputs.Add(AnyRequirement);
+				continue;
+			}
+
+			if (InputEntry.IsItemBlueprintInput())
+			{
+				const TSubclassOf<AActor> ItemClass = InputEntry.ResolveItemActorClass();
+				const FName ItemClassKey = BuildItemClassInputKey(ItemClass.Get());
+				if (ItemClassKey.IsNone())
+				{
+					continue;
+				}
+
+				OutRecipeView.InputItemCountsByClassKey.FindOrAdd(ItemClassKey) += InputEntry.GetRequiredItemCount();
+				OutRecipeView.InputItemClassByKey.FindOrAdd(ItemClassKey) = ItemClass;
+			}
+		}
+
 		OutRecipeView.OutputScaled.Reset();
 		OutRecipeView.OutputActorClassByResourceId.Reset();
 		TArray<TSubclassOf<AActor>> ResolvedOutputActorClasses;
@@ -444,7 +722,9 @@ bool UMachineComponent::BuildRecipeView(const URecipeAsset* RecipeAsset, FRecipe
 			OutRecipeView.OutputActorClassByResourceId.FindOrAdd(OutputResourceId) = OutputActorClass;
 		}
 
-		const bool bHasRecipeInput = OutRecipeView.InputScaled.Num() > 0;
+		const bool bHasRecipeInput = OutRecipeView.InputScaled.Num() > 0
+			|| OutRecipeView.AnyMaterialInputs.Num() > 0
+			|| OutRecipeView.InputItemCountsByClassKey.Num() > 0;
 		OutRecipeView.bIsValid = bHasRecipeInput && OutRecipeView.OutputScaled.Num() > 0;
 		return OutRecipeView.bIsValid;
 	}
@@ -487,10 +767,58 @@ bool UMachineComponent::CanCraftRecipe(const FRecipeView& RecipeView) const
 		return false;
 	}
 
+	TMap<FName, int32> WorkingResources = StoredResourcesScaled;
+	TMap<FName, int32> WorkingItemCounts = StoredItemCountsByClassKey;
+	int32 WorkingTotalScaled = TotalStoredScaled;
+
 	for (const TPair<FName, int32>& RequiredPair : RecipeView.InputScaled)
 	{
-		const int32* FoundQuantityScaled = StoredResourcesScaled.Find(RequiredPair.Key);
-		if (!FoundQuantityScaled || *FoundQuantityScaled < FMath::Max(0, RequiredPair.Value))
+		const FName ResourceId = RequiredPair.Key;
+		const int32 RequiredScaled = FMath::Max(0, RequiredPair.Value);
+		if (ResourceId.IsNone() || RequiredScaled <= 0)
+		{
+			continue;
+		}
+
+		int32* FoundQuantityScaled = WorkingResources.Find(ResourceId);
+		if (!FoundQuantityScaled || *FoundQuantityScaled < RequiredScaled)
+		{
+			return false;
+		}
+
+		*FoundQuantityScaled = FMath::Max(0, *FoundQuantityScaled - RequiredScaled);
+		WorkingTotalScaled = FMath::Max(0, WorkingTotalScaled - RequiredScaled);
+		if (*FoundQuantityScaled == 0)
+		{
+			WorkingResources.Remove(ResourceId);
+		}
+	}
+
+	for (const TPair<FName, int32>& ItemRequirement : RecipeView.InputItemCountsByClassKey)
+	{
+		const FName ItemClassKey = ItemRequirement.Key;
+		const int32 RequiredCount = FMath::Max(0, ItemRequirement.Value);
+		if (ItemClassKey.IsNone() || RequiredCount <= 0)
+		{
+			continue;
+		}
+
+		int32* FoundStoredCount = WorkingItemCounts.Find(ItemClassKey);
+		if (!FoundStoredCount || *FoundStoredCount < RequiredCount)
+		{
+			return false;
+		}
+
+		*FoundStoredCount = FMath::Max(0, *FoundStoredCount - RequiredCount);
+		if (*FoundStoredCount == 0)
+		{
+			WorkingItemCounts.Remove(ItemClassKey);
+		}
+	}
+
+	for (const FAnyMaterialRequirement& AnyRequirement : RecipeView.AnyMaterialInputs)
+	{
+		if (!TryConsumeAnyMaterialRequirementFromMap(AnyRequirement, WorkingResources, WorkingTotalScaled))
 		{
 			return false;
 		}
@@ -550,29 +878,88 @@ bool UMachineComponent::TryStartCraft(const FRecipeView& RecipeView)
 		return false;
 	}
 
+	TMap<FName, int32> WorkingResources = StoredResourcesScaled;
+	TMap<FName, int32> WorkingItemCounts = StoredItemCountsByClassKey;
+	int32 WorkingTotalScaled = TotalStoredScaled;
+	int32 WorkingTotalItemCount = TotalStoredItemCount;
+
 	for (const TPair<FName, int32>& RequiredPair : RecipeView.InputScaled)
 	{
-		if (!ConsumeResourceScaled(RequiredPair.Key, RequiredPair.Value))
+		const FName ResourceId = RequiredPair.Key;
+		const int32 SafeRequiredScaled = FMath::Max(0, RequiredPair.Value);
+		if (ResourceId.IsNone() || SafeRequiredScaled <= 0)
+		{
+			continue;
+		}
+
+		int32* FoundQuantityScaled = WorkingResources.Find(ResourceId);
+		if (!FoundQuantityScaled || *FoundQuantityScaled < SafeRequiredScaled)
 		{
 			SetRuntimeState(EMachineRuntimeState::Error, TEXT("Failed consuming recipe input"));
 			return false;
 		}
+
+		*FoundQuantityScaled = FMath::Max(0, *FoundQuantityScaled - SafeRequiredScaled);
+		WorkingTotalScaled = FMath::Max(0, WorkingTotalScaled - SafeRequiredScaled);
+		if (*FoundQuantityScaled == 0)
+		{
+			WorkingResources.Remove(ResourceId);
+		}
 	}
+
+	for (const TPair<FName, int32>& ItemRequirement : RecipeView.InputItemCountsByClassKey)
+	{
+		const FName ItemClassKey = ItemRequirement.Key;
+		const int32 RequiredCount = FMath::Max(0, ItemRequirement.Value);
+		if (ItemClassKey.IsNone() || RequiredCount <= 0)
+		{
+			continue;
+		}
+
+		int32* FoundStoredCount = WorkingItemCounts.Find(ItemClassKey);
+		if (!FoundStoredCount || *FoundStoredCount < RequiredCount)
+		{
+			SetRuntimeState(EMachineRuntimeState::Error, TEXT("Failed consuming item input"));
+			return false;
+		}
+
+		*FoundStoredCount = FMath::Max(0, *FoundStoredCount - RequiredCount);
+		WorkingTotalItemCount = FMath::Max(0, WorkingTotalItemCount - RequiredCount);
+		if (*FoundStoredCount == 0)
+		{
+			WorkingItemCounts.Remove(ItemClassKey);
+		}
+	}
+
+	for (const FAnyMaterialRequirement& AnyRequirement : RecipeView.AnyMaterialInputs)
+	{
+		if (!TryConsumeAnyMaterialRequirementFromMap(AnyRequirement, WorkingResources, WorkingTotalScaled))
+		{
+			SetRuntimeState(EMachineRuntimeState::Error, TEXT("Failed consuming any-material input"));
+			return false;
+		}
+	}
+
+	StoredResourcesScaled = MoveTemp(WorkingResources);
+	TotalStoredScaled = WorkingTotalScaled;
+	StoredItemCountsByClassKey = MoveTemp(WorkingItemCounts);
+	TotalStoredItemCount = WorkingTotalItemCount;
+	ApplyStoredMassToOwner();
 
 	CurrentCraftRecipe = RecipeView;
 	CurrentCraftElapsedSeconds = 0.0f;
-	CurrentCraftDurationSeconds = FMath::Max(KINDA_SMALL_NUMBER, RecipeView.CraftTimeSeconds) / FMath::Max(0.01f, Speed);
+	CurrentCraftDurationSeconds = FMath::Max(KINDA_SMALL_NUMBER, RecipeView.CraftTimeSeconds);
 	return true;
 }
 
-void UMachineComponent::AdvanceCraft(float DeltaTime)
+void UMachineComponent::AdvanceCraft(float DeltaTime, float EffectiveCraftSpeed)
 {
 	if (!CurrentCraftRecipe.bIsValid || CurrentCraftDurationSeconds <= KINDA_SMALL_NUMBER)
 	{
 		return;
 	}
 
-	CurrentCraftElapsedSeconds += FMath::Max(0.0f, DeltaTime);
+	CurrentCraftElapsedSeconds += FMath::Max(0.0f, DeltaTime) * FMath::Max(0.0f, EffectiveCraftSpeed);
 	if (CurrentCraftElapsedSeconds < CurrentCraftDurationSeconds)
 	{
 		return;
@@ -687,6 +1074,16 @@ void UMachineComponent::RebuildResourceMassLookup()
 			for (const FRecipeMaterialInputEntry& Entry : Recipe->Inputs)
 			{
 				RegisterResourceMass(Entry.Material);
+
+				for (const UMaterialDefinitionAsset* WhitelistDefinition : Entry.WhitelistMaterials)
+				{
+					RegisterResourceMass(WhitelistDefinition);
+				}
+
+				for (const UMaterialDefinitionAsset* BlacklistDefinition : Entry.BlacklistMaterials)
+				{
+					RegisterResourceMass(BlacklistDefinition);
+				}
 			}
 
 			continue;
@@ -736,6 +1133,139 @@ float UMachineComponent::ResolveResourceMassPerUnitKg(FName ResourceId) const
 	}
 
 	return 0.0f;
+}
+
+float UMachineComponent::ResolveGlobalFactorySpeed() const
+{
+	if (const UWorld* World = GetWorld())
+	{
+		for (TActorIterator<AFactoryWorldConfig> It(World); It; ++It)
+		{
+			if (const AFactoryWorldConfig* WorldConfig = *It)
+			{
+				return FMath::Max(0.0f, WorldConfig->FactoryCraftSpeedMultiplier);
+			}
+		}
+	}
+
+	if (const AFactoryWorldConfig* DefaultConfig = GetDefault<AFactoryWorldConfig>())
+	{
+		return FMath::Max(0.0f, DefaultConfig->FactoryCraftSpeedMultiplier);
+	}
+
+	return 1.0f;
+}
+
+float UMachineComponent::ResolveEffectiveCraftSpeed() const
+{
+	return FMath::Max(0.0f, Speed) * ResolveGlobalFactorySpeed();
+}
+
+bool UMachineComponent::IsMaterialAllowedForAnyRequirement(const FAnyMaterialRequirement& Requirement, FName ResourceId) const
+{
+	if (ResourceId.IsNone())
+	{
+		return false;
+	}
+
+	if (Requirement.bUseWhitelist && Requirement.WhitelistMaterialIds.Num() > 0 && !Requirement.WhitelistMaterialIds.Contains(ResourceId))
+	{
+		return false;
+	}
+
+	if (Requirement.bUseBlacklist && Requirement.BlacklistMaterialIds.Contains(ResourceId))
+	{
+		return false;
+	}
+
+	return true;
+}
+
+int32 UMachineComponent::ResolveAnyMaterialAvailableScaled(const FAnyMaterialRequirement& Requirement) const
+{
+	int64 AvailableScaled = 0;
+	for (const TPair<FName, int32>& StoredPair : StoredResourcesScaled)
+	{
+		const FName ResourceId = StoredPair.Key;
+		const int32 QuantityScaled = FMath::Max(0, StoredPair.Value);
+		if (QuantityScaled <= 0 || !IsMaterialAllowedForAnyRequirement(Requirement, ResourceId))
+		{
+			continue;
+		}
+
+		AvailableScaled += static_cast<int64>(QuantityScaled);
+		if (AvailableScaled > TNumericLimits<int32>::Max())
+		{
+			return TNumericLimits<int32>::Max();
+		}
+	}
+
+	return static_cast<int32>(AvailableScaled);
+}
+
+bool UMachineComponent::TryConsumeAnyMaterialRequirementFromMap(
+	const FAnyMaterialRequirement& Requirement,
+	TMap<FName, int32>& InOutResourcesScaled,
+	int32& InOutTotalScaled) const
+{
+	int32 RemainingScaledToConsume = FMath::Max(0, Requirement.QuantityScaled);
+	if (RemainingScaledToConsume <= 0)
+	{
+		return true;
+	}
+
+	if (Requirement.bUseWhitelist && Requirement.WhitelistMaterialIds.Num() == 0)
+	{
+		return false;
+	}
+
+	TArray<FName> ResourceIds;
+	InOutResourcesScaled.GetKeys(ResourceIds);
+	ResourceIds.Sort([](const FName& Left, const FName& Right)
+	{
+		return Left.LexicalLess(Right);
+	});
+
+	for (const FName& ResourceId : ResourceIds)
+	{
+		if (!IsMaterialAllowedForAnyRequirement(Requirement, ResourceId))
+		{
+			continue;
+		}
+
+		int32* FoundQuantityScaled = InOutResourcesScaled.Find(ResourceId);
+		if (!FoundQuantityScaled)
+		{
+			continue;
+		}
+
+		const int32 AvailableScaled = FMath::Max(0, *FoundQuantityScaled);
+		if (AvailableScaled <= 0)
+		{
+			continue;
+		}
+
+		const int32 ConsumedScaled = FMath::Min(AvailableScaled, RemainingScaledToConsume);
+		*FoundQuantityScaled = FMath::Max(0, AvailableScaled - ConsumedScaled);
+		InOutTotalScaled = FMath::Max(0, InOutTotalScaled - ConsumedScaled);
+		RemainingScaledToConsume -= ConsumedScaled;
+		if (*FoundQuantityScaled == 0)
+		{
+			InOutResourcesScaled.Remove(ResourceId);
+		}
+
+		if (RemainingScaledToConsume <= 0)
+		{
+			break;
+		}
+	}
+
+	if (RemainingScaledToConsume > 0)
+	{
+		return false;
+	}
+
+	return true;
 }
 
 void UMachineComponent::ApplyStoredMassToOwner()

@@ -184,25 +184,42 @@ bool UInputVolume::TryConsumeOverlappingActor(AActor* OverlappingActor)
 	}
 
 	UMaterialComponent* ResourceComponent = OverlappingActor->FindComponentByClass<UMaterialComponent>();
-	if (!ResourceComponent)
-	{
-		return false;
-	}
-
-	UPrimitiveComponent* SourcePrimitive = ResolveResourceSourcePrimitive(OverlappingActor);
-
+	const bool bRecipeReferencesActorClass = MachineComponent->IsItemClassReferencedByAnyRecipe(OverlappingActor->GetClass());
 	TMap<FName, int32> ActorResourcesScaled;
-	if (!ResourceComponent->BuildResolvedResourceQuantitiesScaled(SourcePrimitive, ActorResourcesScaled))
+	if (!ResourceComponent && !bRecipeReferencesActorClass)
 	{
 		return false;
 	}
 
-	if (!MachineComponent->AddInputResourcesScaledAtomic(ActorResourcesScaled))
+	if (ResourceComponent)
+	{
+		UPrimitiveComponent* SourcePrimitive = ResolveResourceSourcePrimitive(OverlappingActor);
+		ResourceComponent->BuildResolvedResourceQuantitiesScaled(SourcePrimitive, ActorResourcesScaled);
+	}
+
+	if (ActorResourcesScaled.Num() > 0)
+	{
+		if (!MachineComponent->AddInputResourcesScaledAtomic(ActorResourcesScaled))
+		{
+			return false;
+		}
+
+		// Material actors don't currently support partial depletion updates, so destroy on accepted intake.
+		OverlappingActor->Destroy();
+		return true;
+	}
+
+	if (!bRecipeReferencesActorClass)
 	{
 		return false;
 	}
 
-	// Resource actors don't currently support per-resource depletion updates, so we destroy on full intake.
+	if (!MachineComponent->AddInputActorContentsScaledAtomic(OverlappingActor, {}))
+	{
+		return false;
+	}
+
+	// Item blueprints don't currently support partial depletion updates, so destroy on accepted intake.
 	OverlappingActor->Destroy();
 	return true;
 }
