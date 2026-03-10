@@ -7,6 +7,7 @@
 #include "Factory/FactoryWorldConfig.h"
 #include "Material/MaterialDefinitionAsset.h"
 #include "Material/AgentResourceTypes.h"
+#include "PhysicsEngine/BodyInstance.h"
 #include "UObject/UObjectIterator.h"
 
 namespace
@@ -65,6 +66,31 @@ UMaterialDefinitionAsset* FindMaterialDefinitionById(FName ResourceId)
 	}
 
 	return nullptr;
+}
+
+float ResolvePrimitiveMassKgWithoutPhysicsWarning(const UPrimitiveComponent* PrimitiveComponent)
+{
+	if (!PrimitiveComponent)
+	{
+		return 0.0f;
+	}
+
+	if (const FBodyInstance* BodyInstance = PrimitiveComponent->GetBodyInstance())
+	{
+		const float BodyMassKg = BodyInstance->GetBodyMass();
+		if (BodyMassKg > KINDA_SMALL_NUMBER)
+		{
+			return FMath::Max(0.0f, BodyMassKg);
+		}
+	}
+
+	// GetMass() logs warnings when simulation is disabled.
+	if (PrimitiveComponent->IsSimulatingPhysics())
+	{
+		return FMath::Max(0.0f, PrimitiveComponent->GetMass());
+	}
+
+	return 0.0f;
 }
 }
 
@@ -136,7 +162,7 @@ bool UMaterialComponent::HasMaterialEntries() const
 
 float UMaterialComponent::ResolveEffectiveMassKg(const UPrimitiveComponent* SourcePrimitive) const
 {
-	return SourcePrimitive ? FMath::Max(0.0f, SourcePrimitive->GetMass()) : 0.0f;
+	return ResolvePrimitiveMassKgWithoutPhysicsWarning(SourcePrimitive);
 }
 
 void UMaterialComponent::InitializeRuntimeResourceState(UPrimitiveComponent* SourcePrimitive)
@@ -510,7 +536,7 @@ float UMaterialComponent::ResolveBaseMassKgForFormula(UPrimitiveComponent* Sourc
 
 	if (!bBaseMassResolved)
 	{
-		CachedBaseMassKg = FMath::Max(0.0f, SourcePrimitive->GetMass());
+		CachedBaseMassKg = ResolvePrimitiveMassKgWithoutPhysicsWarning(SourcePrimitive);
 		bBaseMassResolved = true;
 	}
 

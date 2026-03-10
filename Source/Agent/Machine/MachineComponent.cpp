@@ -10,6 +10,7 @@
 #include "Material/RecipeAsset.h"
 #include "UObject/UObjectIterator.h"
 #include "EngineUtils.h"
+#include "PhysicsEngine/BodyInstance.h"
 #include <limits>
 
 namespace
@@ -57,6 +58,31 @@ FString ResolveItemClassDisplayName(const TSubclassOf<AActor>& ItemClass)
 
 	return TEXT("Item");
 }
+
+float ResolvePrimitiveMassKgWithoutPhysicsWarning(const UPrimitiveComponent* PrimitiveComponent)
+{
+	if (!PrimitiveComponent)
+	{
+		return 0.0f;
+	}
+
+	if (const FBodyInstance* BodyInstance = PrimitiveComponent->GetBodyInstance())
+	{
+		const float BodyMassKg = BodyInstance->GetBodyMass();
+		if (BodyMassKg > KINDA_SMALL_NUMBER)
+		{
+			return FMath::Max(0.0f, BodyMassKg);
+		}
+	}
+
+	// GetMass() logs warnings when simulation is disabled.
+	if (PrimitiveComponent->IsSimulatingPhysics())
+	{
+		return FMath::Max(0.0f, PrimitiveComponent->GetMass());
+	}
+
+	return 0.0f;
+}
 }
 
 UMachineComponent::UMachineComponent()
@@ -78,7 +104,7 @@ void UMachineComponent::BeginPlay()
 		CachedOwnerPrimitive = Cast<UPrimitiveComponent>(OwnerActor->GetRootComponent());
 		if (CachedOwnerPrimitive)
 		{
-			CachedOwnerBaseMassKg = FMath::Max(0.0f, CachedOwnerPrimitive->GetMass());
+			CachedOwnerBaseMassKg = ResolvePrimitiveMassKgWithoutPhysicsWarning(CachedOwnerPrimitive);
 		}
 	}
 
@@ -1365,7 +1391,7 @@ void UMachineComponent::ApplyStoredMassToOwner()
 
 	if (CachedOwnerBaseMassKg <= KINDA_SMALL_NUMBER)
 	{
-		CachedOwnerBaseMassKg = FMath::Max(0.0f, CachedOwnerPrimitive->GetMass());
+		CachedOwnerBaseMassKg = ResolvePrimitiveMassKgWithoutPhysicsWarning(CachedOwnerPrimitive);
 	}
 
 	const float FinalMassKg = FMath::Max(0.01f, CachedOwnerBaseMassKg + ComputeStoredMassKg() * FMath::Max(0.0f, StoredMassMultiplier));
