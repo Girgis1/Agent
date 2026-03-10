@@ -49,7 +49,7 @@ TSubclassOf<AActor> ResolveRecipeOutputClassOverride(FName ResourceId)
 	return LoadedClass;
 }
 
-FResourceAmount GetResolvedPayloadAmount(const AFactoryPayloadActor* PayloadActor)
+FResourceAmount GetResolvedBackpackPayloadAmount(const AFactoryPayloadActor* PayloadActor)
 {
 	if (!PayloadActor)
 	{
@@ -413,7 +413,7 @@ bool UBlackHoleBackpackLinkComponent::BuildTeleportItemFromActor(AActor* SourceA
 	bool bHasMaterialOrPayloadData = false;
 	if (const AFactoryPayloadActor* PayloadActor = Cast<AFactoryPayloadActor>(SourceActor))
 	{
-		const FResourceAmount PayloadAmount = GetResolvedPayloadAmount(PayloadActor);
+		const FResourceAmount PayloadAmount = GetResolvedBackpackPayloadAmount(PayloadActor);
 		if (PayloadAmount.HasQuantity())
 		{
 			OutQueuedItem.ResourceQuantitiesScaled.FindOrAdd(PayloadAmount.ResourceId) += PayloadAmount.GetScaledQuantity();

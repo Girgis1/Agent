@@ -6,6 +6,7 @@
 #include "Components/PointLightComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "Machine/InputVolume.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -71,9 +72,11 @@ void ABlackHoleBackpackActor::BeginPlay()
 	if (BackpackBattery)
 	{
 		BackpackBattery->OnBatteryDepleted.AddDynamic(this, &ABlackHoleBackpackActor::HandlePortalBatteryDepleted);
+		BackpackBattery->OnBatteryChargeChanged.AddDynamic(this, &ABlackHoleBackpackActor::HandlePortalBatteryChargeChanged);
 	}
 
 	bPortalEnabled = bStartPortalEnabled;
+	InitializeAccessoryChargeMaterialInstances();
 	RefreshPortalStateVisuals();
 
 	SetDeployedState(bStartDeployed);
@@ -93,6 +96,7 @@ void ABlackHoleBackpackActor::BeginPlay()
 
 	SetPortalEnabled(bPortalEnabled);
 	HandleDeploymentStateChanged(IsItemDeployed());
+	RefreshAccessoryChargeMaterialState();
 }
 
 void ABlackHoleBackpackActor::AttachToCarrier(USceneComponent* CarrierComponent, FName SocketName, const FTransform& FineTuneOffset)
@@ -180,6 +184,7 @@ void ABlackHoleBackpackActor::SetPortalEnabled(bool bInEnabled)
 	RefreshIntakeVolumeState();
 	UpdatePortalBatteryRuntimeState();
 	RefreshPortalStateVisuals();
+	RefreshAccessoryChargeMaterialState();
 }
 
 void ABlackHoleBackpackActor::TogglePortalEnabled()
@@ -348,6 +353,82 @@ void ABlackHoleBackpackActor::UpdatePortalBatteryRuntimeState()
 void ABlackHoleBackpackActor::HandlePortalBatteryDepleted()
 {
 	SetPortalEnabled(false);
+}
+
+void ABlackHoleBackpackActor::HandlePortalBatteryChargeChanged(float NewCharge)
+{
+	(void)NewCharge;
+	RefreshAccessoryChargeMaterialState();
+}
+
+void ABlackHoleBackpackActor::InitializeAccessoryChargeMaterialInstances()
+{
+	AccessoryChargeMaterialInstances.Reset();
+	if (!bUseAccessoryChargeMaterial || !ItemMesh)
+	{
+		return;
+	}
+
+	const TArray<FName> MaterialSlotNames = ItemMesh->GetMaterialSlotNames();
+	const int32 MaterialCount = ItemMesh->GetNumMaterials();
+	for (int32 MaterialIndex = 0; MaterialIndex < MaterialCount; ++MaterialIndex)
+	{
+		const FName SlotName = MaterialSlotNames.IsValidIndex(MaterialIndex) ? MaterialSlotNames[MaterialIndex] : NAME_None;
+		if (AccessoryChargeMaterialSlotName != NAME_None && SlotName != AccessoryChargeMaterialSlotName)
+		{
+			continue;
+		}
+
+		UMaterialInstanceDynamic* DynamicMaterial = ItemMesh->CreateAndSetMaterialInstanceDynamic(MaterialIndex);
+		if (DynamicMaterial)
+		{
+			AccessoryChargeMaterialInstances.AddUnique(DynamicMaterial);
+		}
+	}
+}
+
+bool ABlackHoleBackpackActor::IsBackpackCharging() const
+{
+	if (!BackpackBattery || !BackpackBattery->IsBatteryEnabled())
+	{
+		return false;
+	}
+
+	return !bPortalEnabled
+		&& !BackpackBattery->IsFullyCharged()
+		&& BackpackBattery->GetChargeRatePerSecond() > KINDA_SMALL_NUMBER;
+}
+
+void ABlackHoleBackpackActor::RefreshAccessoryChargeMaterialState()
+{
+	if (!bUseAccessoryChargeMaterial || AccessoryChargeMaterialInstances.Num() == 0)
+	{
+		return;
+	}
+
+	const bool bCharging = IsBackpackCharging();
+	const FLinearColor EmissiveColor = bCharging ? AccessoryChargingEmissiveColor : AccessoryIdleEmissiveColor;
+	const float EmissiveIntensity = bCharging
+		? FMath::Max(0.0f, AccessoryChargingEmissiveIntensity)
+		: FMath::Max(0.0f, AccessoryIdleEmissiveIntensity);
+
+	for (UMaterialInstanceDynamic* DynamicMaterial : AccessoryChargeMaterialInstances)
+	{
+		if (!IsValid(DynamicMaterial))
+		{
+			continue;
+		}
+
+		if (AccessoryEmissiveColorParameterName != NAME_None)
+		{
+			DynamicMaterial->SetVectorParameterValue(AccessoryEmissiveColorParameterName, EmissiveColor);
+		}
+
+		if (AccessoryEmissiveIntensityParameterName != NAME_None)
+		{
+			DynamicMaterial->SetScalarParameterValue(AccessoryEmissiveIntensityParameterName, EmissiveIntensity);
+		}
+	}
 }
 
 void ABlackHoleBackpackActor::RefreshPortalStateVisuals()
