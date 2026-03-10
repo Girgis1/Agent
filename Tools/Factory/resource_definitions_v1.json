@@ -1,127 +1,127 @@
 [
   {
     "asset_name": "DA_Resource_Biomass",
-    "resource_id": "Biomass",
+    "material_id": "Biomass",
     "display_name": "Biomass",
     "mass_per_unit_kg": 1.0
   },
   {
     "asset_name": "DA_Resource_Wood",
-    "resource_id": "Wood",
+    "material_id": "Wood",
     "display_name": "Wood",
     "mass_per_unit_kg": 0.9
   },
   {
     "asset_name": "DA_Resource_Paper",
-    "resource_id": "Paper",
+    "material_id": "Paper",
     "display_name": "Paper",
     "mass_per_unit_kg": 0.5
   },
   {
     "asset_name": "DA_Resource_Textile",
-    "resource_id": "Textile",
+    "material_id": "Textile",
     "display_name": "Textile",
     "mass_per_unit_kg": 0.6
   },
   {
     "asset_name": "DA_Resource_Plastic",
-    "resource_id": "Plastic",
+    "material_id": "Plastic",
     "display_name": "Plastic",
     "mass_per_unit_kg": 1.2
   },
   {
     "asset_name": "DA_Resource_Rubber",
-    "resource_id": "Rubber",
+    "material_id": "Rubber",
     "display_name": "Rubber",
     "mass_per_unit_kg": 1.4
   },
   {
     "asset_name": "DA_Resource_Glass",
-    "resource_id": "Glass",
+    "material_id": "Glass",
     "display_name": "Glass",
     "mass_per_unit_kg": 3.2
   },
   {
     "asset_name": "DA_Resource_Sand",
-    "resource_id": "Sand",
+    "material_id": "Sand",
     "display_name": "Sand",
     "mass_per_unit_kg": 2.1
   },
   {
     "asset_name": "DA_Resource_Stone",
-    "resource_id": "Stone",
+    "material_id": "Stone",
     "display_name": "Stone",
     "mass_per_unit_kg": 3.4
   },
   {
     "asset_name": "DA_Resource_Concrete",
-    "resource_id": "Concrete",
+    "material_id": "Concrete",
     "display_name": "Concrete",
     "mass_per_unit_kg": 3.0
   },
   {
     "asset_name": "DA_Resource_Ceramic",
-    "resource_id": "Ceramic",
+    "material_id": "Ceramic",
     "display_name": "Ceramic",
     "mass_per_unit_kg": 3.1
   },
   {
     "asset_name": "DA_Resource_Coal",
-    "resource_id": "Coal",
+    "material_id": "Coal",
     "display_name": "Coal",
     "mass_per_unit_kg": 1.7
   },
   {
     "asset_name": "DA_Resource_Aluminum",
-    "resource_id": "Aluminum",
+    "material_id": "Aluminum",
     "display_name": "Aluminum",
     "mass_per_unit_kg": 3.4
   },
   {
     "asset_name": "DA_Resource_IronOre",
-    "resource_id": "IronOre",
+    "material_id": "IronOre",
     "display_name": "Iron Ore",
     "mass_per_unit_kg": 10.0
   },
   {
     "asset_name": "DA_Resource_IronBar",
-    "resource_id": "IronBar",
+    "material_id": "IronBar",
     "display_name": "Iron Bar",
     "mass_per_unit_kg": 10.0
   },
   {
     "asset_name": "DA_Resource_Steel",
-    "resource_id": "Steel",
+    "material_id": "Steel",
     "display_name": "Steel",
     "mass_per_unit_kg": 10.0
   },
   {
     "asset_name": "DA_Resource_Copper",
-    "resource_id": "Copper",
+    "material_id": "Copper",
     "display_name": "Copper",
     "mass_per_unit_kg": 14.5
   },
   {
     "asset_name": "DA_Resource_Nickel",
-    "resource_id": "Nickel",
+    "material_id": "Nickel",
     "display_name": "Nickel",
     "mass_per_unit_kg": 11.3
   },
   {
     "asset_name": "DA_Resource_Lead",
-    "resource_id": "Lead",
+    "material_id": "Lead",
     "display_name": "Lead",
     "mass_per_unit_kg": 14.4
   },
   {
     "asset_name": "DA_Resource_Silicon",
-    "resource_id": "Silicon",
+    "material_id": "Silicon",
     "display_name": "Silicon",
     "mass_per_unit_kg": 3.0
   },
   {
     "asset_name": "DA_Resource_Lithium",
-    "resource_id": "Lithium",
+    "material_id": "Lithium",
     "display_name": "Lithium",
     "mass_per_unit_kg": 0.7
   }

@@ -63,6 +63,17 @@ void UAtomiserOutputVolume::SetOutputArrow(UArrowComponent* InOutputArrow)
 	OutputArrow = InOutputArrow;
 }
 
+void UAtomiserOutputVolume::SetOutputPureMaterials(bool bInOutputPureMaterials)
+{
+	if (bOutputPureMaterials == bInOutputPureMaterials)
+	{
+		return;
+	}
+
+	bOutputPureMaterials = bInOutputPureMaterials;
+	RebuildResourceOutputClassLookup();
+}
+
 bool UAtomiserOutputVolume::EmitOnce()
 {
 	if (!bEnabled)
@@ -360,12 +371,12 @@ TSubclassOf<AActor> UAtomiserOutputVolume::ResolveSpawnClassForResource(FName Re
 	for (TObjectIterator<UMaterialDefinitionAsset> It; It; ++It)
 	{
 		const UMaterialDefinitionAsset* ResourceDefinition = *It;
-		if (!ResourceDefinition || ResourceDefinition->GetResolvedResourceId() != ResourceId)
+		if (!ResourceDefinition || ResourceDefinition->GetResolvedMaterialId() != ResourceId)
 		{
 			continue;
 		}
 
-		if (const TSubclassOf<AActor> ResourceOutputClass = ResourceDefinition->ResolveOutputActorClass())
+		if (const TSubclassOf<AActor> ResourceOutputClass = ResourceDefinition->ResolveOutputActorClass(bOutputPureMaterials ? EMaterialOutputForm::Pure : EMaterialOutputForm::Raw))
 		{
 			ResourceOutputActorClassById.Add(ResourceId, ResourceOutputClass);
 			return ResourceOutputClass;
@@ -389,13 +400,13 @@ void UAtomiserOutputVolume::RebuildResourceOutputClassLookup()
 			continue;
 		}
 
-		const FName ResourceId = ResourceDefinition->GetResolvedResourceId();
+		const FName ResourceId = ResourceDefinition->GetResolvedMaterialId();
 		if (ResourceId.IsNone())
 		{
 			continue;
 		}
 
-		if (const TSubclassOf<AActor> ResourceOutputClass = ResourceDefinition->ResolveOutputActorClass())
+		if (const TSubclassOf<AActor> ResourceOutputClass = ResourceDefinition->ResolveOutputActorClass(bOutputPureMaterials ? EMaterialOutputForm::Pure : EMaterialOutputForm::Raw))
 		{
 			ResourceOutputActorClassById.Add(ResourceId, ResourceOutputClass);
 		}

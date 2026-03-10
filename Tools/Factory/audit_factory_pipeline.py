@@ -8,6 +8,7 @@ MACHINE_BLUEPRINTS = [
     "/Game/Factory/BP_Shredder",
     "/Game/Factory/BP_Atomiser_Input",
     "/Game/Factory/BP_Atomiser_Output",
+    "/Game/Factory/BP_Compactor",
 ]
 
 OUTPUT_PATH = "Saved/FactoryPipelineAudit.json"
@@ -139,10 +140,14 @@ def _collect_material_assets():
         rows.append(
             {
                 "path": material.get_path_name(),
-                "resource_id": _safe_text(_safe_get(material, "resource_id")),
+                "material_id": _safe_text(_safe_get(material, "material_id")),
                 "display_name": _safe_text(_safe_get(material, "display_name")),
                 "mass_per_unit_kg": _safe_get(material, "mass_per_unit_kg"),
-                "output_actor_class": _safe_text(_safe_get(material, "output_actor_class")),
+                "color_id": _safe_text(_safe_get(material, "color_id")),
+                "visual_color": _safe_text(_safe_get(material, "visual_color")),
+                "visual_material": _safe_text(_safe_get(material, "visual_material")),
+                "raw_output_actor_class": _safe_text(_safe_get(material, "raw_output_actor_class")),
+                "pure_output_actor_class": _safe_text(_safe_get(material, "pure_output_actor_class")),
             }
         )
 
@@ -150,11 +155,43 @@ def _collect_material_assets():
     return rows
 
 
+def _build_validation_report(material_rows):
+    duplicate_color_ids = {}
+    missing_material_id = []
+    missing_raw_output = []
+    missing_pure_output = []
+
+    for row in material_rows:
+        material_id = (row.get("material_id") or "").strip()
+        if material_id in ("", "None", "NAME_None"):
+            missing_material_id.append(row["path"])
+
+        color_id = (row.get("color_id") or "").strip()
+        if color_id and color_id not in ("None", "NAME_None"):
+            duplicate_color_ids.setdefault(color_id, []).append(row["path"])
+
+        if row.get("raw_output_actor_class", "").strip() in ("", "None"):
+            missing_raw_output.append(row["path"])
+
+        if row.get("pure_output_actor_class", "").strip() in ("", "None"):
+            missing_pure_output.append(row["path"])
+
+    duplicate_color_ids = {k: v for k, v in duplicate_color_ids.items() if len(v) > 1}
+    return {
+        "duplicate_color_ids": duplicate_color_ids,
+        "missing_material_id": sorted(missing_material_id),
+        "missing_raw_output_actor_class": sorted(missing_raw_output),
+        "missing_pure_output_actor_class": sorted(missing_pure_output),
+    }
+
+
 def main():
+    material_rows = _collect_material_assets()
     report = {
         "machines": [_dump_machine_blueprint(path) for path in MACHINE_BLUEPRINTS],
         "recipes": _collect_recipe_assets(),
-        "materials": _collect_material_assets(),
+        "materials": material_rows,
+        "validation": _build_validation_report(material_rows),
     }
 
     project_dir = unreal.Paths.project_dir()

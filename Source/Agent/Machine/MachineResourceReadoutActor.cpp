@@ -505,7 +505,7 @@ FText AMachineResourceReadoutActor::ResolveResourceLabel(FName ResourceId) const
 	for (TObjectIterator<UMaterialDefinitionAsset> It; It; ++It)
 	{
 		const UMaterialDefinitionAsset* MaterialDefinition = *It;
-		if (!MaterialDefinition || MaterialDefinition->GetResolvedResourceId() != ResourceId)
+		if (!MaterialDefinition || MaterialDefinition->GetResolvedMaterialId() != ResourceId)
 		{
 			continue;
 		}

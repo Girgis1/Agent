@@ -47,6 +47,25 @@ UPrimitiveComponent* ResolveOwnerSourcePrimitive(AActor* OwnerActor)
 
 	return FirstUsablePrimitive;
 }
+
+UMaterialDefinitionAsset* FindMaterialDefinitionById(FName ResourceId)
+{
+	if (ResourceId.IsNone())
+	{
+		return nullptr;
+	}
+
+	for (TObjectIterator<UMaterialDefinitionAsset> It; It; ++It)
+	{
+		UMaterialDefinitionAsset* Candidate = *It;
+		if (Candidate && Candidate->GetResolvedMaterialId() == ResourceId)
+		{
+			return Candidate;
+		}
+	}
+
+	return nullptr;
+}
 }
 
 bool FMaterialEntry::IsUsable() const
@@ -153,17 +172,7 @@ bool UMaterialComponent::ConfigureSingleResourceById(FName ResourceId, int32 Qua
 		return false;
 	}
 
-	UMaterialDefinitionAsset* MatchedResource = nullptr;
-	for (TObjectIterator<UMaterialDefinitionAsset> It; It; ++It)
-	{
-		UMaterialDefinitionAsset* Candidate = *It;
-		if (Candidate && Candidate->GetResolvedResourceId() == SafeResourceId)
-		{
-			MatchedResource = Candidate;
-			break;
-		}
-	}
-
+	UMaterialDefinitionAsset* MatchedResource = FindMaterialDefinitionById(SafeResourceId);
 	if (!MatchedResource)
 	{
 		return false;
@@ -184,6 +193,77 @@ bool UMaterialComponent::ConfigureSingleResourceById(FName ResourceId, int32 Qua
 
 	Materials.Reset();
 	Materials.Add(ResourceEntry);
+	bUseRandomizedContents = false;
+	ChosenMaterialCountMin = 1;
+	ChosenMaterialCountMax = 1;
+	TotalUnitsMin = 0.0f;
+	TotalUnitsMax = 0.0f;
+
+	ResetGeneratedContents();
+	if (UPrimitiveComponent* SourcePrimitive = ResolveOwnerSourcePrimitive(GetOwner()))
+	{
+		InitializeRuntimeResourceState(SourcePrimitive);
+	}
+	else
+	{
+		ResolveGeneratedContents(nullptr);
+	}
+
+	return true;
+}
+
+bool UMaterialComponent::ConfigureResourcesById(const TMap<FName, int32>& ResourceQuantitiesScaled)
+{
+	if (ResourceQuantitiesScaled.Num() == 0)
+	{
+		return false;
+	}
+
+	TArray<FMaterialEntry> ResolvedEntries;
+	ResolvedEntries.Reserve(ResourceQuantitiesScaled.Num());
+
+	TArray<FName> ResourceIds;
+	ResourceQuantitiesScaled.GetKeys(ResourceIds);
+	ResourceIds.Sort([](const FName& Left, const FName& Right)
+	{
+		return Left.LexicalLess(Right);
+	});
+
+	for (const FName& ResourceId : ResourceIds)
+	{
+		const int32 QuantityScaled = FMath::Max(0, ResourceQuantitiesScaled.FindRef(ResourceId));
+		if (ResourceId.IsNone() || QuantityScaled <= 0)
+		{
+			continue;
+		}
+
+		UMaterialDefinitionAsset* MatchedResource = FindMaterialDefinitionById(ResourceId);
+		if (!MatchedResource)
+		{
+			continue;
+		}
+
+		const float QuantityUnits = AgentResource::ScaledToUnits(QuantityScaled);
+		if (QuantityUnits <= KINDA_SMALL_NUMBER)
+		{
+			continue;
+		}
+
+		FMaterialEntry ResourceEntry;
+		ResourceEntry.Material = MatchedResource;
+		ResourceEntry.bUseRange = false;
+		ResourceEntry.Units = QuantityUnits;
+		ResourceEntry.MinUnits = QuantityUnits;
+		ResourceEntry.MaxUnits = QuantityUnits;
+		ResolvedEntries.Add(ResourceEntry);
+	}
+
+	if (ResolvedEntries.Num() == 0)
+	{
+		return false;
+	}
+
+	Materials = MoveTemp(ResolvedEntries);
 	bUseRandomizedContents = false;
 	ChosenMaterialCountMin = 1;
 	ChosenMaterialCountMax = 1;
@@ -380,7 +460,7 @@ void UMaterialComponent::AppendResolvedResource(const UMaterialDefinitionAsset* 
 		return;
 	}
 
-	const FName ResourceId = ResourceAsset->GetResolvedResourceId();
+	const FName ResourceId = ResourceAsset->GetResolvedMaterialId();
 	if (ResourceId.IsNone())
 	{
 		return;

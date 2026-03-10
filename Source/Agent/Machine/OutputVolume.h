@@ -24,8 +24,18 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Machine|Output")
 	void SetOutputArrow(UArrowComponent* InOutputArrow);
 
+	UFUNCTION(BlueprintCallable, Category="Machine|Output")
+	void SetOutputPureMaterials(bool bInOutputPureMaterials);
+
 	int32 QueueResourceScaled(FName ResourceId, int32 QuantityScaled, TSubclassOf<AActor> OutputActorClassOverride);
 	int32 QueueResourceScaled(FName ResourceId, int32 QuantityScaled);
+	bool QueueMixedMaterialScaled(
+		const TMap<FName, int32>& CompositionScaled,
+		TSubclassOf<AActor> OutputActorClassOverride,
+		float MinUnitsForScale = 1.0f,
+		float MaxUnitsForScale = 10.0f,
+		float MinVisualScale = 0.5f,
+		float MaxVisualScale = 1.5f);
 
 	UFUNCTION(BlueprintCallable, Category="Machine|Output")
 	void QueueResourceUnits(FName ResourceId, int32 QuantityUnits);
@@ -34,6 +44,16 @@ public:
 	float GetPendingUnits(FName ResourceId) const;
 
 protected:
+	struct FMixedMaterialOutputRequest
+	{
+		TMap<FName, int32> CompositionScaled;
+		TSubclassOf<AActor> OutputActorClassOverride;
+		float MinUnitsForScale = 1.0f;
+		float MaxUnitsForScale = 10.0f;
+		float MinVisualScale = 0.5f;
+		float MaxVisualScale = 1.5f;
+	};
+
 	bool ResolveOutputArrow();
 	FVector GetSpawnLocation() const;
 	FRotator GetSpawnRotation() const;
@@ -52,6 +72,8 @@ protected:
 	UPROPERTY(Transient)
 	TMap<FName, TSubclassOf<AActor>> PendingOutputActorClassOverrideById;
 
+	TArray<FMixedMaterialOutputRequest> PendingMixedMaterialOutputs;
+
 public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Output")
 	bool bEnabled = true;
@@ -67,6 +89,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Output")
 	TSubclassOf<AFactoryPayloadActor> PayloadActorClass;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Output")
+	bool bOutputPureMaterials = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Output")
 	FVector LocalSpawnOffset = FVector::ZeroVector;

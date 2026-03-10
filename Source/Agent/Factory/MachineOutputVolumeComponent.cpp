@@ -151,12 +151,12 @@ TSubclassOf<AActor> UMachineOutputVolumeComponent::ResolveSpawnClassForResource(
 	for (TObjectIterator<UMaterialDefinitionAsset> It; It; ++It)
 	{
 		const UMaterialDefinitionAsset* MaterialDefinition = *It;
-		if (!MaterialDefinition || MaterialDefinition->GetResolvedResourceId() != ResourceId)
+		if (!MaterialDefinition || MaterialDefinition->GetResolvedMaterialId() != ResourceId)
 		{
 			continue;
 		}
 
-		if (const TSubclassOf<AActor> OutputActorClass = MaterialDefinition->ResolveOutputActorClass())
+		if (const TSubclassOf<AActor> OutputActorClass = MaterialDefinition->ResolveOutputActorClass(bOutputPureMaterials ? EMaterialOutputForm::Pure : EMaterialOutputForm::Raw))
 		{
 			ResourceOutputActorClassById.Add(ResourceId, OutputActorClass);
 			return OutputActorClass;
@@ -180,13 +180,13 @@ void UMachineOutputVolumeComponent::RebuildResourceOutputClassLookup()
 			continue;
 		}
 
-		const FName ResourceId = MaterialDefinition->GetResolvedResourceId();
+		const FName ResourceId = MaterialDefinition->GetResolvedMaterialId();
 		if (ResourceId.IsNone())
 		{
 			continue;
 		}
 
-		if (const TSubclassOf<AActor> OutputActorClass = MaterialDefinition->ResolveOutputActorClass())
+		if (const TSubclassOf<AActor> OutputActorClass = MaterialDefinition->ResolveOutputActorClass(bOutputPureMaterials ? EMaterialOutputForm::Pure : EMaterialOutputForm::Raw))
 		{
 			ResourceOutputActorClassById.Add(ResourceId, OutputActorClass);
 		}

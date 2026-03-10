@@ -46,10 +46,67 @@ def _load_or_create_material_asset(asset_name: str, material_class):
     return created_asset, True
 
 
+def _safe_set(asset, prop: str, value):
+    try:
+        asset.set_editor_property(prop, value)
+        return True
+    except Exception:
+        return False
+
+
+def _load_actor_class(path: str):
+    if not path:
+        return None
+
+    actor_class = unreal.EditorAssetLibrary.load_blueprint_class(path)
+    if actor_class:
+        return actor_class
+
+    try:
+        actor_class = unreal.load_class(None, path)
+    except Exception:
+        actor_class = None
+    return actor_class
+
+
+def _parse_linear_color(raw_value):
+    if isinstance(raw_value, dict):
+        return unreal.LinearColor(
+            float(raw_value.get("r", raw_value.get("R", 1.0))),
+            float(raw_value.get("g", raw_value.get("G", 1.0))),
+            float(raw_value.get("b", raw_value.get("B", 1.0))),
+            float(raw_value.get("a", raw_value.get("A", 1.0))),
+        )
+
+    if isinstance(raw_value, (list, tuple)) and len(raw_value) >= 3:
+        alpha = float(raw_value[3]) if len(raw_value) > 3 else 1.0
+        return unreal.LinearColor(float(raw_value[0]), float(raw_value[1]), float(raw_value[2]), alpha)
+
+    return None
+
+
 def _apply_material_fields(asset, entry):
-    asset.set_editor_property("resource_id", unreal.Name(entry["resource_id"]))
-    asset.set_editor_property("display_name", entry["display_name"])
-    asset.set_editor_property("mass_per_unit_kg", float(entry["mass_per_unit_kg"]))
+    resolved_material_id = entry.get("material_id", entry["asset_name"])
+    _safe_set(asset, "material_id", unreal.Name(resolved_material_id))
+    _safe_set(asset, "display_name", entry["display_name"])
+    _safe_set(asset, "mass_per_unit_kg", float(entry["mass_per_unit_kg"]))
+
+    color_id = entry.get("color_id", resolved_material_id)
+    if color_id:
+        _safe_set(asset, "color_id", unreal.Name(color_id))
+
+    visual_color = _parse_linear_color(entry.get("visual_color"))
+    if visual_color is not None:
+        _safe_set(asset, "visual_color", visual_color)
+        _safe_set(asset, "debug_color", visual_color)
+
+    raw_output_class = _load_actor_class(entry.get("raw_output_actor_class", ""))
+    if raw_output_class:
+        _safe_set(asset, "raw_output_actor_class", raw_output_class)
+
+    pure_output_class = _load_actor_class(entry.get("pure_output_actor_class", ""))
+    if pure_output_class:
+        _safe_set(asset, "pure_output_actor_class", pure_output_class)
 
 
 def main():

@@ -47,7 +47,7 @@ bool FRecipeMaterialInputEntry::IsItemBlueprintInput() const
 
 FName FRecipeMaterialInputEntry::GetResolvedMaterialId() const
 {
-	return Material ? Material->GetResolvedResourceId() : NAME_None;
+	return Material ? Material->GetResolvedMaterialId() : NAME_None;
 }
 
 TSubclassOf<AActor> FRecipeMaterialInputEntry::ResolveItemActorClass() const
@@ -92,7 +92,7 @@ void FRecipeMaterialInputEntry::BuildResolvedWhitelist(TSet<FName>& OutWhitelist
 			continue;
 		}
 
-		const FName ResourceId = MaterialDefinition->GetResolvedResourceId();
+		const FName ResourceId = MaterialDefinition->GetResolvedMaterialId();
 		if (!ResourceId.IsNone())
 		{
 			OutWhitelistMaterialIds.Add(ResourceId);
@@ -116,7 +116,7 @@ void FRecipeMaterialInputEntry::BuildResolvedBlacklist(TSet<FName>& OutBlacklist
 			continue;
 		}
 
-		const FName ResourceId = MaterialDefinition->GetResolvedResourceId();
+		const FName ResourceId = MaterialDefinition->GetResolvedMaterialId();
 		if (!ResourceId.IsNone())
 		{
 			OutBlacklistMaterialIds.Add(ResourceId);

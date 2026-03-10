@@ -83,6 +83,11 @@ void UMachineComponent::BeginPlay()
 	}
 
 	ApplyStoredMassToOwner();
+
+	if (OutputVolume)
+	{
+		OutputVolume->SetOutputPureMaterials(bOutputPureMaterials);
+	}
 }
 
 void UMachineComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
@@ -90,6 +95,10 @@ void UMachineComponent::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
 	ResolveMachineVolumes();
+	if (OutputVolume)
+	{
+		OutputVolume->SetOutputPureMaterials(bOutputPureMaterials);
+	}
 	FlushPendingOutput();
 
 	if (!bEnabled)
@@ -329,6 +338,45 @@ bool UMachineComponent::IsItemClassReferencedByAnyRecipe(const UClass* ItemActor
 	return false;
 }
 
+bool UMachineComponent::ConsumeStoredResourcesScaledAtomic(const TMap<FName, int32>& ResourceQuantitiesScaled)
+{
+	if (ResourceQuantitiesScaled.Num() == 0)
+	{
+		return false;
+	}
+
+	TMap<FName, int32> WorkingResources = StoredResourcesScaled;
+	int32 WorkingTotalScaled = TotalStoredScaled;
+
+	for (const TPair<FName, int32>& Pair : ResourceQuantitiesScaled)
+	{
+		const FName ResourceId = Pair.Key;
+		const int32 QuantityScaled = FMath::Max(0, Pair.Value);
+		if (ResourceId.IsNone() || QuantityScaled <= 0)
+		{
+			return false;
+		}
+
+		int32* FoundQuantityScaled = WorkingResources.Find(ResourceId);
+		if (!FoundQuantityScaled || *FoundQuantityScaled < QuantityScaled)
+		{
+			return false;
+		}
+
+		*FoundQuantityScaled = FMath::Max(0, *FoundQuantityScaled - QuantityScaled);
+		WorkingTotalScaled = FMath::Max(0, WorkingTotalScaled - QuantityScaled);
+		if (*FoundQuantityScaled == 0)
+		{
+			WorkingResources.Remove(ResourceId);
+		}
+	}
+
+	StoredResourcesScaled = MoveTemp(WorkingResources);
+	TotalStoredScaled = WorkingTotalScaled;
+	ApplyStoredMassToOwner();
+	return true;
+}
+
 bool UMachineComponent::AddInputContentsScaledAtomic(
 	const TMap<FName, int32>& ResourceQuantitiesScaled,
 	const TMap<FName, int32>& ItemCountsByClassKey,
@@ -467,6 +515,33 @@ float UMachineComponent::GetStoredMassKg() const
 	return ComputeStoredMassKg();
 }
 
+void UMachineComponent::GetStoredResourceSnapshot(TArray<FResourceStorageEntry>& OutEntries) const
+{
+	OutEntries.Reset();
+
+	TArray<FName> ResourceIds;
+	StoredResourcesScaled.GetKeys(ResourceIds);
+	ResourceIds.Sort([](const FName& Left, const FName& Right)
+	{
+		return Left.LexicalLess(Right);
+	});
+
+	for (const FName& ResourceId : ResourceIds)
+	{
+		const int32 QuantityScaled = FMath::Max(0, StoredResourcesScaled.FindRef(ResourceId));
+		if (ResourceId.IsNone() || QuantityScaled <= 0)
+		{
+			continue;
+		}
+
+		FResourceStorageEntry Entry;
+		Entry.ResourceId = ResourceId;
+		Entry.QuantityScaled = QuantityScaled;
+		Entry.Units = AgentResource::ScaledToUnits(QuantityScaled);
+		OutEntries.Add(Entry);
+	}
+}
+
 int32 UMachineComponent::GetStoredItemCount(TSubclassOf<AActor> ItemActorClass) const
 {
 	const FName ItemClassKey = BuildItemClassInputKey(ItemActorClass.Get());
@@ -563,7 +638,7 @@ bool UMachineComponent::IsResourceAllowed(FName ResourceId) const
 		bool bFoundInWhitelist = false;
 		for (const UMaterialDefinitionAsset* Definition : WhitelistResources)
 		{
-			if (Definition && Definition->GetResolvedResourceId() == ResourceId)
+			if (Definition && Definition->GetResolvedMaterialId() == ResourceId)
 			{
 				bFoundInWhitelist = true;
 				break;
@@ -580,7 +655,7 @@ bool UMachineComponent::IsResourceAllowed(FName ResourceId) const
 	{
 		for (const UMaterialDefinitionAsset* Definition : BlacklistResources)
 		{
-			if (Definition && Definition->GetResolvedResourceId() == ResourceId)
+			if (Definition && Definition->GetResolvedMaterialId() == ResourceId)
 			{
 				return false;
 			}
@@ -747,7 +822,7 @@ const UMaterialDefinitionAsset* UMachineComponent::ResolveResourceDefinition(FNa
 	for (TObjectIterator<UMaterialDefinitionAsset> It; It; ++It)
 	{
 		UMaterialDefinitionAsset* Definition = *It;
-		if (!Definition || Definition->GetResolvedResourceId() != ResourceId)
+		if (!Definition || Definition->GetResolvedMaterialId() != ResourceId)
 		{
 			continue;
 		}
@@ -1103,7 +1178,7 @@ void UMachineComponent::RegisterResourceMass(const UMaterialDefinitionAsset* Res
 		return;
 	}
 
-	const FName ResourceId = ResourceDefinition->GetResolvedResourceId();
+	const FName ResourceId = ResourceDefinition->GetResolvedMaterialId();
 	if (ResourceId.IsNone())
 	{
 		return;

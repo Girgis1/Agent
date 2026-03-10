@@ -49,6 +49,9 @@ public:
 	bool bPreferMaterialOutputActorClass = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Machine")
+	bool bOutputPureMaterials = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Machine")
 	bool bTreatMaterialOutputClassAsSelfContained = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Machine", meta=(ClampMin="1"))
