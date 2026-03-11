@@ -165,6 +165,14 @@ protected:
 	void StopMove(const FInputActionValue& Value);
 	void Look(const FInputActionValue& Value);
 	void OnRagdollTogglePressed();
+	void OnWalkModifierPressed();
+	void OnWalkModifierReleased();
+	void OnSprintModifierPressed();
+	void OnSprintModifierReleased();
+	void UpdateMovementSpeedState(float DeltaSeconds);
+	float ResolveTargetGroundSpeed() const;
+	bool IsWalkModeActive() const;
+	bool IsSprintModeActive() const;
 	bool CanEnterRagdoll() const;
 	bool CanExitRagdoll() const;
 	void EnterRagdollInternal(EAgentRagdollReason Reason);
@@ -548,6 +556,18 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Backpack", meta=(ClampMin="0.05", UIMin="0.05"))
 	float BackpackDeployHoldTime = 0.35f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Movement|Speed", meta=(ClampMin="0.0", UIMin="0.0"))
+	float WalkModeSpeed = 230.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Movement|Speed", meta=(ClampMin="0.0", UIMin="0.0"))
+	float RunModeSpeed = 500.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Movement|Speed", meta=(ClampMin="0.0", UIMin="0.0"))
+	float SprintModeSpeed = 900.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Movement|Speed", meta=(ClampMin="0.0", UIMin="0.0"))
+	float MovementSpeedInterpSpeed = 8.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Input")
 	bool bEnableRagdollToggleInput = true;
 
@@ -637,6 +657,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip")
 	bool bEnableClumsinessTrip = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip")
+	bool bDisableTripWhileWalkMode = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", UIMin="0.0"))
 	float TripBaseChance = 0.08f;
@@ -1055,6 +1078,8 @@ protected:
 	bool bPickupRotationModeActive = false;
 	bool bHeldPickupUsesDroneView = false;
 	bool bTrackingFallHeight = false;
+	bool bWalkModifierHeld = false;
+	bool bSprintModifierHeld = false;
 
 	float ThirdPersonTransitionElapsed = 0.0f;
 	float ViewModeButtonHeldDuration = 0.0f;
