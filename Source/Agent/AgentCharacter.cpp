@@ -349,6 +349,8 @@ void AAgentCharacter::BeginPlay()
 		CachedMovementMode = CharacterMovementComponent->MovementMode;
 		CachedCustomMovementMode = CharacterMovementComponent->CustomMovementMode;
 	}
+
+	UpdateMovementSpeedState(0.0f);
 }
 
 void AAgentCharacter::Tick(float DeltaSeconds)
@@ -367,6 +369,7 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 		DroneWorldDiscoveryTimeRemaining = FMath::Max(0.1f, DroneWorldDiscoveryInterval);
 	}
 	EnsureActiveDroneSelection();
+	UpdateMovementSpeedState(DeltaSeconds);
 	UpdateFallHeightTracking();
 	UpdateClumsinessSystems(DeltaSeconds);
 	UpdateRagdollAutoRecovery(DeltaSeconds);
@@ -651,7 +654,13 @@ void AAgentCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	PlayerInputComponent->BindKey(EKeys::B, IE_Released, this, &AAgentCharacter::OnBackpackOrDroneModeReleased);
 	PlayerInputComponent->BindKey(EKeys::M, IE_Pressed, this, &AAgentCharacter::OnKeyboardMapButtonPressed);
 	PlayerInputComponent->BindKey(EKeys::M, IE_Released, this, &AAgentCharacter::OnKeyboardMapButtonReleased);
-	PlayerInputComponent->BindKey(EKeys::LeftControl, IE_Pressed, this, &AAgentCharacter::OnRagdollTogglePressed);
+	PlayerInputComponent->BindKey(EKeys::BackSpace, IE_Pressed, this, &AAgentCharacter::OnRagdollTogglePressed);
+	PlayerInputComponent->BindKey(EKeys::LeftControl, IE_Pressed, this, &AAgentCharacter::OnWalkModifierPressed);
+	PlayerInputComponent->BindKey(EKeys::LeftControl, IE_Released, this, &AAgentCharacter::OnWalkModifierReleased);
+	PlayerInputComponent->BindKey(EKeys::LeftShift, IE_Pressed, this, &AAgentCharacter::OnSprintModifierPressed);
+	PlayerInputComponent->BindKey(EKeys::LeftShift, IE_Released, this, &AAgentCharacter::OnSprintModifierReleased);
+	PlayerInputComponent->BindKey(EKeys::RightShift, IE_Pressed, this, &AAgentCharacter::OnSprintModifierPressed);
+	PlayerInputComponent->BindKey(EKeys::RightShift, IE_Released, this, &AAgentCharacter::OnSprintModifierReleased);
 	PlayerInputComponent->BindKey(EKeys::W, IE_Pressed, this, &AAgentCharacter::OnDronePitchForwardPressed);
 	PlayerInputComponent->BindKey(EKeys::W, IE_Released, this, &AAgentCharacter::OnDronePitchForwardReleased);
 	PlayerInputComponent->BindKey(EKeys::S, IE_Pressed, this, &AAgentCharacter::OnDronePitchBackwardPressed);
@@ -716,13 +725,116 @@ void AAgentCharacter::OnRagdollTogglePressed()
 		return;
 	}
 
-	// Left Ctrl is entry-only; recovery is handled by jump input.
+	// Manual ragdoll key is entry-only; recovery is handled by jump input.
 	if (IsRagdolling())
 	{
 		return;
 	}
 
 	RequestEnterRagdoll(EAgentRagdollReason::ManualInput);
+}
+
+void AAgentCharacter::OnWalkModifierPressed()
+{
+	bWalkModifierHeld = true;
+}
+
+void AAgentCharacter::OnWalkModifierReleased()
+{
+	bWalkModifierHeld = false;
+}
+
+void AAgentCharacter::OnSprintModifierPressed()
+{
+	bSprintModifierHeld = true;
+}
+
+void AAgentCharacter::OnSprintModifierReleased()
+{
+	bSprintModifierHeld = false;
+}
+
+bool AAgentCharacter::IsSprintModeActive() const
+{
+	if (!bSprintModifierHeld || IsRagdolling())
+	{
+		return false;
+	}
+
+	if (VehicleInteractionComponent && VehicleInteractionComponent->IsControllingVehicle())
+	{
+		return false;
+	}
+
+	if (IsDroneInputModeActive() && bLockCharacterMovementDuringDronePilot)
+	{
+		return false;
+	}
+
+	return true;
+}
+
+bool AAgentCharacter::IsWalkModeActive() const
+{
+	if (!bWalkModifierHeld || IsRagdolling())
+	{
+		return false;
+	}
+
+	if (VehicleInteractionComponent && VehicleInteractionComponent->IsControllingVehicle())
+	{
+		return false;
+	}
+
+	if (IsDroneInputModeActive() && bLockCharacterMovementDuringDronePilot)
+	{
+		return false;
+	}
+
+	return !IsSprintModeActive();
+}
+
+float AAgentCharacter::ResolveTargetGroundSpeed() const
+{
+	const float SafeWalkSpeed = FMath::Max(0.0f, WalkModeSpeed);
+	const float SafeRunSpeed = FMath::Max(0.0f, RunModeSpeed);
+	const float SafeSprintSpeed = FMath::Max(0.0f, SprintModeSpeed);
+
+	if (IsSprintModeActive())
+	{
+		return SafeSprintSpeed;
+	}
+
+	if (IsWalkModeActive())
+	{
+		return SafeWalkSpeed;
+	}
+
+	return SafeRunSpeed;
+}
+
+void AAgentCharacter::UpdateMovementSpeedState(float DeltaSeconds)
+{
+	UCharacterMovementComponent* CharacterMovementComponent = GetCharacterMovement();
+	if (!CharacterMovementComponent)
+	{
+		return;
+	}
+
+	const float TargetGroundSpeed = ResolveTargetGroundSpeed();
+	const float InterpSpeed = FMath::Max(0.0f, MovementSpeedInterpSpeed);
+	const float SafeDeltaSeconds = FMath::Max(0.0f, DeltaSeconds);
+	if (InterpSpeed > KINDA_SMALL_NUMBER && SafeDeltaSeconds > KINDA_SMALL_NUMBER)
+	{
+		CharacterMovementComponent->MaxWalkSpeed = FMath::FInterpTo(
+			CharacterMovementComponent->MaxWalkSpeed,
+			TargetGroundSpeed,
+			SafeDeltaSeconds,
+			InterpSpeed);
+		return;
+	}
+
+	CharacterMovementComponent->MaxWalkSpeed = TargetGroundSpeed;
 }
 
 void AAgentCharacter::ToggleRagdoll()
@@ -4205,6 +4317,19 @@ void AAgentCharacter::HandleStepUpEvent(float StepUpHeightCm)
 	const FVector HorizontalVelocity(GetVelocity().X, GetVelocity().Y, 0.0f);
 	const float HorizontalSpeed = HorizontalVelocity.Size();
 	LastTripHorizontalSpeed = HorizontalSpeed;
+	if (bDisableTripWhileWalkMode && IsWalkModeActive())
+	{
+		LastComputedTripChance = 0.0f;
+		LastTripRoll = -1.0f;
+		LastTripFollowThroughRoll = -1.0f;
+		LastTripFollowThroughChance = 0.0f;
+		bLastTripMovingBackward = false;
+		bLastTripTriggeredRagdoll = false;
+		bLastTripFollowThroughPreventedRagdoll = false;
+		LastClumsinessEventSource = FName(TEXT("WalkModeNoTrip"));
+		return;
+	}
+
 	const bool bMovingBackward = !HorizontalVelocity.IsNearlyZero()
 		&& FVector::DotProduct(HorizontalVelocity.GetSafeNormal(), GetActorForwardVector()) <= -FMath::Clamp(TripBackwardDotThreshold, 0.0f, 1.0f);
 	bLastTripMovingBackward = bMovingBackward;
