@@ -17,6 +17,7 @@
 #include "CollisionShape.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "DrawDebugHelpers.h"
 #include "EnhancedInputComponent.h"
@@ -36,6 +37,43 @@
 #include "InputCoreTypes.h"
 #include "UObject/ConstructorHelpers.h"
 #include "Agent.h"
+
+namespace
+{
+	const TCHAR* ToRagdollStateString(EAgentRagdollState State)
+	{
+		switch (State)
+		{
+		case EAgentRagdollState::Normal:
+			return TEXT("Normal");
+		case EAgentRagdollState::Ragdoll:
+			return TEXT("Ragdoll");
+		case EAgentRagdollState::Recovering:
+			return TEXT("Recovering");
+		default:
+			return TEXT("Unknown");
+		}
+	}
+
+	const TCHAR* ToRagdollReasonString(EAgentRagdollReason Reason)
+	{
+		switch (Reason)
+		{
+		case EAgentRagdollReason::ManualInput:
+			return TEXT("ManualInput");
+		case EAgentRagdollReason::ClumsinessTrip:
+			return TEXT("ClumsinessTrip");
+		case EAgentRagdollReason::ClumsinessSlip:
+			return TEXT("ClumsinessSlip");
+		case EAgentRagdollReason::Impact:
+			return TEXT("Impact");
+		case EAgentRagdollReason::Scripted:
+			return TEXT("Scripted");
+		default:
+			return TEXT("Unknown");
+		}
+	}
+}
 
 AAgentCharacter::AAgentCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer.SetDefaultSubobjectClass<UConveyorCharacterMovementComponent>(ACharacter::CharacterMovementComponentName))
@@ -74,7 +112,8 @@ AAgentCharacter::AAgentCharacter(const FObjectInitializer& ObjectInitializer)
 	FollowCamera->SetActive(true);
 
 	FirstPersonCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FirstPersonCamera"));
-	FirstPersonCamera->SetupAttachment(GetCapsuleComponent());
+	FirstPersonCamera->bEditableWhenInherited = true;
+	FirstPersonCamera->SetupAttachment(GetMesh());
 	FirstPersonCamera->SetRelativeLocation(FirstPersonCameraOffset);
 	FirstPersonCamera->bUsePawnControlRotation = true;
 	FirstPersonCamera->SetActive(false);
@@ -117,9 +156,107 @@ AAgentCharacter::AAgentCharacter(const FObjectInitializer& ObjectInitializer)
 
 }
 
+void AAgentCharacter::OnConstruction(const FTransform& Transform)
+{
+	Super::OnConstruction(Transform);
+	RefreshFirstPersonCameraAttachment();
+}
+
+void AAgentCharacter::RefreshFirstPersonCameraReference()
+{
+	ResolvedFirstPersonCamera = nullptr;
+
+	if (FirstPersonCameraComponentName != NAME_None)
+	{
+		TArray<UCameraComponent*> CameraComponents;
+		GetComponents<UCameraComponent>(CameraComponents);
+		for (UCameraComponent* CandidateCamera : CameraComponents)
+		{
+			if (!CandidateCamera)
+			{
+				continue;
+			}
+
+			if (CandidateCamera->GetFName() == FirstPersonCameraComponentName)
+			{
+				ResolvedFirstPersonCamera = CandidateCamera;
+				break;
+			}
+		}
+	}
+
+	if (!ResolvedFirstPersonCamera)
+	{
+		ResolvedFirstPersonCamera = FirstPersonCamera;
+	}
+
+	if (ResolvedFirstPersonCamera)
+	{
+		const bool bShouldUsePawnControlRotation = IsRagdolling()
+			? bUsePawnControlRotationWhileRagdoll
+			: bUsePawnControlRotationInFirstPerson;
+		ResolvedFirstPersonCamera->bUsePawnControlRotation = bShouldUsePawnControlRotation;
+	}
+}
+
+UCameraComponent* AAgentCharacter::ResolveFirstPersonCamera()
+{
+	if (!ResolvedFirstPersonCamera)
+	{
+		RefreshFirstPersonCameraReference();
+	}
+
+	return ResolvedFirstPersonCamera ? ResolvedFirstPersonCamera.Get() : FirstPersonCamera;
+}
+
+UCameraComponent* AAgentCharacter::ResolveFirstPersonCamera() const
+{
+	return const_cast<AAgentCharacter*>(this)->ResolveFirstPersonCamera();
+}
+
+void AAgentCharacter::RefreshFirstPersonCameraAttachment()
+{
+	RefreshFirstPersonCameraReference();
+
+	UCameraComponent* const ActiveFirstPersonCamera = ResolveFirstPersonCamera();
+	if (!ActiveFirstPersonCamera || !GetMesh())
+	{
+		return;
+	}
+
+	RefreshFirstPersonCameraControlRotation();
+
+	// If BP provides FirstPersonCamera1, keep its authored attachment hierarchy untouched.
+	if (ActiveFirstPersonCamera != FirstPersonCamera)
+	{
+		return;
+	}
+
+	// Native inherited components can't be reparented in BP hierarchy; expose socket-based attachment instead.
+	ActiveFirstPersonCamera->AttachToComponent(
+		GetMesh(),
+		FAttachmentTransformRules::KeepRelativeTransform,
+		FirstPersonCameraSocketName);
+}
+
+void AAgentCharacter::RefreshFirstPersonCameraControlRotation()
+{
+	UCameraComponent* const ActiveFirstPersonCamera = ResolveFirstPersonCamera();
+	if (!ActiveFirstPersonCamera)
+	{
+		return;
+	}
+
+	const bool bShouldUsePawnControlRotation = IsRagdolling()
+		? bUsePawnControlRotationWhileRagdoll
+		: bUsePawnControlRotationInFirstPerson;
+	ActiveFirstPersonCamera->bUsePawnControlRotation = bShouldUsePawnControlRotation;
+}
+
 void AAgentCharacter::BeginPlay()
 {
 	Super::BeginPlay();
+	RefreshFirstPersonCameraAttachment();
 
 	bDefaultUseControllerRotationYaw = bUseControllerRotationYaw;
 	bDefaultOrientRotationToMovement = GetCharacterMovement() ? GetCharacterMovement()->bOrientRotationToMovement : true;
@@ -173,6 +310,24 @@ void AAgentCharacter::BeginPlay()
 		{
 			DroneCompanion->SetCompanionMode(EDroneCompanionMode::BuddyFollow);
 		}
+	}
+
+	if (USkeletalMeshComponent* MeshComponent = GetMesh())
+	{
+		CachedMeshRelativeTransform = MeshComponent->GetRelativeTransform();
+		CachedMeshCollisionProfileName = MeshComponent->GetCollisionProfileName();
+		CachedMeshCollisionEnabled = MeshComponent->GetCollisionEnabled();
+	}
+
+	if (UCapsuleComponent* CapsuleComp = GetCapsuleComponent())
+	{
+		CachedCapsuleCollisionEnabled = CapsuleComp->GetCollisionEnabled();
+	}
+
+	if (UCharacterMovementComponent* CharacterMovementComponent = GetCharacterMovement())
+	{
+		CachedMovementMode = CharacterMovementComponent->MovementMode;
+		CachedCustomMovementMode = CharacterMovementComponent->CustomMovementMode;
 	}
 }
 
@@ -255,7 +410,11 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 		UpdateDroneCompanionThirdPersonTarget();
 		UpdateDroneTorchTarget();
 
-		if (IsDroneInputModeActive())
+		if (IsRagdolling())
+		{
+			DroneCompanion->ResetPilotInputs();
+		}
+		else if (IsDroneInputModeActive())
 		{
 			UpdateDronePilotInputs(DeltaSeconds);
 		}
@@ -327,6 +486,7 @@ void AAgentCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	PlayerInputComponent->BindKey(EKeys::B, IE_Released, this, &AAgentCharacter::OnBackpackOrDroneModeReleased);
 	PlayerInputComponent->BindKey(EKeys::M, IE_Pressed, this, &AAgentCharacter::OnKeyboardMapButtonPressed);
 	PlayerInputComponent->BindKey(EKeys::M, IE_Released, this, &AAgentCharacter::OnKeyboardMapButtonReleased);
+	PlayerInputComponent->BindKey(EKeys::LeftControl, IE_Pressed, this, &AAgentCharacter::OnRagdollTogglePressed);
 	PlayerInputComponent->BindKey(EKeys::W, IE_Pressed, this, &AAgentCharacter::OnDronePitchForwardPressed);
 	PlayerInputComponent->BindKey(EKeys::W, IE_Released, this, &AAgentCharacter::OnDronePitchForwardReleased);
 	PlayerInputComponent->BindKey(EKeys::S, IE_Pressed, this, &AAgentCharacter::OnDronePitchBackwardPressed);
@@ -384,8 +544,309 @@ void AAgentCharacter::Look(const FInputActionValue& Value)
 	DoLook(LookAxisVector.X, LookAxisVector.Y);
 }
 
+void AAgentCharacter::OnRagdollTogglePressed()
+{
+	if (!bEnableRagdollToggleInput)
+	{
+		return;
+	}
+
+	ToggleRagdoll();
+}
+
+void AAgentCharacter::ToggleRagdoll()
+{
+	if (IsRagdolling())
+	{
+		RequestExitRagdoll(EAgentRagdollReason::ManualInput);
+		return;
+	}
+
+	RequestEnterRagdoll(EAgentRagdollReason::ManualInput);
+}
+
+bool AAgentCharacter::RequestEnterRagdoll(EAgentRagdollReason Reason)
+{
+	if (!CanEnterRagdoll())
+	{
+		return false;
+	}
+
+	EnterRagdollInternal(Reason);
+	return IsRagdolling();
+}
+
+bool AAgentCharacter::RequestExitRagdoll(EAgentRagdollReason Reason)
+{
+	if (!CanExitRagdoll())
+	{
+		return false;
+	}
+
+	ExitRagdollInternal(Reason);
+	return !IsRagdolling();
+}
+
+bool AAgentCharacter::CanEnterRagdoll() const
+{
+	return RagdollState == EAgentRagdollState::Normal
+		&& GetMesh() != nullptr
+		&& GetCapsuleComponent() != nullptr
+		&& GetCharacterMovement() != nullptr;
+}
+
+bool AAgentCharacter::CanExitRagdoll() const
+{
+	return RagdollState == EAgentRagdollState::Ragdoll
+		&& GetMesh() != nullptr
+		&& GetCapsuleComponent() != nullptr
+		&& GetCharacterMovement() != nullptr;
+}
+
+void AAgentCharacter::SetRagdollState(EAgentRagdollState NewState, EAgentRagdollReason Reason)
+{
+	const EAgentRagdollState PreviousState = RagdollState;
+	RagdollState = NewState;
+	LastRagdollReason = Reason;
+	RefreshFirstPersonCameraControlRotation();
+
+	if (!bLogRagdollStateChanges || PreviousState == NewState)
+	{
+		return;
+	}
+
+	UE_LOG(
+		LogAgent,
+		Log,
+		TEXT("Ragdoll state changed: %s -> %s (Reason: %s)"),
+		ToRagdollStateString(PreviousState),
+		ToRagdollStateString(NewState),
+		ToRagdollReasonString(Reason));
+}
+
+EAgentViewMode AAgentCharacter::ResolveRagdollEntryViewMode() const
+{
+	if (RagdollEntryViewMode == EAgentViewMode::FirstPerson)
+	{
+		return EAgentViewMode::FirstPerson;
+	}
+
+	return EAgentViewMode::ThirdPerson;
+}
+
+FName AAgentCharacter::ResolveRagdollAnchorBoneName() const
+{
+	const USkeletalMeshComponent* MeshComponent = GetMesh();
+	if (!MeshComponent)
+	{
+		return NAME_None;
+	}
+
+	if (RagdollAnchorBoneName != NAME_None && MeshComponent->GetBoneIndex(RagdollAnchorBoneName) != INDEX_NONE)
+	{
+		return RagdollAnchorBoneName;
+	}
+
+	static const FName DefaultPelvisBoneName(TEXT("pelvis"));
+	if (MeshComponent->GetBoneIndex(DefaultPelvisBoneName) != INDEX_NONE)
+	{
+		return DefaultPelvisBoneName;
+	}
+
+	return MeshComponent->GetBoneName(0);
+}
+
+FVector AAgentCharacter::GetRagdollAnchorLocation() const
+{
+	const USkeletalMeshComponent* MeshComponent = GetMesh();
+	if (!MeshComponent)
+	{
+		return GetActorLocation();
+	}
+
+	const FName AnchorBoneName = ResolveRagdollAnchorBoneName();
+	if (AnchorBoneName != NAME_None)
+	{
+		return MeshComponent->GetBoneLocation(AnchorBoneName);
+	}
+
+	return MeshComponent->GetComponentLocation();
+}
+
+FRotator AAgentCharacter::GetRagdollAnchorRotation() const
+{
+	const USkeletalMeshComponent* MeshComponent = GetMesh();
+	if (!MeshComponent)
+	{
+		return GetActorRotation();
+	}
+
+	const FName AnchorBoneName = ResolveRagdollAnchorBoneName();
+	if (AnchorBoneName != NAME_None)
+	{
+		return MeshComponent->GetBoneQuaternion(AnchorBoneName).Rotator();
+	}
+
+	return MeshComponent->GetComponentRotation();
+}
+
+void AAgentCharacter::ResetRagdollInputState()
+{
+	bViewModeButtonHeld = false;
+	bViewModeHoldTriggered = false;
+	ViewModeButtonHeldDuration = 0.0f;
+
+	bKeyboardMapButtonHeld = false;
+	bKeyboardMapButtonTriggeredMiniMap = false;
+	KeyboardMapButtonHeldDuration = 0.0f;
+
+	bControllerMapButtonHeld = false;
+	bControllerMapButtonTriggeredMiniMap = false;
+	ControllerMapButtonHeldDuration = 0.0f;
+
+	ResetBackpackDeployButtonHoldState();
+
+	bHookJobButtonHeld = false;
+	bHookJobButtonTriggeredHoldRelease = false;
+	HookJobButtonHeldDuration = 0.0f;
+
+	bKeyboardPickupHeld = false;
+	bControllerPickupHeld = false;
+	bPickupRotationModeActive = false;
+	bInteractKeyDrivingDroneThrottle = false;
+	OnDroneThrottleDownReleased();
+
+	ResetDroneInputState();
+}
+
+void AAgentCharacter::EnterRagdollInternal(EAgentRagdollReason Reason)
+{
+	USkeletalMeshComponent* MeshComponent = GetMesh();
+	UCapsuleComponent* CapsuleComp = GetCapsuleComponent();
+	UCharacterMovementComponent* CharacterMovementComponent = GetCharacterMovement();
+	if (!MeshComponent || !CapsuleComp || !CharacterMovementComponent)
+	{
+		return;
+	}
+
+	PreRagdollViewMode = CurrentViewMode;
+	CachedMeshRelativeTransform = MeshComponent->GetRelativeTransform();
+	CachedMeshCollisionProfileName = MeshComponent->GetCollisionProfileName();
+	CachedMeshCollisionEnabled = MeshComponent->GetCollisionEnabled();
+	CachedCapsuleCollisionEnabled = CapsuleComp->GetCollisionEnabled();
+	CachedMovementMode = CharacterMovementComponent->MovementMode;
+	CachedCustomMovementMode = CharacterMovementComponent->CustomMovementMode;
+
+	if (bAttemptVehicleExitOnRagdollEntry
+		&& VehicleInteractionComponent
+		&& VehicleInteractionComponent->IsControllingVehicle())
+	{
+		VehicleInteractionComponent->TryExitCurrentVehicle();
+	}
+
+	if (bForceCharacterViewOnRagdollEntry)
+	{
+		const EAgentViewMode EntryViewMode = ResolveRagdollEntryViewMode();
+		if (CurrentViewMode != EntryViewMode || bMapModeActive || bMiniMapModeActive)
+		{
+			ApplyViewMode(EntryViewMode, true);
+		}
+	}
+
+	if (bExitConveyorPlacementOnRagdollEntry && bConveyorPlacementModeActive)
+	{
+		ExitConveyorPlacementMode();
+	}
+
+	if (bReleaseHeldPickupOnRagdollEntry && HeldPickupComponent.IsValid())
+	{
+		EndPickup();
+	}
+
+	if (bReleaseHookJobDronesOnRagdollEntry)
+	{
+		TryReleaseAllHookJobDrones();
+	}
+
+	ResetRagdollInputState();
+
+	CharacterMovementComponent->StopMovementImmediately();
+	CharacterMovementComponent->DisableMovement();
+
+	CapsuleComp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
+	MeshComponent->SetCollisionProfileName(RagdollCollisionProfileName);
+	MeshComponent->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	MeshComponent->SetAllBodiesSimulatePhysics(true);
+	MeshComponent->SetSimulatePhysics(true);
+	MeshComponent->WakeAllRigidBodies();
+
+	SetRagdollState(EAgentRagdollState::Ragdoll, Reason);
+}
+
+void AAgentCharacter::ExitRagdollInternal(EAgentRagdollReason Reason)
+{
+	USkeletalMeshComponent* MeshComponent = GetMesh();
+	UCapsuleComponent* CapsuleComp = GetCapsuleComponent();
+	UCharacterMovementComponent* CharacterMovementComponent = GetCharacterMovement();
+	if (!MeshComponent || !CapsuleComp || !CharacterMovementComponent)
+	{
+		SetRagdollState(EAgentRagdollState::Normal, Reason);
+		return;
+	}
+
+	SetRagdollState(EAgentRagdollState::Recovering, Reason);
+
+	const FVector RagdollAnchorLocation = GetRagdollAnchorLocation();
+	const FRotator RagdollAnchorRotation = GetRagdollAnchorRotation();
+	const float CapsuleHalfHeight = CapsuleComp->GetScaledCapsuleHalfHeight();
+	const FVector RecoveryLocation = RagdollAnchorLocation + FVector(0.0f, 0.0f, CapsuleHalfHeight + RagdollRecoveryHeightOffset);
+	const float RecoveryYaw = bUseRagdollYawOnRecovery ? RagdollAnchorRotation.Yaw : GetActorRotation().Yaw;
+	const FRotator RecoveryRotation(0.0f, RecoveryYaw, 0.0f);
+
+	MeshComponent->SetSimulatePhysics(false);
+	MeshComponent->SetAllBodiesSimulatePhysics(false);
+	MeshComponent->SetRelativeTransform(CachedMeshRelativeTransform);
+	MeshComponent->SetCollisionProfileName(CachedMeshCollisionProfileName);
+	MeshComponent->SetCollisionEnabled(CachedMeshCollisionEnabled);
+
+	SetActorRotation(RecoveryRotation, ETeleportType::TeleportPhysics);
+
+	FHitResult MoveHit;
+	const bool bMoved = SetActorLocation(
+		RecoveryLocation,
+		bSweepCapsuleOnRagdollRecovery,
+		bSweepCapsuleOnRagdollRecovery ? &MoveHit : nullptr,
+		ETeleportType::TeleportPhysics);
+
+	if (!bMoved && bAllowTeleportRecoveryFallback)
+	{
+		SetActorLocation(RecoveryLocation, false, nullptr, ETeleportType::TeleportPhysics);
+	}
+
+	CapsuleComp->SetCollisionEnabled(CachedCapsuleCollisionEnabled);
+
+	if (bRestorePreRagdollMovementMode && CachedMovementMode != MOVE_None)
+	{
+		CharacterMovementComponent->SetMovementMode(CachedMovementMode, CachedCustomMovementMode);
+	}
+	else
+	{
+		CharacterMovementComponent->SetMovementMode(MOVE_Walking);
+	}
+
+	CharacterMovementComponent->StopMovementImmediately();
+	ResetRagdollInputState();
+	SetRagdollState(EAgentRagdollState::Normal, Reason);
+}
+
 void AAgentCharacter::OnViewModeButtonPressed()
 {
+	if (IsRagdolling())
+	{
+		return;
+	}
+
 	bViewModeButtonHeld = true;
 	bViewModeHoldTriggered = false;
 	ViewModeButtonHeldDuration = 0.0f;
@@ -393,6 +854,14 @@ void AAgentCharacter::OnViewModeButtonPressed()
 
 void AAgentCharacter::OnViewModeButtonReleased()
 {
+	if (IsRagdolling())
+	{
+		bViewModeButtonHeld = false;
+		bViewModeHoldTriggered = false;
+		ViewModeButtonHeldDuration = 0.0f;
+		return;
+	}
+
 	if (!bViewModeButtonHeld)
 	{
 		return;
@@ -479,6 +948,11 @@ void AAgentCharacter::OnGamepadLeftShoulderPressed()
 
 void AAgentCharacter::UpdateViewModeButtonHold(float DeltaSeconds)
 {
+	if (IsRagdolling())
+	{
+		return;
+	}
+
 	if (!bViewModeButtonHeld || bViewModeHoldTriggered)
 	{
 		return;
@@ -499,6 +973,11 @@ void AAgentCharacter::UpdateViewModeButtonHold(float DeltaSeconds)
 
 void AAgentCharacter::CycleViewMode()
 {
+	if (IsRagdolling() && !bAllowViewModeChangesWhileRagdoll)
+	{
+		return;
+	}
+
 	if (bMiniMapModeActive)
 	{
 		ExitMiniMapMode();
@@ -573,10 +1052,17 @@ void AAgentCharacter::ApplyViewMode(EAgentViewMode NewMode, bool bBlend)
 	const float BlendTime = bBlend ? ViewBlendTime : 0.0f;
 	APlayerController* PlayerController = Cast<APlayerController>(GetController());
 	UCharacterMovementComponent* CharacterMovementComponent = GetCharacterMovement();
+	UCameraComponent* const ActiveFirstPersonCamera = ResolveFirstPersonCamera();
+	RefreshFirstPersonCameraControlRotation();
 
 	if (FirstPersonCamera)
 	{
 		FirstPersonCamera->SetActive(false);
+	}
+
+	if (ActiveFirstPersonCamera && ActiveFirstPersonCamera != FirstPersonCamera)
+	{
+		ActiveFirstPersonCamera->SetActive(false);
 	}
 
 	if (FollowCamera)
@@ -733,9 +1219,9 @@ void AAgentCharacter::ApplyViewMode(EAgentViewMode NewMode, bool bBlend)
 	default:
 		SetThirdPersonProxyVisible(false);
 		EnsureActiveDroneSelection();
-		if (FirstPersonCamera)
+		if (ActiveFirstPersonCamera)
 		{
-			FirstPersonCamera->SetActive(true);
+			ActiveFirstPersonCamera->SetActive(true);
 		}
 
 		if (PlayerController)
@@ -1755,14 +2241,16 @@ void AAgentCharacter::AttachThirdPersonProxyToComponent(USceneComponent* Attachm
 
 bool AAgentCharacter::CanUseConveyorPlacementMode() const
 {
-	return !bMapModeActive
+	return !IsRagdolling()
+		&& !bMapModeActive
 		&& !bMiniMapModeActive
 		&& (CurrentViewMode == EAgentViewMode::ThirdPerson || CurrentViewMode == EAgentViewMode::FirstPerson);
 }
 
 bool AAgentCharacter::CanUseCharacterInteraction() const
 {
-	return !bMapModeActive
+	return !IsRagdolling()
+		&& !bMapModeActive
 		&& !bMiniMapModeActive
 		&& !bConveyorPlacementModeActive
 		&& (CurrentViewMode == EAgentViewMode::ThirdPerson || CurrentViewMode == EAgentViewMode::FirstPerson);
@@ -1909,9 +2397,12 @@ void AAgentCharacter::UpdateConveyorPlacementPreview()
 
 UCameraComponent* AAgentCharacter::GetActivePlacementCamera() const
 {
-	if (CurrentViewMode == EAgentViewMode::FirstPerson && FirstPersonCamera)
+	if (CurrentViewMode == EAgentViewMode::FirstPerson)
 	{
-		return FirstPersonCamera;
+		if (UCameraComponent* const ActiveFirstPersonCamera = ResolveFirstPersonCamera())
+		{
+			return ActiveFirstPersonCamera;
+		}
 	}
 
 	if (CurrentViewMode == EAgentViewMode::ThirdPerson)
@@ -2235,6 +2726,11 @@ void AAgentCharacter::SelectFactoryPlacementType(EAgentFactoryPlacementType NewT
 
 bool AAgentCharacter::CanUsePickupInteraction() const
 {
+	if (IsRagdolling())
+	{
+		return false;
+	}
+
 	if (bConveyorPlacementModeActive)
 	{
 		return false;
@@ -2257,6 +2753,11 @@ bool AAgentCharacter::CanUsePickupInteraction() const
 
 bool AAgentCharacter::CanMaintainHeldPickup() const
 {
+	if (IsRagdolling())
+	{
+		return false;
+	}
+
 	if (!HeldPickupComponent.IsValid())
 	{
 		return false;
@@ -2340,11 +2841,14 @@ bool AAgentCharacter::CanUseMapModeDronePickup() const
 
 bool AAgentCharacter::GetCharacterPickupView(FVector& OutLocation, FRotator& OutRotation) const
 {
-	if (CurrentViewMode == EAgentViewMode::FirstPerson && FirstPersonCamera)
+	if (CurrentViewMode == EAgentViewMode::FirstPerson)
 	{
-		OutLocation = FirstPersonCamera->GetComponentLocation();
-		OutRotation = FirstPersonCamera->GetComponentRotation();
-		return true;
+		if (UCameraComponent* const ActiveFirstPersonCamera = ResolveFirstPersonCamera())
+		{
+			OutLocation = ActiveFirstPersonCamera->GetComponentLocation();
+			OutRotation = ActiveFirstPersonCamera->GetComponentRotation();
+			return true;
+		}
 	}
 
 	if (ThirdPersonTransitionCamera && ThirdPersonTransitionCamera->IsActive())
@@ -2361,10 +2865,10 @@ bool AAgentCharacter::GetCharacterPickupView(FVector& OutLocation, FRotator& Out
 		return true;
 	}
 
-	if (FirstPersonCamera)
+	if (UCameraComponent* const ActiveFirstPersonCamera = ResolveFirstPersonCamera())
 	{
-		OutLocation = FirstPersonCamera->GetComponentLocation();
-		OutRotation = FirstPersonCamera->GetComponentRotation();
+		OutLocation = ActiveFirstPersonCamera->GetComponentLocation();
+		OutRotation = ActiveFirstPersonCamera->GetComponentRotation();
 		return true;
 	}
 
@@ -3436,12 +3940,12 @@ void AAgentCharacter::ResetCharacterCameraRoll()
 		CameraBoom->SetRelativeRotation(BoomRotation);
 	}
 
-	if (FirstPersonCamera)
+	if (UCameraComponent* const ActiveFirstPersonCamera = ResolveFirstPersonCamera())
 	{
-		FRotator CameraRotation = FirstPersonCamera->GetRelativeRotation();
+		FRotator CameraRotation = ActiveFirstPersonCamera->GetRelativeRotation();
 		CameraRotation.Pitch = 0.0f;
 		CameraRotation.Roll = 0.0f;
-		FirstPersonCamera->SetRelativeRotation(CameraRotation);
+		ActiveFirstPersonCamera->SetRelativeRotation(CameraRotation);
 	}
 
 	if (ThirdPersonTransitionCamera)
@@ -3724,6 +4228,11 @@ void AAgentCharacter::CycleDronePilotControlMode(int32 Direction)
 
 void AAgentCharacter::ToggleMapMode()
 {
+	if (IsRagdolling() && !bAllowViewModeChangesWhileRagdoll)
+	{
+		return;
+	}
+
 	if (!bPrimaryDroneAvailable)
 	{
 		if (bForceFirstPersonWhenDroneUnavailable && CurrentViewMode != EAgentViewMode::FirstPerson)
@@ -3788,6 +4297,11 @@ void AAgentCharacter::ToggleMapMode()
 
 void AAgentCharacter::EnterMiniMapMode()
 {
+	if (IsRagdolling() && !bAllowViewModeChangesWhileRagdoll)
+	{
+		return;
+	}
+
 	if (!bPrimaryDroneAvailable)
 	{
 		if (bForceFirstPersonWhenDroneUnavailable && CurrentViewMode != EAgentViewMode::FirstPerson)
@@ -3842,6 +4356,11 @@ void AAgentCharacter::ExitMiniMapMode()
 
 void AAgentCharacter::FocusMiniMapDroneCamera()
 {
+	if (IsRagdolling() && !bAllowViewModeChangesWhileRagdoll)
+	{
+		return;
+	}
+
 	ADroneCompanion* MiniMapDrone = MiniMapLockedDrone ? MiniMapLockedDrone.Get() : DroneCompanion.Get();
 	if (!bMiniMapModeActive || !MiniMapDrone)
 	{
@@ -3860,6 +4379,11 @@ void AAgentCharacter::FocusMiniMapDroneCamera()
 
 void AAgentCharacter::UpdateControllerMapButtonHold(float DeltaSeconds)
 {
+	if (IsRagdolling())
+	{
+		return;
+	}
+
 	if (!bControllerMapButtonHeld || bControllerMapButtonTriggeredMiniMap)
 	{
 		return;
@@ -3882,6 +4406,11 @@ void AAgentCharacter::UpdateControllerMapButtonHold(float DeltaSeconds)
 
 void AAgentCharacter::UpdateKeyboardMapButtonHold(float DeltaSeconds)
 {
+	if (IsRagdolling())
+	{
+		return;
+	}
+
 	if (!bKeyboardMapButtonHeld || bKeyboardMapButtonTriggeredMiniMap)
 	{
 		return;
@@ -3904,6 +4433,11 @@ void AAgentCharacter::UpdateKeyboardMapButtonHold(float DeltaSeconds)
 
 void AAgentCharacter::DoMove(float Right, float Forward)
 {
+	if (IsRagdolling())
+	{
+		return;
+	}
+
 	if (IsDroneInputModeActive() && bLockCharacterMovementDuringDronePilot)
 	{
 		return;
@@ -3930,6 +4464,11 @@ void AAgentCharacter::DoMove(float Right, float Forward)
 
 void AAgentCharacter::DoLook(float Yaw, float Pitch)
 {
+	if (IsRagdolling() && !bAllowLookInputWhileRagdoll)
+	{
+		return;
+	}
+
 	if (IsDroneInputModeActive()
 		&& bLockCharacterMovementDuringDronePilot
 		&& !(IsDronePilotMode() && (IsFreeFlyDronePilotMode() || IsSpectatorDronePilotMode() || IsRollDronePilotMode())))
@@ -3948,6 +4487,11 @@ void AAgentCharacter::DoLook(float Yaw, float Pitch)
 
 void AAgentCharacter::DoJumpStart()
 {
+	if (IsRagdolling())
+	{
+		return;
+	}
+
 	if (VehicleInteractionComponent && VehicleInteractionComponent->IsControllingVehicle())
 	{
 		VehicleInteractionComponent->SetVehicleHandbrakeInput(true);
@@ -3979,6 +4523,11 @@ void AAgentCharacter::DoJumpStart()
 
 void AAgentCharacter::DoJumpEnd()
 {
+	if (IsRagdolling())
+	{
+		return;
+	}
+
 	if (VehicleInteractionComponent && VehicleInteractionComponent->IsControllingVehicle())
 	{
 		VehicleInteractionComponent->SetVehicleHandbrakeInput(false);
@@ -4312,6 +4861,11 @@ void AAgentCharacter::OnDroneStabilizerTogglePressed()
 
 void AAgentCharacter::OnMapModePressed()
 {
+	if (IsRagdolling() && !bAllowViewModeChangesWhileRagdoll)
+	{
+		return;
+	}
+
 	if (bMiniMapModeActive)
 	{
 		bMiniMapViewingDroneCamera = false;
@@ -4324,6 +4878,11 @@ void AAgentCharacter::OnMapModePressed()
 
 void AAgentCharacter::OnKeyboardMapButtonPressed()
 {
+	if (IsRagdolling() && !bAllowViewModeChangesWhileRagdoll)
+	{
+		return;
+	}
+
 	bKeyboardMapButtonHeld = true;
 	bKeyboardMapButtonTriggeredMiniMap = false;
 	KeyboardMapButtonHeldDuration = 0.0f;
@@ -4331,6 +4890,11 @@ void AAgentCharacter::OnKeyboardMapButtonPressed()
 
 void AAgentCharacter::OnKeyboardMapButtonReleased()
 {
+	if (IsRagdolling() && !bAllowViewModeChangesWhileRagdoll)
+	{
+		return;
+	}
+
 	const bool bWasMiniMapHold = bKeyboardMapButtonTriggeredMiniMap;
 	bKeyboardMapButtonHeld = false;
 	bKeyboardMapButtonTriggeredMiniMap = false;
@@ -4353,6 +4917,11 @@ void AAgentCharacter::OnKeyboardMapButtonReleased()
 
 void AAgentCharacter::OnControllerMapButtonPressed()
 {
+	if (IsRagdolling() && !bAllowViewModeChangesWhileRagdoll)
+	{
+		return;
+	}
+
 	bControllerMapButtonHeld = true;
 	bControllerMapButtonTriggeredMiniMap = false;
 	ControllerMapButtonHeldDuration = 0.0f;
@@ -4360,6 +4929,11 @@ void AAgentCharacter::OnControllerMapButtonPressed()
 
 void AAgentCharacter::OnControllerMapButtonReleased()
 {
+	if (IsRagdolling() && !bAllowViewModeChangesWhileRagdoll)
+	{
+		return;
+	}
+
 	const bool bWasMiniMapHold = bControllerMapButtonTriggeredMiniMap;
 	bControllerMapButtonHeld = false;
 	bControllerMapButtonTriggeredMiniMap = false;
@@ -4453,6 +5027,11 @@ void AAgentCharacter::OnHookJobButtonReleased()
 
 void AAgentCharacter::OnPickupOrDroneYawRightPressed()
 {
+	if (IsRagdolling())
+	{
+		return;
+	}
+
 	if (bMapModeActive && !bConveyorPlacementModeActive)
 	{
 		if (CanUsePickupInteraction() && TryBeginPickup())
@@ -4578,6 +5157,12 @@ void AAgentCharacter::OnPickupStrengthIncreasePressed()
 
 void AAgentCharacter::OnInteractPressed()
 {
+	if (IsRagdolling())
+	{
+		bInteractKeyDrivingDroneThrottle = false;
+		return;
+	}
+
 	if (CanUseCharacterInteraction())
 	{
 		bInteractKeyDrivingDroneThrottle = false;
@@ -4609,6 +5194,11 @@ void AAgentCharacter::OnVehicleInteractPressed()
 	if (VehicleInteractionComponent->IsControllingVehicle())
 	{
 		VehicleInteractionComponent->TryExitCurrentVehicle();
+		return;
+	}
+
+	if (IsRagdolling())
+	{
 		return;
 	}
 

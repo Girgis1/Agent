@@ -3,7 +3,9 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/EngineTypes.h"
 #include "GameFramework/Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "Logging/LogMacros.h"
 #include "AgentCharacter.generated.h"
 
@@ -58,6 +60,24 @@ enum class EAgentFactoryPlacementType : uint8
 	Machine
 };
 
+UENUM(BlueprintType)
+enum class EAgentRagdollState : uint8
+{
+	Normal,
+	Ragdoll,
+	Recovering
+};
+
+UENUM(BlueprintType)
+enum class EAgentRagdollReason : uint8
+{
+	ManualInput,
+	ClumsinessTrip,
+	ClumsinessSlip,
+	Impact,
+	Scripted
+};
+
 /**
  *  Player character that coordinates character movement and the persistent companion drone.
  */
@@ -74,7 +94,7 @@ class AAgentCharacter : public ACharacter
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UCameraComponent* FollowCamera;
 
-	/** First-person camera on the character */
+	/** Native first-person fallback camera; gameplay prefers FirstPersonCameraComponentName when available. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UCameraComponent* FirstPersonCamera;
 
@@ -119,13 +139,30 @@ public:
 	AAgentCharacter(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 
 protected:
+	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
+	void RefreshFirstPersonCameraReference();
+	void RefreshFirstPersonCameraAttachment();
+	void RefreshFirstPersonCameraControlRotation();
+	UCameraComponent* ResolveFirstPersonCamera();
+	UCameraComponent* ResolveFirstPersonCamera() const;
 
 	void Move(const FInputActionValue& Value);
 	void StopMove(const FInputActionValue& Value);
 	void Look(const FInputActionValue& Value);
+	void OnRagdollTogglePressed();
+	bool CanEnterRagdoll() const;
+	bool CanExitRagdoll() const;
+	void EnterRagdollInternal(EAgentRagdollReason Reason);
+	void ExitRagdollInternal(EAgentRagdollReason Reason);
+	void SetRagdollState(EAgentRagdollState NewState, EAgentRagdollReason Reason);
+	EAgentViewMode ResolveRagdollEntryViewMode() const;
+	FName ResolveRagdollAnchorBoneName() const;
+	FVector GetRagdollAnchorLocation() const;
+	FRotator GetRagdollAnchorRotation() const;
+	void ResetRagdollInputState();
 
 	void OnViewModeButtonPressed();
 	void OnViewModeButtonReleased();
@@ -315,6 +352,21 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Input")
 	virtual void DoJumpEnd();
 
+	UFUNCTION(BlueprintCallable, Category="Ragdoll")
+	void ToggleRagdoll();
+
+	UFUNCTION(BlueprintCallable, Category="Ragdoll")
+	bool RequestEnterRagdoll(EAgentRagdollReason Reason);
+
+	UFUNCTION(BlueprintCallable, Category="Ragdoll")
+	bool RequestExitRagdoll(EAgentRagdollReason Reason);
+
+	UFUNCTION(BlueprintPure, Category="Ragdoll")
+	bool IsRagdolling() const { return RagdollState == EAgentRagdollState::Ragdoll; }
+
+	UFUNCTION(BlueprintPure, Category="Ragdoll")
+	EAgentRagdollState GetRagdollState() const { return RagdollState; }
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone")
 	TSubclassOf<ADroneCompanion> DroneCompanionClass;
 
@@ -387,6 +439,18 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera")
 	FVector FirstPersonCameraOffset = FVector(0.0f, 0.0f, 64.0f);
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera|FirstPerson")
+	bool bUsePawnControlRotationInFirstPerson = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera|FirstPerson")
+	bool bUsePawnControlRotationWhileRagdoll = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera|FirstPerson")
+	FName FirstPersonCameraComponentName = FName(TEXT("FirstPersonCamera1"));
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera|FirstPerson")
+	FName FirstPersonCameraSocketName = NAME_None;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera")
 	float ThirdPersonDroneSwapMaxDistance = 800.0f;
 
@@ -413,6 +477,57 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Backpack", meta=(ClampMin="0.05", UIMin="0.05"))
 	float BackpackDeployHoldTime = 0.35f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Input")
+	bool bEnableRagdollToggleInput = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Entry")
+	bool bAttemptVehicleExitOnRagdollEntry = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Entry")
+	bool bForceCharacterViewOnRagdollEntry = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Entry")
+	EAgentViewMode RagdollEntryViewMode = EAgentViewMode::ThirdPerson;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Entry")
+	bool bExitConveyorPlacementOnRagdollEntry = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Entry")
+	bool bReleaseHeldPickupOnRagdollEntry = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Entry")
+	bool bReleaseHookJobDronesOnRagdollEntry = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Physics")
+	FName RagdollAnchorBoneName = FName(TEXT("pelvis"));
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Physics")
+	FName RagdollCollisionProfileName = FName(TEXT("Ragdoll"));
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Recovery")
+	float RagdollRecoveryHeightOffset = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Recovery")
+	bool bSweepCapsuleOnRagdollRecovery = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Recovery")
+	bool bAllowTeleportRecoveryFallback = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Recovery")
+	bool bUseRagdollYawOnRecovery = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Recovery")
+	bool bRestorePreRagdollMovementMode = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Control")
+	bool bAllowLookInputWhileRagdoll = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Control")
+	bool bAllowViewModeChangesWhileRagdoll = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Debug")
+	bool bLogRagdollStateChanges = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
 	TSubclassOf<AConveyorBeltStraight> ConveyorBeltClass;
@@ -538,6 +653,9 @@ public:
 	bool bShowPickupDebug = true;
 
 protected:
+	UPROPERTY(Transient)
+	TObjectPtr<UCameraComponent> ResolvedFirstPersonCamera = nullptr;
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<ADroneCompanion> DroneCompanion = nullptr;
 
@@ -564,6 +682,9 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Camera", meta=(AllowPrivateAccess="true"))
 	EAgentViewMode CurrentViewMode = EAgentViewMode::ThirdPerson;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Ragdoll", meta=(AllowPrivateAccess="true"))
+	EAgentRagdollState RagdollState = EAgentRagdollState::Normal;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
 	bool bUseSimpleDronePilotControls = false;
@@ -681,6 +802,14 @@ protected:
 	bool bDroneThrottleUpHeld = false;
 	bool bDroneThrottleDownHeld = false;
 	bool bInteractKeyDrivingDroneThrottle = false;
+	EAgentRagdollReason LastRagdollReason = EAgentRagdollReason::ManualInput;
+	FTransform CachedMeshRelativeTransform = FTransform::Identity;
+	FName CachedMeshCollisionProfileName = NAME_None;
+	ECollisionEnabled::Type CachedMeshCollisionEnabled = ECollisionEnabled::NoCollision;
+	ECollisionEnabled::Type CachedCapsuleCollisionEnabled = ECollisionEnabled::QueryAndPhysics;
+	EMovementMode CachedMovementMode = MOVE_Walking;
+	uint8 CachedCustomMovementMode = 0;
+	EAgentViewMode PreRagdollViewMode = EAgentViewMode::ThirdPerson;
 
 public:
 	UFUNCTION(BlueprintPure, Category="Drone|Availability")
@@ -697,5 +826,5 @@ public:
 
 	FORCEINLINE USpringArmComponent* GetCameraBoom() const { return CameraBoom; }
 	FORCEINLINE UCameraComponent* GetFollowCamera() const { return FollowCamera; }
-	FORCEINLINE UCameraComponent* GetFirstPersonCamera() const { return FirstPersonCamera; }
+	FORCEINLINE UCameraComponent* GetFirstPersonCamera() const { return ResolveFirstPersonCamera(); }
 };
