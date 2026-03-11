@@ -86,16 +86,17 @@ bool UBackAttachmentComponent::EquipBackpack(ABlackHoleBackpackActor* InBackpack
 		return false;
 	}
 
+	if (bUseMagnetRecall && bMagnetRecallKeepsPhysicsActor)
+	{
+		StartMagnetBackpackState(BackItemActor, bUseMagnetLerp);
+		return true;
+	}
+
 	if (bUseMagnetLerp)
 	{
 		BackItemActor->SetDeployedState(false);
 		BackItemActor->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
-		if (bMagnetRecallKeepsPhysicsActor)
-		{
-			ConfigureBackpackForMagnetPhysics(BackItemActor);
-		}
-
-		bMagnetRecallActive = true;
+		MagnetState = EBackpackMagnetState::Recalling;
 		return true;
 	}
 
@@ -262,13 +263,28 @@ void UBackAttachmentComponent::RefreshBackItemAttachment()
 
 	if (bUseMagnetRecall && bMagnetRecallKeepsPhysicsActor)
 	{
-		BackItem->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
-		ConfigureBackpackForMagnetPhysics(BackItem);
-		bMagnetRecallActive = true;
+		StartMagnetBackpackState(BackItem, false);
 		return;
 	}
 
 	BackItem->AttachToCarrier(AttachParent, AttachSocket, BuildAttachFineTuneTransform());
+}
+
+void UBackAttachmentComponent::SetOwnerRagdolling(bool bInOwnerRagdolling)
+{
+	bOwnerRagdolling = bInOwnerRagdolling;
+	CachedAttachMagnetComponent = nullptr;
+
+	ABlackHoleBackpackActor* BackItem = BackItemActor.Get();
+	if (!BackItem || BackItem->IsItemDeployed())
+	{
+		return;
+	}
+
+	if (bUseMagnetRecall && bMagnetRecallKeepsPhysicsActor)
+	{
+		StartMagnetBackpackState(BackItem, false);
+	}
 }
 
 bool UBackAttachmentComponent::IsBackItemDeployed() const
@@ -541,9 +557,36 @@ bool UBackAttachmentComponent::CanEquipBackItem(const ABlackHoleBackpackActor* C
 	return !bBlocked;
 }
 
+void UBackAttachmentComponent::StartMagnetBackpackState(ABlackHoleBackpackActor* BackItem, bool bStartAsRecalling)
+{
+	if (!BackItem)
+	{
+		return;
+	}
+
+	BackItem->SetMagnetHeldState(true);
+	ConfigureBackpackForMagnetPhysics(BackItem);
+	MagnetState = bStartAsRecalling ? EBackpackMagnetState::Recalling : EBackpackMagnetState::Held;
+	MagnetDetachExceededDuration = 0.0f;
+}
+
+void UBackAttachmentComponent::DetachEquippedBackpackFromMagnet(bool bApplyDropImpulse)
+{
+	ABlackHoleBackpackActor* BackItem = BackItemActor.Get();
+	StopMagnetRecall(false);
+	BackItemActor = nullptr;
+
+	if (!BackItem)
+	{
+		return;
+	}
+
+	BackItem->DeployToWorld(bApplyDropImpulse ? BuildDropImpulse() : FVector::ZeroVector);
+}
+
 void UBackAttachmentComponent::UpdateMagnetRecall(float DeltaTime)
 {
-	if (!bMagnetRecallActive)
+	if (MagnetState == EBackpackMagnetState::Inactive)
 	{
 		return;
 	}
@@ -557,8 +600,27 @@ void UBackAttachmentComponent::UpdateMagnetRecall(float DeltaTime)
 		return;
 	}
 
+	if (bMagnetRecallKeepsPhysicsActor)
+	{
+		if (!BackItem->IsMagnetHeld())
+		{
+			BackItem->SetMagnetHeldState(true);
+		}
+
+		ConfigureBackpackForMagnetPhysics(BackItem);
+	}
+
+	const FTransform SocketWorldTransform = AttachSocket.IsNone()
+		? AttachParent->GetComponentTransform()
+		: AttachParent->GetSocketTransform(AttachSocket, RTS_World);
+	FTransform FineTuneTransform = BuildAttachFineTuneTransform();
+	FineTuneTransform.SetScale3D(FVector::OneVector);
+	const FTransform TargetSnapAnchorWorldTransform = FineTuneTransform * SocketWorldTransform;
 	const FTransform CurrentWorldTransform = BackItem->GetActorTransform();
 	const FTransform TargetWorldTransform = BuildTargetBackItemWorldTransform(BackItem, AttachParent, AttachSocket);
+	const FVector CurrentSnapAnchorLocation = BackItem->GetSnapAnchorWorldTransform().GetLocation();
+	const FVector TargetSnapAnchorLocation = TargetSnapAnchorWorldTransform.GetLocation();
+	const float DistanceToTarget = FVector::Distance(CurrentSnapAnchorLocation, TargetSnapAnchorLocation);
 
 	const FVector NewLocation = FMath::VInterpTo(
 		CurrentWorldTransform.GetLocation(),
@@ -570,11 +632,10 @@ void UBackAttachmentComponent::UpdateMagnetRecall(float DeltaTime)
 		TargetWorldTransform.Rotator(),
 		DeltaTime,
 		FMath::Max(0.01f, MagnetRotationInterpSpeed));
+	const float AngleToTargetDeg = FMath::RadiansToDegrees(NewRotation.Quaternion().AngularDistance(TargetWorldTransform.GetRotation()));
 
 	if (bMagnetRecallKeepsPhysicsActor)
 	{
-		ConfigureBackpackForMagnetPhysics(BackItem);
-
 		if (UStaticMeshComponent* ItemMesh = BackItem->GetItemMesh())
 		{
 			const FVector ToTarget = TargetWorldTransform.GetLocation() - CurrentWorldTransform.GetLocation();
@@ -582,17 +643,47 @@ void UBackAttachmentComponent::UpdateMagnetRecall(float DeltaTime)
 				ToTarget.Size() * FMath::Max(0.01f, MagnetMoveInterpSpeed),
 				FMath::Max(100.0f, MagnetRecallMaxSpeed));
 			const FVector DesiredVelocity = ToTarget.GetSafeNormal() * TargetSpeed;
-			ItemMesh->SetPhysicsLinearVelocity(DesiredVelocity, false, NAME_None);
+			const FVector CurrentVelocity = ItemMesh->GetPhysicsLinearVelocity(NAME_None);
+			const FVector NewVelocity = FMath::VInterpTo(
+				CurrentVelocity,
+				DesiredVelocity,
+				DeltaTime,
+				FMath::Max(0.01f, MagnetMoveInterpSpeed));
+			ItemMesh->SetPhysicsLinearVelocity(NewVelocity, false, NAME_None);
 		}
 
 		BackItem->SetActorRotation(NewRotation, ETeleportType::TeleportPhysics);
+
+		if (MagnetState == EBackpackMagnetState::Recalling
+			&& DistanceToTarget <= FMath::Max(0.1f, MagnetAttachDistance)
+			&& AngleToTargetDeg <= FMath::Max(0.1f, MagnetAttachAngleDegrees))
+		{
+			MagnetState = EBackpackMagnetState::Held;
+			MagnetDetachExceededDuration = 0.0f;
+		}
+
+		if (MagnetState == EBackpackMagnetState::Held)
+		{
+			if (DistanceToTarget > FMath::Max(MagnetAttachDistance + 1.0f, MagnetDetachDistance))
+			{
+				MagnetDetachExceededDuration += DeltaTime;
+				if (MagnetDetachExceededDuration >= FMath::Max(0.0f, MagnetDetachGraceTime))
+				{
+					DetachEquippedBackpackFromMagnet(false);
+					return;
+				}
+			}
+			else
+			{
+				MagnetDetachExceededDuration = 0.0f;
+			}
+		}
+
 		return;
 	}
 
 	BackItem->SetActorLocationAndRotation(NewLocation, NewRotation, false, nullptr, ETeleportType::TeleportPhysics);
 
-	const float DistanceToTarget = FVector::Distance(NewLocation, TargetWorldTransform.GetLocation());
-	const float AngleToTargetDeg = FMath::RadiansToDegrees(NewRotation.Quaternion().AngularDistance(TargetWorldTransform.GetRotation()));
 	if (DistanceToTarget <= FMath::Max(0.1f, MagnetAttachDistance)
 		&& AngleToTargetDeg <= FMath::Max(0.1f, MagnetAttachAngleDegrees))
 	{
@@ -602,12 +693,13 @@ void UBackAttachmentComponent::UpdateMagnetRecall(float DeltaTime)
 
 void UBackAttachmentComponent::StopMagnetRecall(bool bSnapAttach)
 {
-	if (!bMagnetRecallActive)
+	if (MagnetState == EBackpackMagnetState::Inactive)
 	{
 		return;
 	}
 
-	bMagnetRecallActive = false;
+	MagnetState = EBackpackMagnetState::Inactive;
+	MagnetDetachExceededDuration = 0.0f;
 
 	if (!bSnapAttach)
 	{
@@ -643,9 +735,9 @@ void UBackAttachmentComponent::ConfigureBackpackForMagnetPhysics(ABlackHoleBackp
 		return;
 	}
 
-	if (!BackItem->DeployedCollisionProfileName.IsNone())
+	if (!BackItem->MagnetHeldCollisionProfileName.IsNone())
 	{
-		ItemMesh->SetCollisionProfileName(BackItem->DeployedCollisionProfileName);
+		ItemMesh->SetCollisionProfileName(BackItem->MagnetHeldCollisionProfileName);
 	}
 
 	ItemMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
@@ -690,11 +782,25 @@ void UBackAttachmentComponent::DrawAttachDebug() const
 	DrawDebugCoordinateSystem(World, SocketLocation, SocketRotation, AxisLength, false, 0.0f, 0, 1.0f);
 	DrawDebugCoordinateSystem(World, SnapAnchorTransform.GetLocation(), SnapAnchorTransform.Rotator(), AxisLength, false, 0.0f, 0, 1.0f);
 
-	if (bMagnetRecallActive)
+	if (MagnetState != EBackpackMagnetState::Inactive)
 	{
 		const FTransform TargetWorldTransform = BuildTargetBackItemWorldTransform(BackItem, AttachParent, AttachSocket);
 		DrawDebugSphere(World, TargetWorldTransform.GetLocation(), 5.0f, 10, FColor::Magenta, false, 0.0f, 0, 1.5f);
 		DrawDebugCoordinateSystem(World, TargetWorldTransform.GetLocation(), TargetWorldTransform.Rotator(), AxisLength, false, 0.0f, 0, 1.0f);
 		DrawDebugLine(World, SnapAnchorLocation, TargetWorldTransform.GetLocation(), FColor::Magenta, false, 0.0f, 0, 1.0f);
+
+		if (MagnetState == EBackpackMagnetState::Held && bMagnetRecallKeepsPhysicsActor)
+		{
+			DrawDebugSphere(
+				World,
+				AttachTargetTransform.GetLocation(),
+				FMath::Max(MagnetAttachDistance + 1.0f, MagnetDetachDistance),
+				24,
+				FColor::Red,
+				false,
+				0.0f,
+				0,
+				0.6f);
+		}
 	}
 }

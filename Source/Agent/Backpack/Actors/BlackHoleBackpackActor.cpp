@@ -127,6 +127,7 @@ void ABlackHoleBackpackActor::AttachToCarrier(USceneComponent* CarrierComponent,
 		FAttachmentTransformRules::KeepWorldTransform,
 		SocketName);
 
+	bIsMagnetHeld = false;
 	bIsDeployed = false;
 	SetMeshCollisionForCurrentState();
 	HandleDeploymentStateChanged(false);
@@ -140,6 +141,7 @@ void ABlackHoleBackpackActor::DeployToWorld(const FVector& InitialImpulse)
 	}
 
 	DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+	bIsMagnetHeld = false;
 	bIsDeployed = true;
 	SetMeshCollisionForCurrentState();
 	SetMeshSimulating(true);
@@ -159,10 +161,43 @@ void ABlackHoleBackpackActor::SetDeployedState(bool bInDeployed, const FVector& 
 		return;
 	}
 
+	bIsMagnetHeld = false;
 	bIsDeployed = false;
 	SetMeshSimulating(false);
 	SetMeshCollisionForCurrentState();
 	HandleDeploymentStateChanged(false);
+}
+
+void ABlackHoleBackpackActor::SetMagnetHeldState(bool bInMagnetHeld)
+{
+	if (!ItemMesh)
+	{
+		bIsMagnetHeld = bInMagnetHeld;
+		if (bInMagnetHeld)
+		{
+			bIsDeployed = false;
+		}
+		return;
+	}
+
+	if (bInMagnetHeld)
+	{
+		DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+		bIsMagnetHeld = true;
+		bIsDeployed = false;
+		SetMeshCollisionForCurrentState();
+		SetMeshSimulating(true);
+		HandleDeploymentStateChanged(false);
+		return;
+	}
+
+	if (!bIsMagnetHeld)
+	{
+		return;
+	}
+
+	bIsMagnetHeld = false;
+	SetMeshCollisionForCurrentState();
 }
 
 void ABlackHoleBackpackActor::SetPortalEnabled(bool bInEnabled)
@@ -363,10 +398,19 @@ void ABlackHoleBackpackActor::SetMeshSimulating(bool bShouldSimulate) const
 		return;
 	}
 
-	ItemMesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
-	ItemMesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
-	ItemMesh->SetSimulatePhysics(bShouldSimulate && bSimulatePhysicsWhenDeployed);
-	ItemMesh->SetEnableGravity(bShouldSimulate && bEnableGravityWhenDeployed);
+	if (!bShouldSimulate)
+	{
+		ItemMesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
+		ItemMesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+	}
+
+	const bool bAllowSimulation = bShouldSimulate
+		&& (bIsMagnetHeld ? bSimulatePhysicsWhenMagnetHeld : bSimulatePhysicsWhenDeployed);
+	const bool bAllowGravity = bShouldSimulate
+		&& (bIsMagnetHeld ? bEnableGravityWhenMagnetHeld : bEnableGravityWhenDeployed);
+
+	ItemMesh->SetSimulatePhysics(bAllowSimulation);
+	ItemMesh->SetEnableGravity(bAllowGravity);
 }
 
 void ABlackHoleBackpackActor::SetMeshCollisionForCurrentState() const
@@ -376,7 +420,9 @@ void ABlackHoleBackpackActor::SetMeshCollisionForCurrentState() const
 		return;
 	}
 
-	const FName DesiredProfile = bIsDeployed ? DeployedCollisionProfileName : AttachedCollisionProfileName;
+	const FName DesiredProfile = bIsDeployed
+		? DeployedCollisionProfileName
+		: (bIsMagnetHeld ? MagnetHeldCollisionProfileName : AttachedCollisionProfileName);
 	if (!DesiredProfile.IsNone())
 	{
 		ItemMesh->SetCollisionProfileName(DesiredProfile);

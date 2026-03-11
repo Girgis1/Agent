@@ -914,6 +914,7 @@ protected:
 	bool QueryRollGroundContact(float& OutGroundClearance) const;
 	void LogRollModeState(const TCHAR* Context, bool bProbeGround);
 	void UpdateDebugOutput() const;
+	bool IsLocalPlayerDebugTarget() const;
 	void RemoveAppliedConveyorSurfaceVelocity();
 	void ApplyConveyorSurfaceVelocity();
 	void ApplyRuntimePhysicalMaterial();

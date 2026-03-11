@@ -12,6 +12,13 @@ class AActor;
 class USceneComponent;
 class USkeletalMeshComponent;
 
+enum class EBackpackMagnetState : uint8
+{
+	Inactive,
+	Recalling,
+	Held
+};
+
 UCLASS(ClassGroup=(BackItem), meta=(BlueprintSpawnableComponent))
 class UBackAttachmentComponent : public UActorComponent
 {
@@ -53,6 +60,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category="BackItem")
 	void RefreshBackItemAttachment();
 
+	UFUNCTION(BlueprintCallable, Category="BackItem|Ragdoll")
+	void SetOwnerRagdolling(bool bInOwnerRagdolling);
+
 	UFUNCTION(BlueprintPure, Category="BackItem")
 	ABlackHoleBackpackActor* GetBackItemActor() const { return BackItemActor; }
 
@@ -76,6 +86,8 @@ protected:
 		FName AttachSocketName) const;
 	FVector BuildDropImpulse() const;
 	bool CanEquipBackItem(const ABlackHoleBackpackActor* CandidateItem, float MaxRangeCm = -1.0f) const;
+	void StartMagnetBackpackState(ABlackHoleBackpackActor* BackItem, bool bStartAsRecalling);
+	void DetachEquippedBackpackFromMagnet(bool bApplyDropImpulse);
 	void UpdateMagnetRecall(float DeltaTime);
 	void StopMagnetRecall(bool bSnapAttach);
 	void ConfigureBackpackForMagnetPhysics(ABlackHoleBackpackActor* BackItem) const;
@@ -167,6 +179,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(ClampMin="100.0", UIMin="100.0", EditCondition="bUseMagnetRecall && bMagnetRecallKeepsPhysicsActor"))
 	float MagnetRecallMaxSpeed = 2500.0f;
 
+	/** Once a backpack is settled on the magnet, exceeding this distance drops it back into the world. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(ClampMin="1.0", UIMin="1.0", EditCondition="bUseMagnetRecall && bMagnetRecallKeepsPhysicsActor"))
+	float MagnetDetachDistance = 90.0f;
+
+	/** Small grace window to avoid single-frame detach jitter while the backpack is bouncing on the magnet. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(ClampMin="0.0", UIMin="0.0", EditCondition="bUseMagnetRecall && bMagnetRecallKeepsPhysicsActor"))
+	float MagnetDetachGraceTime = 0.08f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Debug")
 	bool bShowAttachDebug = false;
 
@@ -174,8 +194,13 @@ public:
 	float AttachDebugAxisLength = 18.0f;
 
 protected:
+	EBackpackMagnetState MagnetState = EBackpackMagnetState::Inactive;
+
 	UPROPERTY(Transient)
-	bool bMagnetRecallActive = false;
+	float MagnetDetachExceededDuration = 0.0f;
+
+	UPROPERTY(Transient)
+	bool bOwnerRagdolling = false;
 
 	UPROPERTY(Transient)
 	mutable TWeakObjectPtr<USceneComponent> CachedAttachMagnetComponent = nullptr;
