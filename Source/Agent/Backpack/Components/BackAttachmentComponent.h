@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "Curves/CurveFloat.h"
 #include "BackAttachmentComponent.generated.h"
 
 class ACharacter;
@@ -165,6 +166,14 @@ public:
 	/** Global multiplier for how tightly the backpack tries to stick to the magnet target. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(ClampMin="0.1", UIMin="0.1", EditCondition="bUseMagnetRecall && bMagnetRecallKeepsPhysicsActor"))
 	float BackpackMagnetStrength = 1.0f;
+
+	/** Strength at max recall distance before BackpackMagnetStrength is applied (0..1). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(ClampMin="0.0", ClampMax="1.0", UIMin="0.0", UIMax="1.0", EditCondition="bUseMagnetRecall && bMagnetRecallKeepsPhysicsActor"))
+	float MagnetStrengthAtMaxDistance = 0.2f;
+
+	/** Shapes distance strength using proximity alpha (X: 0 = far, 1 = close; Y: 0..1). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(EditCondition="bUseMagnetRecall && bMagnetRecallKeepsPhysicsActor"))
+	FRuntimeFloatCurve MagnetStrengthByDistanceCurve;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(ClampMin="0.01", UIMin="0.01", EditCondition="bUseMagnetRecall"))
 	float MagnetRotationInterpSpeed = 14.0f;

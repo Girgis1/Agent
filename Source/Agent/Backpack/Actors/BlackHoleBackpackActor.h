@@ -8,6 +8,7 @@
 
 class UBlackHoleBackpackLinkComponent;
 class UAgentBatteryComponent;
+class UBackpackMagnetComponent;
 class UInputVolume;
 class UMaterialInstanceDynamic;
 class UPointLightComponent;
@@ -82,6 +83,9 @@ public:
 	UFUNCTION(BlueprintPure, Category="Backpack")
 	UStaticMeshComponent* GetItemMesh() const { return ItemMesh; }
 
+	UFUNCTION(BlueprintPure, Category="Backpack|Magnet")
+	UBackpackMagnetComponent* GetBackpackMagnet() const { return BackpackMagnet; }
+
 protected:
 	virtual void HandleDeploymentStateChanged(bool bNowDeployed);
 	FTransform ResolveAttachParentWorldTransform(const USceneComponent* CarrierComponent, FName SocketName) const;
@@ -143,6 +147,9 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="BlackHole|Backpack|Battery")
 	TObjectPtr<UAgentBatteryComponent> BackpackBattery = nullptr;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Backpack|Magnet")
+	TObjectPtr<UBackpackMagnetComponent> BackpackMagnet = nullptr;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="BlackHole|Backpack")
 	TObjectPtr<UPointLightComponent> PortalStateLight = nullptr;

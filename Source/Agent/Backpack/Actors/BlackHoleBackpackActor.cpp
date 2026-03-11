@@ -3,6 +3,7 @@
 #include "Backpack/Actors/BlackHoleBackpackActor.h"
 #include "Battery/AgentBatteryComponent.h"
 #include "Backpack/Components/BlackHoleBackpackLinkComponent.h"
+#include "Backpack/Components/BackpackMagnetComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -37,6 +38,7 @@ ABlackHoleBackpackActor::ABlackHoleBackpackActor()
 	InputVolume->IntakeInterval = 0.05f;
 
 	LinkComponent = CreateDefaultSubobject<UBlackHoleBackpackLinkComponent>(TEXT("LinkComponent"));
+	BackpackMagnet = CreateDefaultSubobject<UBackpackMagnetComponent>(TEXT("BackpackMagnet"));
 
 	BackpackBattery = CreateDefaultSubobject<UAgentBatteryComponent>(TEXT("BackpackBattery"));
 	BackpackBattery->MaxCharge = 100.0f;

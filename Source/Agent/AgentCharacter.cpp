@@ -570,13 +570,33 @@ void AAgentCharacter::NotifyHit(
 {
 	Super::NotifyHit(MyComp, Other, OtherComp, bSelfMoved, HitLocation, HitNormal, NormalImpulse, Hit);
 
-	if (!bEnableImpactInstability || IsRagdolling() || Other == this || !OtherComp)
+	if (IsRagdolling() || Other == this || !OtherComp)
 	{
 		return;
 	}
 
 	const float ImpactMagnitude = ComputeImpactMagnitude(NormalImpulse, OtherComp, HitNormal);
+	const float ImpactClosingSpeed = ComputeImpactClosingSpeed(OtherComp, HitNormal);
 	LastImpactMagnitude = ImpactMagnitude;
+	LastImpactClosingSpeed = ImpactClosingSpeed;
+
+	const float OtherSpeed = OtherComp->GetComponentVelocity().Size();
+	const bool bMovingOtherFastEnough = !bImpactVelocityRequiresMovingOther
+		|| OtherSpeed >= FMath::Max(0.0f, ImpactVelocityMovingOtherMinSpeed);
+	float VelocityKnockdownSpeed = ImpactClosingSpeed;
+	if (OtherComp->IsSimulatingPhysics())
+	{
+		VelocityKnockdownSpeed *= FMath::Max(0.1f, ImpactPhysicsBodyMultiplier);
+	}
+
+	if (bEnableImpactVelocityRagdoll
+		&& bMovingOtherFastEnough
+		&& VelocityKnockdownSpeed >= FMath::Max(0.0f, ImpactVelocityRagdollThreshold))
+	{
+		TryTriggerAutoRagdoll(EAgentRagdollReason::Impact, FName(TEXT("ImpactVelocityHard")));
+		return;
+	}
+
 	if (ImpactMagnitude <= KINDA_SMALL_NUMBER)
 	{
 		return;
@@ -588,7 +608,9 @@ void AAgentCharacter::NotifyHit(
 		return;
 	}
 
-	if (bEnableInstabilityMeter && ImpactMagnitude >= FMath::Max(0.0f, ImpactInstabilityStartImpulse))
+	if (bEnableImpactInstability
+		&& bEnableInstabilityMeter
+		&& ImpactMagnitude >= FMath::Max(0.0f, ImpactInstabilityStartImpulse))
 	{
 		const float ImpactSeverity = FMath::GetMappedRangeValueClamped(
 			FVector2D(ImpactInstabilityStartImpulse, FMath::Max(ImpactInstabilityStartImpulse + KINDA_SMALL_NUMBER, ImpactInstabilityMaxImpulse)),
@@ -640,7 +662,7 @@ void AAgentCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	PlayerInputComponent->BindKey(EKeys::Gamepad_RightTrigger, IE_Pressed, this, &AAgentCharacter::OnPickupOrPlacePressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_RightTrigger, IE_Released, this, &AAgentCharacter::OnPickupOrPlaceReleased);
 	PlayerInputComponent->BindKey(EKeys::RightMouseButton, IE_Pressed, this, &AAgentCharacter::OnConveyorCancelPressed);
-	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Right, IE_Pressed, this, &AAgentCharacter::OnConveyorCancelPressed);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Right, IE_Pressed, this, &AAgentCharacter::OnGamepadFaceButtonRightPressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_LeftShoulder, IE_Pressed, this, &AAgentCharacter::OnGamepadLeftShoulderPressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_RightShoulder, IE_Pressed, this, &AAgentCharacter::OnHookJobButtonPressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_RightShoulder, IE_Released, this, &AAgentCharacter::OnHookJobButtonReleased);
@@ -656,7 +678,6 @@ void AAgentCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	PlayerInputComponent->BindKey(EKeys::M, IE_Released, this, &AAgentCharacter::OnKeyboardMapButtonReleased);
 	PlayerInputComponent->BindKey(EKeys::BackSpace, IE_Pressed, this, &AAgentCharacter::OnRagdollTogglePressed);
 	PlayerInputComponent->BindKey(EKeys::LeftControl, IE_Pressed, this, &AAgentCharacter::OnWalkModifierPressed);
-	PlayerInputComponent->BindKey(EKeys::LeftControl, IE_Released, this, &AAgentCharacter::OnWalkModifierReleased);
 	PlayerInputComponent->BindKey(EKeys::LeftShift, IE_Pressed, this, &AAgentCharacter::OnSprintModifierPressed);
 	PlayerInputComponent->BindKey(EKeys::LeftShift, IE_Released, this, &AAgentCharacter::OnSprintModifierReleased);
 	PlayerInputComponent->BindKey(EKeys::RightShift, IE_Pressed, this, &AAgentCharacter::OnSprintModifierPressed);
@@ -736,12 +757,21 @@ void AAgentCharacter::OnRagdollTogglePressed()
 
 void AAgentCharacter::OnWalkModifierPressed()
 {
-	bWalkModifierHeld = true;
-}
+	bSafeModeToggled = !bSafeModeToggled;
+	UpdateMovementSpeedState(0.0f);
+	LastClumsinessEventSource = bSafeModeToggled ? FName(TEXT("SafeModeOn")) : FName(TEXT("SafeModeOff"));
 
-void AAgentCharacter::OnWalkModifierReleased()
-{
-	bWalkModifierHeld = false;
+	if (bShowClumsinessDebug && GEngine)
+	{
+		const FString SafeModeMessage = FString::Printf(
+			TEXT("Safe Mode: %s"),
+			bSafeModeToggled ? TEXT("ON") : TEXT("OFF"));
+		GEngine->AddOnScreenDebugMessage(
+			static_cast<uint64>(GetUniqueID()) + 19103ULL,
+			1.0f,
+			bSafeModeToggled ? FColor::Green : FColor::Silver,
+			SafeModeMessage);
+	}
 }
 
 void AAgentCharacter::OnSprintModifierPressed()
@@ -776,7 +806,7 @@ bool AAgentCharacter::IsSprintModeActive() const
 
 bool AAgentCharacter::IsWalkModeActive() const
 {
-	if (!bWalkModifierHeld || IsRagdolling())
+	if (!bSafeModeToggled || IsRagdolling())
 	{
 		return false;
 	}
@@ -1064,6 +1094,7 @@ void AAgentCharacter::ResetRagdollInputState()
 	bControllerPickupHeld = false;
 	bPickupRotationModeActive = false;
 	bInteractKeyDrivingDroneThrottle = false;
+	bSprintModifierHeld = false;
 	OnDroneThrottleDownReleased();
 
 	ResetDroneInputState();
@@ -1313,6 +1344,22 @@ void AAgentCharacter::OnGamepadFaceButtonLeftPressed()
 	}
 
 	OnFactoryPlacementTogglePressed();
+}
+
+void AAgentCharacter::OnGamepadFaceButtonRightPressed()
+{
+	if (bConveyorPlacementModeActive)
+	{
+		OnConveyorCancelPressed();
+		return;
+	}
+
+	if (!bEnableControllerSafeModeToggle)
+	{
+		return;
+	}
+
+	OnWalkModifierPressed();
 }
 
 void AAgentCharacter::OnGamepadLeftShoulderPressed()
@@ -4202,8 +4249,9 @@ void AAgentCharacter::AdjustClumsiness(float Delta, bool bShowFeedback)
 {
 	const float SafeMin = FMath::Max(1.0f, ClumsinessMinValue);
 	const float SafeMax = FMath::Max(SafeMin, ClumsinessMaxValue);
+	const float PreviousClumsinessValue = ClumsinessValue;
 	const float NewClumsinessValue = FMath::Clamp(ClumsinessValue + Delta, SafeMin, SafeMax);
-	if (FMath::IsNearlyEqual(NewClumsinessValue, ClumsinessValue))
+	if (FMath::IsNearlyEqual(NewClumsinessValue, PreviousClumsinessValue))
 	{
 		if (bShowClumsinessDebug)
 		{
@@ -4214,19 +4262,44 @@ void AAgentCharacter::AdjustClumsiness(float Delta, bool bShowFeedback)
 
 	ClumsinessValue = NewClumsinessValue;
 	LastClumsinessEventSource = FName(TEXT("ClumsinessInput"));
+	const float AppliedDelta = ClumsinessValue - PreviousClumsinessValue;
+	const bool bLeveledUp = AppliedDelta > KINDA_SMALL_NUMBER;
 
 	if (bLogClumsinessEvents)
 	{
 		UE_LOG(
 			LogAgent,
 			Log,
-			TEXT("Clumsiness adjusted to %.2f (range %.2f - %.2f)."),
+			TEXT("Clumsiness adjusted by %.4f to %.2f (range %.2f - %.2f)."),
+			AppliedDelta,
 			ClumsinessValue,
 			SafeMin,
 			SafeMax);
 	}
 
-	if (bShowFeedback && GEngine)
+	if (bLeveledUp)
+	{
+		UE_LOG(
+			LogAgent,
+			Log,
+			TEXT("Clumsiness level up: +%.4f -> %.2f"),
+			AppliedDelta,
+			ClumsinessValue);
+
+		if (GEngine)
+		{
+			const FString LevelUpMessage = FString::Printf(
+				TEXT("Clumsiness Level Up: +%.4f  New Level: %.2f"),
+				AppliedDelta,
+				ClumsinessValue);
+			GEngine->AddOnScreenDebugMessage(
+				static_cast<uint64>(GetUniqueID()) + 19104ULL,
+				1.5f,
+				FColor::Green,
+				LevelUpMessage);
+		}
+	}
+	else if (bShowFeedback && GEngine)
 	{
 		const FString ClumsinessMessage = FString::Printf(
 			TEXT("Clumsiness: %.2f  (Higher Value = %s clumsy)"),
@@ -4358,9 +4431,10 @@ void AAgentCharacter::HandleStepUpEvent(float StepUpHeightCm)
 	if (bTripTriggered)
 	{
 		TripEventCooldownRemaining = FMath::Max(0.0f, TripEventCooldownSeconds);
-		if (TripSkillGainOnTrigger > 0.0f)
+		const float TripChanceSkillGain = FMath::Max(0.0f, TripSkillGainOnTrigger) * FMath::Clamp(TripChance, 0.0f, 1.0f);
+		if (TripChanceSkillGain > KINDA_SMALL_NUMBER)
 		{
-			AdjustClumsiness(TripSkillGainOnTrigger, false);
+			AdjustClumsiness(TripChanceSkillGain, false);
 		}
 
 		if (bEnableTripFollowThroughRoll)
@@ -4426,6 +4500,8 @@ void AAgentCharacter::UpdateClumsinessSystems(float DeltaSeconds)
 	TripFollowThroughLowSkillLevel = FMath::Max(1.0f, TripFollowThroughLowSkillLevel);
 	TripFollowThroughHighSkillLevel = FMath::Max(TripFollowThroughLowSkillLevel, TripFollowThroughHighSkillLevel);
 	MinFallHeightForRagdollCm = FMath::Max(0.0f, MinFallHeightForRagdollCm);
+	ImpactVelocityMovingOtherMinSpeed = FMath::Max(0.0f, ImpactVelocityMovingOtherMinSpeed);
+	ImpactVelocityRagdollThreshold = FMath::Max(0.0f, ImpactVelocityRagdollThreshold);
 
 	const float SafeInstabilityMax = FMath::Max(1.0f, InstabilityMaxValue);
 	InstabilityValue = FMath::Clamp(InstabilityValue, 0.0f, SafeInstabilityMax);
@@ -4503,6 +4579,33 @@ bool AAgentCharacter::TryTriggerAutoRagdoll(EAgentRagdollReason Reason, FName So
 	return bEnteredRagdoll;
 }
 
+float AAgentCharacter::ComputeImpactClosingSpeed(const UPrimitiveComponent* OtherComp, const FVector& HitNormal) const
+{
+	if (!OtherComp)
+	{
+		return 0.0f;
+	}
+
+	const FVector RelativeVelocity = OtherComp->GetComponentVelocity() - GetVelocity();
+	if (RelativeVelocity.IsNearlyZero())
+	{
+		return 0.0f;
+	}
+
+	const FVector SafeHitNormal = HitNormal.GetSafeNormal();
+	float ClosingSpeed = RelativeVelocity.Size();
+	if (!SafeHitNormal.IsNearlyZero())
+	{
+		ClosingSpeed = FMath::Abs(FVector::DotProduct(RelativeVelocity, SafeHitNormal));
+		if (ClosingSpeed <= KINDA_SMALL_NUMBER)
+		{
+			ClosingSpeed = RelativeVelocity.Size();
+		}
+	}
+
+	return FMath::Max(0.0f, ClosingSpeed);
+}
+
 float AAgentCharacter::ComputeImpactMagnitude(const FVector& NormalImpulse, const UPrimitiveComponent* OtherComp, const FVector& HitNormal) const
 {
 	float ImpactMagnitude = NormalImpulse.Size();
@@ -4556,10 +4659,12 @@ void AAgentCharacter::ShowClumsinessDebug() const
 	const FString TripFollowThroughChanceText = LastTripFollowThroughRoll < 0.0f
 		? TEXT("--")
 		: FString::Printf(TEXT("%.2f%%"), LastTripFollowThroughChance * 100.0f);
+	const TCHAR* SafeModeText = IsWalkModeActive() ? TEXT("ON") : TEXT("OFF");
 	const FString ClumsinessDebugMessage = FString::Printf(
-		TEXT("Clumsy %.2f (A %.2f)  Inst %.1f/%.1f  Trip %.1f%%/%s  Save %s/%s  Step %.1fcm  Speed %.0f  FallH %.0f  FallV %.0f  Hit %.0f  Src %s"),
+		TEXT("Clumsy %.2f (A %.2f)  Safe %s  Inst %.1f/%.1f  Trip %.1f%%/%s  Save %s/%s  Step %.1fcm  Speed %.0f  FallH %.0f  FallV %.0f  HitI %.0f  HitV %.0f  Src %s"),
 		ClumsinessValue,
 		GetMostClumsyAlpha(),
+		SafeModeText,
 		InstabilityValue,
 		SafeInstabilityMax,
 		LastComputedTripChance * 100.0f,
@@ -4571,6 +4676,7 @@ void AAgentCharacter::ShowClumsinessDebug() const
 		LastFallHeightCm,
 		LastFallImpactSpeed,
 		LastImpactMagnitude,
+		LastImpactClosingSpeed,
 		*LastSource);
 	GEngine->AddOnScreenDebugMessage(
 		static_cast<uint64>(GetUniqueID()) + 19101ULL,
