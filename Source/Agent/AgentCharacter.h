@@ -143,6 +143,7 @@ protected:
 	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
+	virtual void OnMovementModeChanged(EMovementMode PrevMovementMode, uint8 PreviousCustomMode) override;
 	virtual void Landed(const FHitResult& Hit) override;
 	virtual void NotifyHit(
 		UPrimitiveComponent* MyComp,
@@ -289,12 +290,14 @@ protected:
 	void SyncDroneLiftAssistTuning() const;
 	void AdjustDroneLiftAssistStrength(float Delta);
 	void AdjustPickupStrength(float Delta);
-	void AdjustClumsiness(float Delta);
+	void AdjustClumsiness(float Delta, bool bShowFeedback = true);
 	float GetMostClumsyAlpha() const;
 	float ComputeTripChance(float StepUpHeightCm, float HorizontalSpeedCmPerSec, bool bMovingBackward) const;
+	float ComputeTripRagdollFollowThroughChance() const;
 	void HandleStepUpEvent(float StepUpHeightCm);
 	void UpdateClumsinessSystems(float DeltaSeconds);
-	void AddInstability(float InstabilityDelta, EAgentRagdollReason ThresholdReason, FName SourceTag);
+	void UpdateFallHeightTracking();
+	void AddInstability(float InstabilityDelta, EAgentRagdollReason ThresholdReason, FName SourceTag, bool bAllowThresholdRagdoll = true);
 	bool TryTriggerAutoRagdoll(EAgentRagdollReason Reason, FName SourceTag);
 	float ComputeImpactMagnitude(const FVector& NormalImpulse, const UPrimitiveComponent* OtherComp, const FVector& HitNormal) const;
 	void ShowClumsinessDebug() const;
@@ -621,25 +624,28 @@ public:
 	float ClumsinessMaxValue = 100.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Skill", meta=(ClampMin="1.0", UIMin="1.0"))
-	float ClumsinessValue = 100.0f;
+	float ClumsinessValue = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Skill")
-	bool bHigherClumsinessValueMeansMoreClumsy = true;
+	bool bStartClumsinessAtMinimum = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Skill")
+	bool bHigherClumsinessValueMeansMoreClumsy = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Input", meta=(ClampMin="0.0", UIMin="0.0"))
-	float ClumsinessBracketStep = 1.0f;
+	float ClumsinessBracketStep = 5.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip")
 	bool bEnableClumsinessTrip = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", UIMin="0.0"))
-	float TripBaseChance = 0.12f;
+	float TripBaseChance = 0.08f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", UIMin="0.0"))
-	float TripLeastClumsyMultiplier = 1.15f;
+	float TripLeastClumsyMultiplier = 0.35f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", UIMin="0.0"))
-	float TripMostClumsyMultiplier = 5.0f;
+	float TripMostClumsyMultiplier = 2.25f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", UIMin="0.0"))
 	float TripStepUpMinHeightCm = 6.0f;
@@ -666,19 +672,37 @@ public:
 	float TripSpeedMinMultiplier = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", UIMin="0.0"))
-	float TripSpeedMaxMultiplier = 2.8f;
+	float TripSpeedMaxMultiplier = 2.1f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", ClampMax="1.0", UIMin="0.0", UIMax="1.0"))
 	float TripBackwardDotThreshold = 0.2f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="1.0", UIMin="1.0"))
-	float TripBackwardMultiplier = 1.45f;
+	float TripBackwardMultiplier = 1.3f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", ClampMax="1.0", UIMin="0.0", UIMax="1.0"))
-	float TripChanceMaxClamp = 0.99f;
+	float TripChanceMaxClamp = 0.9f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", UIMin="0.0"))
-	float TripEventCooldownSeconds = 0.12f;
+	float TripEventCooldownSeconds = 0.18f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip")
+	bool bEnableTripFollowThroughRoll = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="1.0", UIMin="1.0"))
+	float TripFollowThroughLowSkillLevel = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="1.0", UIMin="1.0"))
+	float TripFollowThroughHighSkillLevel = 80.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", ClampMax="1.0", UIMin="0.0", UIMax="1.0"))
+	float TripFollowThroughRagdollChanceAtLowSkill = 0.9f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", ClampMax="1.0", UIMin="0.0", UIMax="1.0"))
+	float TripFollowThroughRagdollChanceAtHighSkill = 0.0001f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", UIMin="0.0"))
+	float TripSkillGainOnTrigger = 0.05f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Instability")
 	bool bEnableInstabilityMeter = true;
@@ -700,6 +724,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Fall")
 	bool bEnableFallInstability = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Fall", meta=(ClampMin="0.0", UIMin="0.0"))
+	float MinFallHeightForRagdollCm = 3000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Fall", meta=(ClampMin="0.0", UIMin="0.0"))
 	float FallInstabilityStartSpeed = 550.0f;
@@ -931,6 +958,9 @@ protected:
 	float LastFallImpactSpeed = 0.0f;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Clumsiness", meta=(AllowPrivateAccess="true"))
+	float LastFallHeightCm = 0.0f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Clumsiness", meta=(AllowPrivateAccess="true"))
 	float LastImpactMagnitude = 0.0f;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Clumsiness", meta=(AllowPrivateAccess="true"))
@@ -947,6 +977,15 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Clumsiness", meta=(AllowPrivateAccess="true"))
 	bool bLastTripTriggeredRagdoll = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Clumsiness", meta=(AllowPrivateAccess="true"))
+	float LastTripFollowThroughChance = 0.0f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Clumsiness", meta=(AllowPrivateAccess="true"))
+	float LastTripFollowThroughRoll = -1.0f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Clumsiness", meta=(AllowPrivateAccess="true"))
+	bool bLastTripFollowThroughPreventedRagdoll = false;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
 	bool bUseSimpleDronePilotControls = false;
@@ -1015,6 +1054,7 @@ protected:
 	bool bRollModeJumpHeld = false;
 	bool bPickupRotationModeActive = false;
 	bool bHeldPickupUsesDroneView = false;
+	bool bTrackingFallHeight = false;
 
 	float ThirdPersonTransitionElapsed = 0.0f;
 	float ViewModeButtonHeldDuration = 0.0f;
@@ -1026,6 +1066,8 @@ protected:
 	float DroneWorldDiscoveryTimeRemaining = 0.0f;
 	float AutoRagdollCooldownRemaining = 0.0f;
 	float TripEventCooldownRemaining = 0.0f;
+	float FallTrackingStartZ = 0.0f;
+	float FallTrackingMinZ = 0.0f;
 	float DefaultViewPitchMin = -89.9f;
 	float DefaultViewPitchMax = 89.9f;
 	float CrashRollRecoveryStableTime = 0.0f;

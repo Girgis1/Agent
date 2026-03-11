@@ -261,9 +261,17 @@ void AAgentCharacter::BeginPlay()
 	ClumsinessMinValue = FMath::Max(1.0f, ClumsinessMinValue);
 	ClumsinessMaxValue = FMath::Max(ClumsinessMinValue, ClumsinessMaxValue);
 	ClumsinessValue = FMath::Clamp(ClumsinessValue, ClumsinessMinValue, ClumsinessMaxValue);
+	if (bStartClumsinessAtMinimum)
+	{
+		ClumsinessValue = ClumsinessMinValue;
+	}
 	InstabilityMaxValue = FMath::Max(1.0f, InstabilityMaxValue);
 	InstabilityRagdollThreshold = FMath::Clamp(InstabilityRagdollThreshold, 0.0f, InstabilityMaxValue);
 	InstabilityValue = FMath::Clamp(InstabilityValue, 0.0f, InstabilityMaxValue);
+	bTrackingFallHeight = false;
+	FallTrackingStartZ = GetActorLocation().Z;
+	FallTrackingMinZ = FallTrackingStartZ;
+	LastFallHeightCm = 0.0f;
 
 	if (UConveyorCharacterMovementComponent* ConveyorMovement = Cast<UConveyorCharacterMovementComponent>(GetCharacterMovement()))
 	{
@@ -359,6 +367,7 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 		DroneWorldDiscoveryTimeRemaining = FMath::Max(0.1f, DroneWorldDiscoveryInterval);
 	}
 	EnsureActiveDroneSelection();
+	UpdateFallHeightTracking();
 	UpdateClumsinessSystems(DeltaSeconds);
 	UpdateRagdollAutoRecovery(DeltaSeconds);
 
@@ -418,10 +427,11 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 		PickupCandidateComponent.Reset();
 	}
 
+	UpdateThirdPersonCameraChase(DeltaSeconds);
+
 	if (DroneCompanion && bPrimaryDroneAvailable)
 	{
 		SyncDroneCompanionControlState(IsDronePilotMode() && !bMapModeActive);
-		UpdateThirdPersonCameraChase(DeltaSeconds);
 		UpdateDroneCompanionThirdPersonTarget();
 		UpdateDroneTorchTarget();
 
@@ -453,20 +463,81 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 	}
 }
 
+void AAgentCharacter::OnMovementModeChanged(EMovementMode PrevMovementMode, uint8 PreviousCustomMode)
+{
+	Super::OnMovementModeChanged(PrevMovementMode, PreviousCustomMode);
+
+	if (IsRagdolling())
+	{
+		bTrackingFallHeight = false;
+		return;
+	}
+
+	UCharacterMovementComponent* CharacterMovementComponent = GetCharacterMovement();
+	if (!CharacterMovementComponent)
+	{
+		bTrackingFallHeight = false;
+		return;
+	}
+
+	if (CharacterMovementComponent->IsFalling())
+	{
+		bTrackingFallHeight = true;
+		FallTrackingStartZ = GetActorLocation().Z;
+		FallTrackingMinZ = FallTrackingStartZ;
+		return;
+	}
+
+	if (PrevMovementMode == MOVE_Falling)
+	{
+		bTrackingFallHeight = false;
+	}
+}
+
+void AAgentCharacter::UpdateFallHeightTracking()
+{
+	if (!bTrackingFallHeight || IsRagdolling())
+	{
+		return;
+	}
+
+	const float CurrentZ = GetActorLocation().Z;
+	FallTrackingMinZ = FMath::Min(FallTrackingMinZ, CurrentZ);
+	LastFallHeightCm = FMath::Max(0.0f, FallTrackingStartZ - FallTrackingMinZ);
+}
+
 void AAgentCharacter::Landed(const FHitResult& Hit)
 {
 	const float LandingSpeed = FMath::Abs(FMath::Min(0.0f, GetVelocity().Z));
 	Super::Landed(Hit);
 
+	if (bTrackingFallHeight)
+	{
+		UpdateFallHeightTracking();
+	}
+	else
+	{
+		LastFallHeightCm = 0.0f;
+	}
+	const bool bMeetsFallHeightForRagdoll = LastFallHeightCm >= FMath::Max(0.0f, MinFallHeightForRagdollCm);
+	bTrackingFallHeight = false;
+	FallTrackingStartZ = GetActorLocation().Z;
+	FallTrackingMinZ = FallTrackingStartZ;
+
 	LastFallImpactSpeed = LandingSpeed;
-	if (!bEnableFallInstability || IsRagdolling())
+	if (IsRagdolling())
 	{
 		return;
 	}
 
-	if (LandingSpeed >= FMath::Max(0.0f, FallHardRagdollSpeed))
+	if (LandingSpeed >= FMath::Max(0.0f, FallHardRagdollSpeed) && bMeetsFallHeightForRagdoll)
 	{
 		TryTriggerAutoRagdoll(EAgentRagdollReason::Impact, FName(TEXT("FallHard")));
+		return;
+	}
+
+	if (!bEnableFallInstability)
+	{
 		return;
 	}
 
@@ -480,7 +551,7 @@ void AAgentCharacter::Landed(const FHitResult& Hit)
 			FMath::Max(0.0f, FallInstabilityMinAdd),
 			FMath::Max(FallInstabilityMinAdd, FallInstabilityMaxAdd),
 			FallSeverity);
-		AddInstability(InstabilityDelta, EAgentRagdollReason::Impact, FName(TEXT("Fall")));
+		AddInstability(InstabilityDelta, EAgentRagdollReason::Impact, FName(TEXT("Fall")), bMeetsFallHeightForRagdoll);
 	}
 }
 
@@ -645,7 +716,13 @@ void AAgentCharacter::OnRagdollTogglePressed()
 		return;
 	}
 
-	ToggleRagdoll();
+	// Left Ctrl is entry-only; recovery is handled by jump input.
+	if (IsRagdolling())
+	{
+		return;
+	}
+
+	RequestEnterRagdoll(EAgentRagdollReason::ManualInput);
 }
 
 void AAgentCharacter::ToggleRagdoll()
@@ -804,7 +881,7 @@ void AAgentCharacter::UpdateRagdollAutoRecovery(float DeltaSeconds)
 		return;
 	}
 
-	const USkeletalMeshComponent* MeshComponent = GetMesh();
+	USkeletalMeshComponent* MeshComponent = GetMesh();
 	if (!MeshComponent)
 	{
 		RagdollStableDuration = 0.0f;
@@ -951,6 +1028,9 @@ void AAgentCharacter::EnterRagdollInternal(EAgentRagdollReason Reason)
 	RagdollStableDuration = 0.0f;
 	LastRagdollLinearSpeed = 0.0f;
 	LastRagdollAngularSpeedDeg = 0.0f;
+	bTrackingFallHeight = false;
+	FallTrackingStartZ = GetActorLocation().Z;
+	FallTrackingMinZ = FallTrackingStartZ;
 	SetRagdollState(EAgentRagdollState::Ragdoll, Reason);
 	AutoRagdollCooldownRemaining = FMath::Max(AutoRagdollCooldownRemaining, FMath::Max(0.0f, AutoRagdollCooldownSeconds));
 	TripEventCooldownRemaining = FMath::Max(TripEventCooldownRemaining, FMath::Max(0.0f, TripEventCooldownSeconds));
@@ -1020,6 +1100,9 @@ void AAgentCharacter::ExitRagdollInternal(EAgentRagdollReason Reason)
 	RagdollStableDuration = 0.0f;
 	LastRagdollLinearSpeed = 0.0f;
 	LastRagdollAngularSpeedDeg = 0.0f;
+	bTrackingFallHeight = false;
+	FallTrackingStartZ = GetActorLocation().Z;
+	FallTrackingMinZ = FallTrackingStartZ;
 	CharacterMovementComponent->StopMovementImmediately();
 	ResetRagdollInputState();
 	SetRagdollState(EAgentRagdollState::Normal, Reason);
@@ -1559,6 +1642,10 @@ void AAgentCharacter::ResetThirdPersonCameraChaseState()
 	bHasThirdPersonCameraChaseState = false;
 	ThirdPersonCameraChaseLocation = FVector::ZeroVector;
 	ThirdPersonCameraChaseRotation = FRotator::ZeroRotator;
+	if (CameraBoom && !CameraBoom->GetRelativeLocation().IsNearlyZero(0.1f))
+	{
+		CameraBoom->SetRelativeLocation(FVector::ZeroVector);
+	}
 }
 
 float AAgentCharacter::ComputeThirdPersonCameraChaseAlpha(float DistanceToTarget) const
@@ -1597,97 +1684,29 @@ FVector AAgentCharacter::ResolveThirdPersonCameraFocusLocation() const
 
 void AAgentCharacter::UpdateThirdPersonCameraChase(float DeltaSeconds)
 {
+	(void)DeltaSeconds;
+
 	if (!CameraBoom || !FollowCamera)
 	{
 		ResetThirdPersonCameraChaseState();
 		return;
 	}
 
-	const bool bShouldChaseRagdoll =
+	const bool bShouldFollowRagdoll =
 		bEnableThirdPersonCameraChase
 		&& CurrentViewMode == EAgentViewMode::ThirdPerson
 		&& IsRagdolling();
-	if (!bShouldChaseRagdoll)
+	if (!bShouldFollowRagdoll)
 	{
-		const FVector CurrentBoomOffset = CameraBoom->GetRelativeLocation();
-		const float ReturnSpeed = FMath::Max(0.0f, ThirdPersonCameraChaseFarLocationInterpSpeed);
-		const FVector ResetOffset =
-			(DeltaSeconds > KINDA_SMALL_NUMBER && ReturnSpeed > KINDA_SMALL_NUMBER)
-				? FMath::VInterpTo(CurrentBoomOffset, FVector::ZeroVector, DeltaSeconds, ReturnSpeed)
-				: FVector::ZeroVector;
-		CameraBoom->SetRelativeLocation(ResetOffset);
-		if (ResetOffset.IsNearlyZero(1.0f))
-		{
-			CameraBoom->SetRelativeLocation(FVector::ZeroVector);
-			ResetThirdPersonCameraChaseState();
-		}
+		ResetThirdPersonCameraChaseState();
 		return;
 	}
 
 	const FVector FocusLocation = ResolveThirdPersonCameraFocusLocation();
-	const FVector CurrentCameraLocation = FollowCamera->GetComponentLocation();
-	FVector CameraDirection = (CurrentCameraLocation - FocusLocation).GetSafeNormal();
-	if (CameraDirection.IsNearlyZero())
-	{
-		CameraDirection = (-FollowCamera->GetForwardVector()).GetSafeNormal();
-		if (CameraDirection.IsNearlyZero())
-		{
-			CameraDirection = (-GetActorForwardVector()).GetSafeNormal();
-		}
-	}
-
-	const float MinDistance = FMath::Max(50.0f, ThirdPersonCameraRagdollMinDistance);
-	const float MaxDistance = FMath::Max(MinDistance + 1.0f, ThirdPersonCameraRagdollMaxDistance);
-	const float CurrentDistance = FVector::Distance(CurrentCameraLocation, FocusLocation);
-	const float TargetDistance = FMath::Clamp(CurrentDistance, MinDistance, MaxDistance);
-	const FVector DesiredCameraLocation = FocusLocation + (CameraDirection * TargetDistance);
-	const float ChaseAlpha = FMath::GetMappedRangeValueClamped(
-		FVector2D(MinDistance, MaxDistance),
-		FVector2D(0.0f, 1.0f),
-		CurrentDistance);
-	const float LocationInterpSpeed = FMath::Lerp(
-		FMath::Max(0.0f, ThirdPersonCameraChaseNearLocationInterpSpeed),
-		FMath::Max(0.0f, ThirdPersonCameraChaseFarLocationInterpSpeed),
-		ChaseAlpha);
-	const FVector NextCameraLocation =
-		(DeltaSeconds > KINDA_SMALL_NUMBER && LocationInterpSpeed > KINDA_SMALL_NUMBER)
-			? FMath::VInterpTo(CurrentCameraLocation, DesiredCameraLocation, DeltaSeconds, LocationInterpSpeed)
-			: DesiredCameraLocation;
-
-	const FVector CameraMoveDelta = NextCameraLocation - CurrentCameraLocation;
-	const FVector NextBoomWorldLocation = CameraBoom->GetComponentLocation() + CameraMoveDelta;
-	const FVector NextBoomRelativeLocation = GetActorTransform().InverseTransformPosition(NextBoomWorldLocation);
-	CameraBoom->SetRelativeLocation(NextBoomRelativeLocation);
-
-	if (bThirdPersonCameraLookAtCharacter)
-	{
-		const FVector LookAtLocation = FocusLocation + FVector(0.0f, 0.0f, ThirdPersonCameraLookAtHeightOffset);
-		const FRotator DesiredRotation = (LookAtLocation - NextCameraLocation).Rotation();
-		const float RotationInterpSpeed = FMath::Lerp(
-			FMath::Max(0.0f, ThirdPersonCameraChaseNearRotationInterpSpeed),
-			FMath::Max(0.0f, ThirdPersonCameraChaseFarRotationInterpSpeed),
-			ChaseAlpha);
-		if (AController* CharacterController = GetController())
-		{
-			const FRotator CurrentRotation = CharacterController->GetControlRotation();
-			const FRotator NextRotation =
-				(DeltaSeconds > KINDA_SMALL_NUMBER && RotationInterpSpeed > KINDA_SMALL_NUMBER)
-					? FMath::RInterpTo(CurrentRotation, DesiredRotation, DeltaSeconds, RotationInterpSpeed)
-					: DesiredRotation;
-			CharacterController->SetControlRotation(NextRotation);
-			ThirdPersonCameraChaseRotation = NextRotation;
-		}
-		else
-		{
-			ThirdPersonCameraChaseRotation = DesiredRotation;
-		}
-	}
-	else
-	{
-		ThirdPersonCameraChaseRotation = FollowCamera->GetComponentRotation();
-	}
-
-	ThirdPersonCameraChaseLocation = NextCameraLocation;
+	const FVector LocalFollowOffset = GetActorTransform().InverseTransformPosition(FocusLocation);
+	CameraBoom->SetRelativeLocation(LocalFollowOffset);
+	ThirdPersonCameraChaseLocation = FocusLocation;
+	ThirdPersonCameraChaseRotation = FollowCamera->GetComponentRotation();
 	bHasThirdPersonCameraChaseState = true;
 }
 
@@ -4067,7 +4086,7 @@ void AAgentCharacter::SyncPickupHandleSettings() const
 	}
 }
 
-void AAgentCharacter::AdjustClumsiness(float Delta)
+void AAgentCharacter::AdjustClumsiness(float Delta, bool bShowFeedback)
 {
 	const float SafeMin = FMath::Max(1.0f, ClumsinessMinValue);
 	const float SafeMax = FMath::Max(SafeMin, ClumsinessMaxValue);
@@ -4095,7 +4114,7 @@ void AAgentCharacter::AdjustClumsiness(float Delta)
 			SafeMax);
 	}
 
-	if (GEngine)
+	if (bShowFeedback && GEngine)
 	{
 		const FString ClumsinessMessage = FString::Printf(
 			TEXT("Clumsiness: %.2f  (Higher Value = %s clumsy)"),
@@ -4155,6 +4174,19 @@ float AAgentCharacter::ComputeTripChance(float StepUpHeightCm, float HorizontalS
 	return FMath::Clamp(RawChance, 0.0f, FMath::Clamp(TripChanceMaxClamp, 0.0f, 1.0f));
 }
 
+float AAgentCharacter::ComputeTripRagdollFollowThroughChance() const
+{
+	const float LowSkill = FMath::Max(1.0f, TripFollowThroughLowSkillLevel);
+	const float HighSkill = FMath::Max(LowSkill + KINDA_SMALL_NUMBER, TripFollowThroughHighSkillLevel);
+	const float SkillAlpha = FMath::GetMappedRangeValueClamped(
+		FVector2D(LowSkill, HighSkill),
+		FVector2D(0.0f, 1.0f),
+		ClumsinessValue);
+	const float LowSkillChance = FMath::Clamp(TripFollowThroughRagdollChanceAtLowSkill, 0.0f, 1.0f);
+	const float HighSkillChance = FMath::Clamp(TripFollowThroughRagdollChanceAtHighSkill, 0.0f, 1.0f);
+	return FMath::Lerp(LowSkillChance, HighSkillChance, SkillAlpha);
+}
+
 void AAgentCharacter::HandleStepUpEvent(float StepUpHeightCm)
 {
 	LastStepUpHeightCm = StepUpHeightCm;
@@ -4182,21 +4214,59 @@ void AAgentCharacter::HandleStepUpEvent(float StepUpHeightCm)
 	if (TripChance <= 0.0f)
 	{
 		LastTripRoll = -1.0f;
+		LastTripFollowThroughRoll = -1.0f;
+		LastTripFollowThroughChance = 0.0f;
+		bLastTripFollowThroughPreventedRagdoll = false;
 		bLastTripTriggeredRagdoll = false;
 		return;
 	}
 
 	const float TripRoll = FMath::FRand();
 	LastTripRoll = TripRoll;
-	bLastTripTriggeredRagdoll = TripRoll <= TripChance;
-	TripEventCooldownRemaining = FMath::Max(0.0f, TripEventCooldownSeconds);
+	const bool bTripTriggered = TripRoll <= TripChance;
+	bLastTripTriggeredRagdoll = bTripTriggered;
+	bLastTripFollowThroughPreventedRagdoll = false;
+	LastTripFollowThroughChance = 0.0f;
+	LastTripFollowThroughRoll = -1.0f;
+
+	bool bAllowRagdollFromTrip = true;
+	if (bTripTriggered)
+	{
+		TripEventCooldownRemaining = FMath::Max(0.0f, TripEventCooldownSeconds);
+		if (TripSkillGainOnTrigger > 0.0f)
+		{
+			AdjustClumsiness(TripSkillGainOnTrigger, false);
+		}
+
+		if (bEnableTripFollowThroughRoll)
+		{
+			LastTripFollowThroughChance = ComputeTripRagdollFollowThroughChance();
+			LastTripFollowThroughRoll = FMath::FRand();
+			bAllowRagdollFromTrip = LastTripFollowThroughRoll <= LastTripFollowThroughChance;
+			bLastTripFollowThroughPreventedRagdoll = !bAllowRagdollFromTrip;
+		}
+		else
+		{
+			LastTripFollowThroughChance = 1.0f;
+			LastTripFollowThroughRoll = 0.0f;
+		}
+	}
+	bLastTripTriggeredRagdoll = bTripTriggered && bAllowRagdollFromTrip;
 
 	if (bShowTripEventDebug && GEngine)
 	{
+		const FString FollowThroughChanceText = LastTripFollowThroughRoll < 0.0f
+			? TEXT("--")
+			: FString::Printf(TEXT("%.2f%%"), LastTripFollowThroughChance * 100.0f);
+		const FString FollowThroughRollText = LastTripFollowThroughRoll < 0.0f
+			? TEXT("--")
+			: FString::Printf(TEXT("%.2f"), LastTripFollowThroughRoll);
 		const FString TripEventMessage = FString::Printf(
-			TEXT("Trip %.1f%%  Roll %.2f  Step %.1fcm  Speed %.0f  Back %s  Instability %.1f"),
+			TEXT("Trip %.1f%%/%.2f  Save %s/%s  Step %.1fcm  Speed %.0f  Back %s  Inst %.1f"),
 			TripChance * 100.0f,
 			TripRoll,
+			*FollowThroughChanceText,
+			*FollowThroughRollText,
 			StepUpHeightCm,
 			HorizontalSpeed,
 			bMovingBackward ? TEXT("Y") : TEXT("N"),
@@ -4204,11 +4274,16 @@ void AAgentCharacter::HandleStepUpEvent(float StepUpHeightCm)
 		GEngine->AddOnScreenDebugMessage(
 			static_cast<uint64>(GetUniqueID()) + 19102ULL,
 			FMath::Max(0.0f, TripEventDebugDuration),
-			bLastTripTriggeredRagdoll ? FColor::Red : FColor::Yellow,
+			bLastTripTriggeredRagdoll ? FColor::Red : FColor::Green,
 			TripEventMessage);
 	}
 
-	if (bLastTripTriggeredRagdoll)
+	if (!bTripTriggered)
+	{
+		return;
+	}
+
+	if (bAllowRagdollFromTrip)
 	{
 		TryTriggerAutoRagdoll(EAgentRagdollReason::ClumsinessTrip, FName(TEXT("Trip")));
 	}
@@ -4223,6 +4298,9 @@ void AAgentCharacter::UpdateClumsinessSystems(float DeltaSeconds)
 	const float SafeClumsinessMin = FMath::Max(1.0f, ClumsinessMinValue);
 	const float SafeClumsinessMax = FMath::Max(SafeClumsinessMin, ClumsinessMaxValue);
 	ClumsinessValue = FMath::Clamp(ClumsinessValue, SafeClumsinessMin, SafeClumsinessMax);
+	TripFollowThroughLowSkillLevel = FMath::Max(1.0f, TripFollowThroughLowSkillLevel);
+	TripFollowThroughHighSkillLevel = FMath::Max(TripFollowThroughLowSkillLevel, TripFollowThroughHighSkillLevel);
+	MinFallHeightForRagdollCm = FMath::Max(0.0f, MinFallHeightForRagdollCm);
 
 	const float SafeInstabilityMax = FMath::Max(1.0f, InstabilityMaxValue);
 	InstabilityValue = FMath::Clamp(InstabilityValue, 0.0f, SafeInstabilityMax);
@@ -4244,7 +4322,7 @@ void AAgentCharacter::UpdateClumsinessSystems(float DeltaSeconds)
 	}
 }
 
-void AAgentCharacter::AddInstability(float InstabilityDelta, EAgentRagdollReason ThresholdReason, FName SourceTag)
+void AAgentCharacter::AddInstability(float InstabilityDelta, EAgentRagdollReason ThresholdReason, FName SourceTag, bool bAllowThresholdRagdoll)
 {
 	if (!bEnableInstabilityMeter || InstabilityDelta <= 0.0f)
 	{
@@ -4267,7 +4345,8 @@ void AAgentCharacter::AddInstability(float InstabilityDelta, EAgentRagdollReason
 			*SourceTag.ToString());
 	}
 
-	if (InstabilityValue >= FMath::Clamp(InstabilityRagdollThreshold, 0.0f, SafeInstabilityMax))
+	if (bAllowThresholdRagdoll
+		&& InstabilityValue >= FMath::Clamp(InstabilityRagdollThreshold, 0.0f, SafeInstabilityMax))
 	{
 		TryTriggerAutoRagdoll(ThresholdReason, FName(TEXT("InstabilityThreshold")));
 	}
@@ -4346,17 +4425,25 @@ void AAgentCharacter::ShowClumsinessDebug() const
 	const FString TripRollText = LastTripRoll < 0.0f
 		? TEXT("--")
 		: FString::Printf(TEXT("%.2f"), LastTripRoll);
+	const FString TripFollowThroughRollText = LastTripFollowThroughRoll < 0.0f
+		? TEXT("--")
+		: FString::Printf(TEXT("%.2f"), LastTripFollowThroughRoll);
+	const FString TripFollowThroughChanceText = LastTripFollowThroughRoll < 0.0f
+		? TEXT("--")
+		: FString::Printf(TEXT("%.2f%%"), LastTripFollowThroughChance * 100.0f);
 	const FString ClumsinessDebugMessage = FString::Printf(
-		TEXT("Clumsy %.2f (A %.2f)  Inst %.1f/%.1f  Trip %.1f%% (Roll %s, %s)  Step %.1fcm  Speed %.0f  Fall %.0f  Hit %.0f  Src %s"),
+		TEXT("Clumsy %.2f (A %.2f)  Inst %.1f/%.1f  Trip %.1f%%/%s  Save %s/%s  Step %.1fcm  Speed %.0f  FallH %.0f  FallV %.0f  Hit %.0f  Src %s"),
 		ClumsinessValue,
 		GetMostClumsyAlpha(),
 		InstabilityValue,
 		SafeInstabilityMax,
 		LastComputedTripChance * 100.0f,
 		*TripRollText,
-		bLastTripMovingBackward ? TEXT("Back") : TEXT("Forward"),
+		*TripFollowThroughChanceText,
+		*TripFollowThroughRollText,
 		LastStepUpHeightCm,
 		LastTripHorizontalSpeed,
+		LastFallHeightCm,
 		LastFallImpactSpeed,
 		LastImpactMagnitude,
 		*LastSource);
@@ -5116,6 +5203,7 @@ void AAgentCharacter::DoJumpStart()
 {
 	if (IsRagdolling())
 	{
+		RequestExitRagdoll(EAgentRagdollReason::ManualInput);
 		return;
 	}
 
