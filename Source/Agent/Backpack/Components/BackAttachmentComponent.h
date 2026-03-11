@@ -162,6 +162,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(ClampMin="0.01", UIMin="0.01", EditCondition="bUseMagnetRecall"))
 	float MagnetMoveInterpSpeed = 14.0f;
 
+	/** Global multiplier for how tightly the backpack tries to stick to the magnet target. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(ClampMin="0.1", UIMin="0.1", EditCondition="bUseMagnetRecall && bMagnetRecallKeepsPhysicsActor"))
+	float BackpackMagnetStrength = 1.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(ClampMin="0.01", UIMin="0.01", EditCondition="bUseMagnetRecall"))
 	float MagnetRotationInterpSpeed = 14.0f;
 
@@ -181,7 +185,11 @@ public:
 
 	/** Once a backpack is settled on the magnet, exceeding this distance drops it back into the world. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(ClampMin="1.0", UIMin="1.0", EditCondition="bUseMagnetRecall && bMagnetRecallKeepsPhysicsActor"))
-	float MagnetDetachDistance = 90.0f;
+	float MagnetDetachDistance = 35.0f;
+
+	/** Keep the third-person camera from retracting when the backpack is magnet-held. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(EditCondition="bUseMagnetRecall && bMagnetRecallKeepsPhysicsActor"))
+	bool bIgnoreCameraCollisionWhenMagnetHeld = true;
 
 	/** Small grace window to avoid single-frame detach jitter while the backpack is bouncing on the magnet. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(ClampMin="0.0", UIMin="0.0", EditCondition="bUseMagnetRecall && bMagnetRecallKeepsPhysicsActor"))

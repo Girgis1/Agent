@@ -272,19 +272,13 @@ void UBackAttachmentComponent::RefreshBackItemAttachment()
 
 void UBackAttachmentComponent::SetOwnerRagdolling(bool bInOwnerRagdolling)
 {
-	bOwnerRagdolling = bInOwnerRagdolling;
-	CachedAttachMagnetComponent = nullptr;
-
-	ABlackHoleBackpackActor* BackItem = BackItemActor.Get();
-	if (!BackItem || BackItem->IsItemDeployed())
+	if (bOwnerRagdolling == bInOwnerRagdolling)
 	{
 		return;
 	}
 
-	if (bUseMagnetRecall && bMagnetRecallKeepsPhysicsActor)
-	{
-		StartMagnetBackpackState(BackItem, false);
-	}
+	bOwnerRagdolling = bInOwnerRagdolling;
+	CachedAttachMagnetComponent = nullptr;
 }
 
 bool UBackAttachmentComponent::IsBackItemDeployed() const
@@ -564,9 +558,10 @@ void UBackAttachmentComponent::StartMagnetBackpackState(ABlackHoleBackpackActor*
 		return;
 	}
 
+	(void)bStartAsRecalling;
+	MagnetState = EBackpackMagnetState::Recalling;
 	BackItem->SetMagnetHeldState(true);
 	ConfigureBackpackForMagnetPhysics(BackItem);
-	MagnetState = bStartAsRecalling ? EBackpackMagnetState::Recalling : EBackpackMagnetState::Held;
 	MagnetDetachExceededDuration = 0.0f;
 }
 
@@ -621,17 +616,19 @@ void UBackAttachmentComponent::UpdateMagnetRecall(float DeltaTime)
 	const FVector CurrentSnapAnchorLocation = BackItem->GetSnapAnchorWorldTransform().GetLocation();
 	const FVector TargetSnapAnchorLocation = TargetSnapAnchorWorldTransform.GetLocation();
 	const float DistanceToTarget = FVector::Distance(CurrentSnapAnchorLocation, TargetSnapAnchorLocation);
+	const float EffectiveMoveInterpSpeed = FMath::Max(0.01f, MagnetMoveInterpSpeed * BackpackMagnetStrength);
+	const float EffectiveRotationInterpSpeed = FMath::Max(0.01f, MagnetRotationInterpSpeed * BackpackMagnetStrength);
 
 	const FVector NewLocation = FMath::VInterpTo(
 		CurrentWorldTransform.GetLocation(),
 		TargetWorldTransform.GetLocation(),
 		DeltaTime,
-		FMath::Max(0.01f, MagnetMoveInterpSpeed));
+		EffectiveMoveInterpSpeed);
 	const FRotator NewRotation = FMath::RInterpTo(
 		CurrentWorldTransform.Rotator(),
 		TargetWorldTransform.Rotator(),
 		DeltaTime,
-		FMath::Max(0.01f, MagnetRotationInterpSpeed));
+		EffectiveRotationInterpSpeed);
 	const float AngleToTargetDeg = FMath::RadiansToDegrees(NewRotation.Quaternion().AngularDistance(TargetWorldTransform.GetRotation()));
 
 	if (bMagnetRecallKeepsPhysicsActor)
@@ -640,23 +637,28 @@ void UBackAttachmentComponent::UpdateMagnetRecall(float DeltaTime)
 		{
 			const FVector ToTarget = TargetWorldTransform.GetLocation() - CurrentWorldTransform.GetLocation();
 			const float TargetSpeed = FMath::Min(
-				ToTarget.Size() * FMath::Max(0.01f, MagnetMoveInterpSpeed),
-				FMath::Max(100.0f, MagnetRecallMaxSpeed));
+				ToTarget.Size() * EffectiveMoveInterpSpeed,
+				FMath::Max(100.0f, MagnetRecallMaxSpeed * BackpackMagnetStrength));
 			const FVector DesiredVelocity = ToTarget.GetSafeNormal() * TargetSpeed;
 			const FVector CurrentVelocity = ItemMesh->GetPhysicsLinearVelocity(NAME_None);
 			const FVector NewVelocity = FMath::VInterpTo(
 				CurrentVelocity,
 				DesiredVelocity,
 				DeltaTime,
-				FMath::Max(0.01f, MagnetMoveInterpSpeed));
+				EffectiveMoveInterpSpeed);
 			ItemMesh->SetPhysicsLinearVelocity(NewVelocity, false, NAME_None);
+
+			// Keep recall responsive when contact constraints pin the body against floor/walls.
+			if (ToTarget.SizeSquared() > FMath::Square(FMath::Max(0.1f, MagnetAttachDistance)))
+			{
+				BackItem->SetActorLocation(NewLocation, true, nullptr, ETeleportType::TeleportPhysics);
+			}
 		}
 
 		BackItem->SetActorRotation(NewRotation, ETeleportType::TeleportPhysics);
 
 		if (MagnetState == EBackpackMagnetState::Recalling
-			&& DistanceToTarget <= FMath::Max(0.1f, MagnetAttachDistance)
-			&& AngleToTargetDeg <= FMath::Max(0.1f, MagnetAttachAngleDegrees))
+			&& DistanceToTarget <= FMath::Max(0.1f, MagnetAttachDistance))
 		{
 			MagnetState = EBackpackMagnetState::Held;
 			MagnetDetachExceededDuration = 0.0f;
@@ -741,10 +743,21 @@ void UBackAttachmentComponent::ConfigureBackpackForMagnetPhysics(ABlackHoleBackp
 	}
 
 	ItemMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-	ItemMesh->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
+	ItemMesh->SetCollisionResponseToChannel(
+		ECC_Pawn,
+		MagnetState == EBackpackMagnetState::Recalling ? ECR_Ignore : ECR_Block);
+	ItemMesh->SetCollisionResponseToChannel(
+		ECC_Camera,
+		bIgnoreCameraCollisionWhenMagnetHeld ? ECR_Ignore : ECR_Block);
 	ItemMesh->SetGenerateOverlapEvents(true);
-	ItemMesh->SetSimulatePhysics(true);
-	ItemMesh->SetEnableGravity(true);
+	if (!ItemMesh->IsSimulatingPhysics())
+	{
+		ItemMesh->SetSimulatePhysics(true);
+	}
+	if (!ItemMesh->IsGravityEnabled())
+	{
+		ItemMesh->SetEnableGravity(true);
+	}
 	ItemMesh->WakeAllRigidBodies();
 }
 
