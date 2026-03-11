@@ -258,6 +258,18 @@ void AAgentCharacter::BeginPlay()
 	Super::BeginPlay();
 	RefreshFirstPersonCameraAttachment();
 
+	ClumsinessMinValue = FMath::Max(1.0f, ClumsinessMinValue);
+	ClumsinessMaxValue = FMath::Max(ClumsinessMinValue, ClumsinessMaxValue);
+	ClumsinessValue = FMath::Clamp(ClumsinessValue, ClumsinessMinValue, ClumsinessMaxValue);
+	InstabilityMaxValue = FMath::Max(1.0f, InstabilityMaxValue);
+	InstabilityRagdollThreshold = FMath::Clamp(InstabilityRagdollThreshold, 0.0f, InstabilityMaxValue);
+	InstabilityValue = FMath::Clamp(InstabilityValue, 0.0f, InstabilityMaxValue);
+
+	if (UConveyorCharacterMovementComponent* ConveyorMovement = Cast<UConveyorCharacterMovementComponent>(GetCharacterMovement()))
+	{
+		ConveyorMovement->OnCharacterStepUp.AddUObject(this, &AAgentCharacter::HandleStepUpEvent);
+	}
+
 	bDefaultUseControllerRotationYaw = bUseControllerRotationYaw;
 	bDefaultOrientRotationToMovement = GetCharacterMovement() ? GetCharacterMovement()->bOrientRotationToMovement : true;
 	DronePilotControlMode = StartDronePilotControlMode;
@@ -347,6 +359,8 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 		DroneWorldDiscoveryTimeRemaining = FMath::Max(0.1f, DroneWorldDiscoveryInterval);
 	}
 	EnsureActiveDroneSelection();
+	UpdateClumsinessSystems(DeltaSeconds);
+	UpdateRagdollAutoRecovery(DeltaSeconds);
 
 	UpdateViewModeButtonHold(DeltaSeconds);
 	UpdateKeyboardMapButtonHold(DeltaSeconds);
@@ -407,6 +421,7 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 	if (DroneCompanion && bPrimaryDroneAvailable)
 	{
 		SyncDroneCompanionControlState(IsDronePilotMode() && !bMapModeActive);
+		UpdateThirdPersonCameraChase(DeltaSeconds);
 		UpdateDroneCompanionThirdPersonTarget();
 		UpdateDroneTorchTarget();
 
@@ -435,6 +450,85 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 	{
 		ApplyViewMode(CurrentViewMode, false);
 		bViewModeInitialized = true;
+	}
+}
+
+void AAgentCharacter::Landed(const FHitResult& Hit)
+{
+	const float LandingSpeed = FMath::Abs(FMath::Min(0.0f, GetVelocity().Z));
+	Super::Landed(Hit);
+
+	LastFallImpactSpeed = LandingSpeed;
+	if (!bEnableFallInstability || IsRagdolling())
+	{
+		return;
+	}
+
+	if (LandingSpeed >= FMath::Max(0.0f, FallHardRagdollSpeed))
+	{
+		TryTriggerAutoRagdoll(EAgentRagdollReason::Impact, FName(TEXT("FallHard")));
+		return;
+	}
+
+	if (bEnableInstabilityMeter && LandingSpeed >= FMath::Max(0.0f, FallInstabilityStartSpeed))
+	{
+		const float FallSeverity = FMath::GetMappedRangeValueClamped(
+			FVector2D(FallInstabilityStartSpeed, FMath::Max(FallInstabilityStartSpeed + KINDA_SMALL_NUMBER, FallInstabilityMaxSpeed)),
+			FVector2D(0.0f, 1.0f),
+			LandingSpeed);
+		const float InstabilityDelta = FMath::Lerp(
+			FMath::Max(0.0f, FallInstabilityMinAdd),
+			FMath::Max(FallInstabilityMinAdd, FallInstabilityMaxAdd),
+			FallSeverity);
+		AddInstability(InstabilityDelta, EAgentRagdollReason::Impact, FName(TEXT("Fall")));
+	}
+}
+
+void AAgentCharacter::NotifyHit(
+	UPrimitiveComponent* MyComp,
+	AActor* Other,
+	UPrimitiveComponent* OtherComp,
+	bool bSelfMoved,
+	FVector HitLocation,
+	FVector HitNormal,
+	FVector NormalImpulse,
+	const FHitResult& Hit)
+{
+	Super::NotifyHit(MyComp, Other, OtherComp, bSelfMoved, HitLocation, HitNormal, NormalImpulse, Hit);
+
+	if (!bEnableImpactInstability || IsRagdolling() || Other == this || !OtherComp)
+	{
+		return;
+	}
+
+	const float ImpactMagnitude = ComputeImpactMagnitude(NormalImpulse, OtherComp, HitNormal);
+	LastImpactMagnitude = ImpactMagnitude;
+	if (ImpactMagnitude <= KINDA_SMALL_NUMBER)
+	{
+		return;
+	}
+
+	if (ImpactMagnitude >= FMath::Max(0.0f, ImpactHardRagdollImpulse))
+	{
+		TryTriggerAutoRagdoll(EAgentRagdollReason::Impact, FName(TEXT("ImpactHard")));
+		return;
+	}
+
+	if (bEnableInstabilityMeter && ImpactMagnitude >= FMath::Max(0.0f, ImpactInstabilityStartImpulse))
+	{
+		const float ImpactSeverity = FMath::GetMappedRangeValueClamped(
+			FVector2D(ImpactInstabilityStartImpulse, FMath::Max(ImpactInstabilityStartImpulse + KINDA_SMALL_NUMBER, ImpactInstabilityMaxImpulse)),
+			FVector2D(0.0f, 1.0f),
+			ImpactMagnitude);
+		float InstabilityDelta = FMath::Lerp(
+			FMath::Max(0.0f, ImpactInstabilityMinAdd),
+			FMath::Max(ImpactInstabilityMinAdd, ImpactInstabilityMaxAdd),
+			ImpactSeverity);
+		if (OtherComp->IsSimulatingPhysics())
+		{
+			InstabilityDelta *= FMath::Max(0.1f, ImpactPhysicsBodyMultiplier);
+		}
+		AddInstability(InstabilityDelta, EAgentRagdollReason::Impact, FName(TEXT("Impact")));
 	}
 }
 
@@ -690,6 +784,73 @@ FRotator AAgentCharacter::GetRagdollAnchorRotation() const
 	return MeshComponent->GetComponentRotation();
 }
 
+void AAgentCharacter::UpdateRagdollAutoRecovery(float DeltaSeconds)
+{
+	if (!IsRagdolling())
+	{
+		RagdollElapsedDuration = 0.0f;
+		RagdollStableDuration = 0.0f;
+		LastRagdollLinearSpeed = 0.0f;
+		LastRagdollAngularSpeedDeg = 0.0f;
+		return;
+	}
+
+	const float SafeDeltaSeconds = FMath::Max(0.0f, DeltaSeconds);
+	RagdollElapsedDuration += SafeDeltaSeconds;
+
+	if (!bEnableAutoRagdollRecovery || RagdollElapsedDuration < FMath::Max(0.0f, AutoRagdollRecoveryMinDuration))
+	{
+		RagdollStableDuration = 0.0f;
+		return;
+	}
+
+	const USkeletalMeshComponent* MeshComponent = GetMesh();
+	if (!MeshComponent)
+	{
+		RagdollStableDuration = 0.0f;
+		return;
+	}
+
+	const FName AnchorBoneName = ResolveRagdollAnchorBoneName();
+	const FVector LinearVelocity = AnchorBoneName != NAME_None
+		? MeshComponent->GetPhysicsLinearVelocity(AnchorBoneName)
+		: MeshComponent->GetPhysicsLinearVelocity();
+	const FVector AngularVelocityDeg = AnchorBoneName != NAME_None
+		? MeshComponent->GetPhysicsAngularVelocityInDegrees(AnchorBoneName)
+		: MeshComponent->GetPhysicsAngularVelocityInDegrees();
+
+	LastRagdollLinearSpeed = LinearVelocity.Size();
+	LastRagdollAngularSpeedDeg = AngularVelocityDeg.Size();
+
+	const bool bLinearSettled = LastRagdollLinearSpeed <= FMath::Max(0.0f, AutoRagdollRecoveryMaxLinearSpeed);
+	const bool bAngularSettled = LastRagdollAngularSpeedDeg <= FMath::Max(0.0f, AutoRagdollRecoveryMaxAngularSpeedDeg);
+	if (bLinearSettled && bAngularSettled)
+	{
+		RagdollStableDuration += SafeDeltaSeconds;
+	}
+	else
+	{
+		RagdollStableDuration = 0.0f;
+	}
+
+	if (RagdollStableDuration < FMath::Max(0.0f, AutoRagdollRecoveryStableDuration))
+	{
+		return;
+	}
+
+	const bool bExited = RequestExitRagdoll(EAgentRagdollReason::Scripted);
+	if (bExited && bLogAutoRagdollRecovery)
+	{
+		UE_LOG(
+			LogAgent,
+			Log,
+			TEXT("Auto ragdoll recovery triggered at %.2fs (Linear=%.2f, Angular=%.2f)."),
+			RagdollElapsedDuration,
+			LastRagdollLinearSpeed,
+			LastRagdollAngularSpeedDeg);
+	}
+}
+
 void AAgentCharacter::ResetRagdollInputState()
 {
 	bViewModeButtonHeld = false;
@@ -781,7 +942,22 @@ void AAgentCharacter::EnterRagdollInternal(EAgentRagdollReason Reason)
 	MeshComponent->SetSimulatePhysics(true);
 	MeshComponent->WakeAllRigidBodies();
 
+	if (BackAttachmentComponent)
+	{
+		BackAttachmentComponent->SetOwnerRagdolling(true);
+	}
+
+	RagdollElapsedDuration = 0.0f;
+	RagdollStableDuration = 0.0f;
+	LastRagdollLinearSpeed = 0.0f;
+	LastRagdollAngularSpeedDeg = 0.0f;
 	SetRagdollState(EAgentRagdollState::Ragdoll, Reason);
+	AutoRagdollCooldownRemaining = FMath::Max(AutoRagdollCooldownRemaining, FMath::Max(0.0f, AutoRagdollCooldownSeconds));
+	TripEventCooldownRemaining = FMath::Max(TripEventCooldownRemaining, FMath::Max(0.0f, TripEventCooldownSeconds));
+	if (bResetInstabilityOnRagdollEntry)
+	{
+		InstabilityValue = 0.0f;
+	}
 }
 
 void AAgentCharacter::ExitRagdollInternal(EAgentRagdollReason Reason)
@@ -835,6 +1011,15 @@ void AAgentCharacter::ExitRagdollInternal(EAgentRagdollReason Reason)
 		CharacterMovementComponent->SetMovementMode(MOVE_Walking);
 	}
 
+	if (BackAttachmentComponent)
+	{
+		BackAttachmentComponent->SetOwnerRagdolling(false);
+	}
+
+	RagdollElapsedDuration = 0.0f;
+	RagdollStableDuration = 0.0f;
+	LastRagdollLinearSpeed = 0.0f;
+	LastRagdollAngularSpeedDeg = 0.0f;
 	CharacterMovementComponent->StopMovementImmediately();
 	ResetRagdollInputState();
 	SetRagdollState(EAgentRagdollState::Normal, Reason);
@@ -1030,6 +1215,10 @@ void AAgentCharacter::ApplyViewMode(EAgentViewMode NewMode, bool bBlend)
 		&& !bMiniMapModeActive;
 
 	CurrentViewMode = NewMode;
+	if (NewMode != EAgentViewMode::ThirdPerson || PreviousViewMode != EAgentViewMode::ThirdPerson)
+	{
+		ResetThirdPersonCameraChaseState();
+	}
 	bDroneEntryAssistActive = NewMode == EAgentViewMode::DronePilot && !bWasDronePilot;
 	bThirdPersonTransitionActive = false;
 	bPendingThirdPersonSwapFromDroneCamera = false;
@@ -1363,6 +1552,143 @@ void AAgentCharacter::SyncDroneCompanionControlState(bool bAllowRollControls, bo
 	}
 
 	ApplyDroneAssistState();
+}
+
+void AAgentCharacter::ResetThirdPersonCameraChaseState()
+{
+	bHasThirdPersonCameraChaseState = false;
+	ThirdPersonCameraChaseLocation = FVector::ZeroVector;
+	ThirdPersonCameraChaseRotation = FRotator::ZeroRotator;
+}
+
+float AAgentCharacter::ComputeThirdPersonCameraChaseAlpha(float DistanceToTarget) const
+{
+	const float NearDistance = FMath::Max(0.0f, ThirdPersonCameraChaseNearDistance);
+	const float FarDistance = FMath::Max(NearDistance + 1.0f, ThirdPersonCameraChaseFarDistance);
+	const float RawAlpha = FMath::GetMappedRangeValueClamped(
+		FVector2D(NearDistance, FarDistance),
+		FVector2D(0.0f, 1.0f),
+		FMath::Max(0.0f, DistanceToTarget));
+	const float AlphaExponent = FMath::Max(0.1f, ThirdPersonCameraChaseDistanceExponent);
+	return FMath::Pow(RawAlpha, AlphaExponent);
+}
+
+FVector AAgentCharacter::ResolveThirdPersonCameraFocusLocation() const
+{
+	if (!bThirdPersonCameraTargetTracksCharacterMesh)
+	{
+		return GetActorLocation();
+	}
+
+	const USkeletalMeshComponent* MeshComponent = GetMesh();
+	if (!MeshComponent)
+	{
+		return GetActorLocation();
+	}
+
+	if (ThirdPersonCameraTrackBoneName != NAME_None
+		&& MeshComponent->GetBoneIndex(ThirdPersonCameraTrackBoneName) != INDEX_NONE)
+	{
+		return MeshComponent->GetBoneLocation(ThirdPersonCameraTrackBoneName);
+	}
+
+	return MeshComponent->GetComponentLocation();
+}
+
+void AAgentCharacter::UpdateThirdPersonCameraChase(float DeltaSeconds)
+{
+	if (!CameraBoom || !FollowCamera)
+	{
+		ResetThirdPersonCameraChaseState();
+		return;
+	}
+
+	const bool bShouldChaseRagdoll =
+		bEnableThirdPersonCameraChase
+		&& CurrentViewMode == EAgentViewMode::ThirdPerson
+		&& IsRagdolling();
+	if (!bShouldChaseRagdoll)
+	{
+		const FVector CurrentBoomOffset = CameraBoom->GetRelativeLocation();
+		const float ReturnSpeed = FMath::Max(0.0f, ThirdPersonCameraChaseFarLocationInterpSpeed);
+		const FVector ResetOffset =
+			(DeltaSeconds > KINDA_SMALL_NUMBER && ReturnSpeed > KINDA_SMALL_NUMBER)
+				? FMath::VInterpTo(CurrentBoomOffset, FVector::ZeroVector, DeltaSeconds, ReturnSpeed)
+				: FVector::ZeroVector;
+		CameraBoom->SetRelativeLocation(ResetOffset);
+		if (ResetOffset.IsNearlyZero(1.0f))
+		{
+			CameraBoom->SetRelativeLocation(FVector::ZeroVector);
+			ResetThirdPersonCameraChaseState();
+		}
+		return;
+	}
+
+	const FVector FocusLocation = ResolveThirdPersonCameraFocusLocation();
+	const FVector CurrentCameraLocation = FollowCamera->GetComponentLocation();
+	FVector CameraDirection = (CurrentCameraLocation - FocusLocation).GetSafeNormal();
+	if (CameraDirection.IsNearlyZero())
+	{
+		CameraDirection = (-FollowCamera->GetForwardVector()).GetSafeNormal();
+		if (CameraDirection.IsNearlyZero())
+		{
+			CameraDirection = (-GetActorForwardVector()).GetSafeNormal();
+		}
+	}
+
+	const float MinDistance = FMath::Max(50.0f, ThirdPersonCameraRagdollMinDistance);
+	const float MaxDistance = FMath::Max(MinDistance + 1.0f, ThirdPersonCameraRagdollMaxDistance);
+	const float CurrentDistance = FVector::Distance(CurrentCameraLocation, FocusLocation);
+	const float TargetDistance = FMath::Clamp(CurrentDistance, MinDistance, MaxDistance);
+	const FVector DesiredCameraLocation = FocusLocation + (CameraDirection * TargetDistance);
+	const float ChaseAlpha = FMath::GetMappedRangeValueClamped(
+		FVector2D(MinDistance, MaxDistance),
+		FVector2D(0.0f, 1.0f),
+		CurrentDistance);
+	const float LocationInterpSpeed = FMath::Lerp(
+		FMath::Max(0.0f, ThirdPersonCameraChaseNearLocationInterpSpeed),
+		FMath::Max(0.0f, ThirdPersonCameraChaseFarLocationInterpSpeed),
+		ChaseAlpha);
+	const FVector NextCameraLocation =
+		(DeltaSeconds > KINDA_SMALL_NUMBER && LocationInterpSpeed > KINDA_SMALL_NUMBER)
+			? FMath::VInterpTo(CurrentCameraLocation, DesiredCameraLocation, DeltaSeconds, LocationInterpSpeed)
+			: DesiredCameraLocation;
+
+	const FVector CameraMoveDelta = NextCameraLocation - CurrentCameraLocation;
+	const FVector NextBoomWorldLocation = CameraBoom->GetComponentLocation() + CameraMoveDelta;
+	const FVector NextBoomRelativeLocation = GetActorTransform().InverseTransformPosition(NextBoomWorldLocation);
+	CameraBoom->SetRelativeLocation(NextBoomRelativeLocation);
+
+	if (bThirdPersonCameraLookAtCharacter)
+	{
+		const FVector LookAtLocation = FocusLocation + FVector(0.0f, 0.0f, ThirdPersonCameraLookAtHeightOffset);
+		const FRotator DesiredRotation = (LookAtLocation - NextCameraLocation).Rotation();
+		const float RotationInterpSpeed = FMath::Lerp(
+			FMath::Max(0.0f, ThirdPersonCameraChaseNearRotationInterpSpeed),
+			FMath::Max(0.0f, ThirdPersonCameraChaseFarRotationInterpSpeed),
+			ChaseAlpha);
+		if (AController* CharacterController = GetController())
+		{
+			const FRotator CurrentRotation = CharacterController->GetControlRotation();
+			const FRotator NextRotation =
+				(DeltaSeconds > KINDA_SMALL_NUMBER && RotationInterpSpeed > KINDA_SMALL_NUMBER)
+					? FMath::RInterpTo(CurrentRotation, DesiredRotation, DeltaSeconds, RotationInterpSpeed)
+					: DesiredRotation;
+			CharacterController->SetControlRotation(NextRotation);
+			ThirdPersonCameraChaseRotation = NextRotation;
+		}
+		else
+		{
+			ThirdPersonCameraChaseRotation = DesiredRotation;
+		}
+	}
+	else
+	{
+		ThirdPersonCameraChaseRotation = FollowCamera->GetComponentRotation();
+	}
+
+	ThirdPersonCameraChaseLocation = NextCameraLocation;
+	bHasThirdPersonCameraChaseState = true;
 }
 
 void AAgentCharacter::UpdateDroneCompanionThirdPersonTarget()
@@ -2096,6 +2422,7 @@ void AAgentCharacter::ApplyDroneFleetContext(bool bUpdateViewTarget, bool bBlend
 		if (bIsActiveDrone)
 		{
 			SyncDroneCompanionControlState(IsDronePilotMode() && !bMapModeActive, bMapModeActive || bMiniMapModeActive);
+			UpdateThirdPersonCameraChase(0.0f);
 			UpdateDroneCompanionThirdPersonTarget();
 		}
 		else
@@ -3740,6 +4067,306 @@ void AAgentCharacter::SyncPickupHandleSettings() const
 	}
 }
 
+void AAgentCharacter::AdjustClumsiness(float Delta)
+{
+	const float SafeMin = FMath::Max(1.0f, ClumsinessMinValue);
+	const float SafeMax = FMath::Max(SafeMin, ClumsinessMaxValue);
+	const float NewClumsinessValue = FMath::Clamp(ClumsinessValue + Delta, SafeMin, SafeMax);
+	if (FMath::IsNearlyEqual(NewClumsinessValue, ClumsinessValue))
+	{
+		if (bShowClumsinessDebug)
+		{
+			ShowClumsinessDebug();
+		}
+		return;
+	}
+
+	ClumsinessValue = NewClumsinessValue;
+	LastClumsinessEventSource = FName(TEXT("ClumsinessInput"));
+
+	if (bLogClumsinessEvents)
+	{
+		UE_LOG(
+			LogAgent,
+			Log,
+			TEXT("Clumsiness adjusted to %.2f (range %.2f - %.2f)."),
+			ClumsinessValue,
+			SafeMin,
+			SafeMax);
+	}
+
+	if (GEngine)
+	{
+		const FString ClumsinessMessage = FString::Printf(
+			TEXT("Clumsiness: %.2f  (Higher Value = %s clumsy)"),
+			ClumsinessValue,
+			bHigherClumsinessValueMeansMoreClumsy ? TEXT("more") : TEXT("less"));
+		GEngine->AddOnScreenDebugMessage(
+			static_cast<uint64>(GetUniqueID()) + 19100ULL,
+			2.5f,
+			FColor::Orange,
+			ClumsinessMessage);
+	}
+}
+
+float AAgentCharacter::GetMostClumsyAlpha() const
+{
+	const float SafeMin = FMath::Max(1.0f, ClumsinessMinValue);
+	const float SafeMax = FMath::Max(SafeMin, ClumsinessMaxValue);
+	const float NormalizedValue = FMath::GetMappedRangeValueClamped(
+		FVector2D(SafeMin, SafeMax),
+		FVector2D(0.0f, 1.0f),
+		ClumsinessValue);
+	return bHigherClumsinessValueMeansMoreClumsy ? NormalizedValue : (1.0f - NormalizedValue);
+}
+
+float AAgentCharacter::ComputeTripChance(float StepUpHeightCm, float HorizontalSpeedCmPerSec, bool bMovingBackward) const
+{
+	if (!bEnableClumsinessTrip)
+	{
+		return 0.0f;
+	}
+
+	const float StepHeightAlpha = FMath::GetMappedRangeValueClamped(
+		FVector2D(TripStepUpMinHeightCm, FMath::Max(TripStepUpMinHeightCm + KINDA_SMALL_NUMBER, TripStepUpMaxHeightCm)),
+		FVector2D(0.0f, 1.0f),
+		StepUpHeightCm);
+	const float CurvedStepAlpha = FMath::Pow(StepHeightAlpha, FMath::Max(0.1f, TripStepUpExponent));
+	const float StepMultiplier = FMath::Lerp(
+		FMath::Max(0.0f, TripStepUpMinMultiplier),
+		FMath::Max(TripStepUpMinMultiplier, TripStepUpMaxMultiplier),
+		CurvedStepAlpha);
+
+	const float SpeedAlpha = FMath::GetMappedRangeValueClamped(
+		FVector2D(TripSpeedMinCmPerSecond, FMath::Max(TripSpeedMinCmPerSecond + KINDA_SMALL_NUMBER, TripSpeedMaxCmPerSecond)),
+		FVector2D(0.0f, 1.0f),
+		HorizontalSpeedCmPerSec);
+	const float SpeedMultiplier = FMath::Lerp(
+		FMath::Max(0.0f, TripSpeedMinMultiplier),
+		FMath::Max(TripSpeedMinMultiplier, TripSpeedMaxMultiplier),
+		SpeedAlpha);
+
+	const float ClumsinessMultiplier = FMath::Lerp(
+		FMath::Max(0.0f, TripLeastClumsyMultiplier),
+		FMath::Max(TripLeastClumsyMultiplier, TripMostClumsyMultiplier),
+		GetMostClumsyAlpha());
+	const float BackwardMultiplier = bMovingBackward ? FMath::Max(0.0f, TripBackwardMultiplier) : 1.0f;
+	const float RawChance = FMath::Max(0.0f, TripBaseChance) * ClumsinessMultiplier * StepMultiplier * SpeedMultiplier * BackwardMultiplier;
+	return FMath::Clamp(RawChance, 0.0f, FMath::Clamp(TripChanceMaxClamp, 0.0f, 1.0f));
+}
+
+void AAgentCharacter::HandleStepUpEvent(float StepUpHeightCm)
+{
+	LastStepUpHeightCm = StepUpHeightCm;
+
+	if (!bEnableClumsinessTrip || IsRagdolling() || TripEventCooldownRemaining > 0.0f)
+	{
+		return;
+	}
+
+	const UCharacterMovementComponent* CharacterMovementComponent = GetCharacterMovement();
+	if (!CharacterMovementComponent || !CharacterMovementComponent->IsMovingOnGround())
+	{
+		return;
+	}
+
+	const FVector HorizontalVelocity(GetVelocity().X, GetVelocity().Y, 0.0f);
+	const float HorizontalSpeed = HorizontalVelocity.Size();
+	LastTripHorizontalSpeed = HorizontalSpeed;
+	const bool bMovingBackward = !HorizontalVelocity.IsNearlyZero()
+		&& FVector::DotProduct(HorizontalVelocity.GetSafeNormal(), GetActorForwardVector()) <= -FMath::Clamp(TripBackwardDotThreshold, 0.0f, 1.0f);
+	bLastTripMovingBackward = bMovingBackward;
+
+	const float TripChance = ComputeTripChance(StepUpHeightCm, HorizontalSpeed, bMovingBackward);
+	LastComputedTripChance = TripChance;
+	if (TripChance <= 0.0f)
+	{
+		LastTripRoll = -1.0f;
+		bLastTripTriggeredRagdoll = false;
+		return;
+	}
+
+	const float TripRoll = FMath::FRand();
+	LastTripRoll = TripRoll;
+	bLastTripTriggeredRagdoll = TripRoll <= TripChance;
+	TripEventCooldownRemaining = FMath::Max(0.0f, TripEventCooldownSeconds);
+
+	if (bShowTripEventDebug && GEngine)
+	{
+		const FString TripEventMessage = FString::Printf(
+			TEXT("Trip %.1f%%  Roll %.2f  Step %.1fcm  Speed %.0f  Back %s  Instability %.1f"),
+			TripChance * 100.0f,
+			TripRoll,
+			StepUpHeightCm,
+			HorizontalSpeed,
+			bMovingBackward ? TEXT("Y") : TEXT("N"),
+			InstabilityValue);
+		GEngine->AddOnScreenDebugMessage(
+			static_cast<uint64>(GetUniqueID()) + 19102ULL,
+			FMath::Max(0.0f, TripEventDebugDuration),
+			bLastTripTriggeredRagdoll ? FColor::Red : FColor::Yellow,
+			TripEventMessage);
+	}
+
+	if (bLastTripTriggeredRagdoll)
+	{
+		TryTriggerAutoRagdoll(EAgentRagdollReason::ClumsinessTrip, FName(TEXT("Trip")));
+	}
+}
+
+void AAgentCharacter::UpdateClumsinessSystems(float DeltaSeconds)
+{
+	const float SafeDeltaSeconds = FMath::Max(0.0f, DeltaSeconds);
+	AutoRagdollCooldownRemaining = FMath::Max(0.0f, AutoRagdollCooldownRemaining - SafeDeltaSeconds);
+	TripEventCooldownRemaining = FMath::Max(0.0f, TripEventCooldownRemaining - SafeDeltaSeconds);
+
+	const float SafeClumsinessMin = FMath::Max(1.0f, ClumsinessMinValue);
+	const float SafeClumsinessMax = FMath::Max(SafeClumsinessMin, ClumsinessMaxValue);
+	ClumsinessValue = FMath::Clamp(ClumsinessValue, SafeClumsinessMin, SafeClumsinessMax);
+
+	const float SafeInstabilityMax = FMath::Max(1.0f, InstabilityMaxValue);
+	InstabilityValue = FMath::Clamp(InstabilityValue, 0.0f, SafeInstabilityMax);
+
+	if (bEnableInstabilityMeter && !IsRagdolling())
+	{
+		const float DecayAmount = FMath::Max(0.0f, InstabilityDecayPerSecond) * SafeDeltaSeconds;
+		InstabilityValue = FMath::Clamp(InstabilityValue - DecayAmount, 0.0f, SafeInstabilityMax);
+
+		if (InstabilityValue >= FMath::Clamp(InstabilityRagdollThreshold, 0.0f, SafeInstabilityMax))
+		{
+			TryTriggerAutoRagdoll(EAgentRagdollReason::Impact, FName(TEXT("InstabilityThreshold")));
+		}
+	}
+
+	if (bShowClumsinessDebug)
+	{
+		ShowClumsinessDebug();
+	}
+}
+
+void AAgentCharacter::AddInstability(float InstabilityDelta, EAgentRagdollReason ThresholdReason, FName SourceTag)
+{
+	if (!bEnableInstabilityMeter || InstabilityDelta <= 0.0f)
+	{
+		return;
+	}
+
+	const float SafeInstabilityMax = FMath::Max(1.0f, InstabilityMaxValue);
+	InstabilityValue = FMath::Clamp(InstabilityValue + InstabilityDelta, 0.0f, SafeInstabilityMax);
+	LastClumsinessEventSource = SourceTag;
+
+	if (bLogClumsinessEvents)
+	{
+		UE_LOG(
+			LogAgent,
+			Log,
+			TEXT("Instability +%.2f -> %.2f / %.2f (%s)."),
+			InstabilityDelta,
+			InstabilityValue,
+			SafeInstabilityMax,
+			*SourceTag.ToString());
+	}
+
+	if (InstabilityValue >= FMath::Clamp(InstabilityRagdollThreshold, 0.0f, SafeInstabilityMax))
+	{
+		TryTriggerAutoRagdoll(ThresholdReason, FName(TEXT("InstabilityThreshold")));
+	}
+}
+
+bool AAgentCharacter::TryTriggerAutoRagdoll(EAgentRagdollReason Reason, FName SourceTag)
+{
+	if (AutoRagdollCooldownRemaining > 0.0f || IsRagdolling())
+	{
+		return false;
+	}
+
+	const bool bEnteredRagdoll = RequestEnterRagdoll(Reason);
+	if (bEnteredRagdoll)
+	{
+		AutoRagdollCooldownRemaining = FMath::Max(AutoRagdollCooldownRemaining, FMath::Max(0.0f, AutoRagdollCooldownSeconds));
+		LastClumsinessEventSource = SourceTag;
+
+		if (bLogClumsinessEvents)
+		{
+			UE_LOG(
+				LogAgent,
+				Log,
+				TEXT("Auto ragdoll triggered (%s)."),
+				*SourceTag.ToString());
+		}
+	}
+
+	return bEnteredRagdoll;
+}
+
+float AAgentCharacter::ComputeImpactMagnitude(const FVector& NormalImpulse, const UPrimitiveComponent* OtherComp, const FVector& HitNormal) const
+{
+	float ImpactMagnitude = NormalImpulse.Size();
+	if (ImpactMagnitude > KINDA_SMALL_NUMBER)
+	{
+		return ImpactMagnitude;
+	}
+
+	if (!OtherComp)
+	{
+		return 0.0f;
+	}
+
+	const FVector RelativeVelocity = OtherComp->GetComponentVelocity() - GetVelocity();
+	const FVector SafeHitNormal = HitNormal.GetSafeNormal();
+	float ClosingSpeed = 0.0f;
+	if (!SafeHitNormal.IsNearlyZero())
+	{
+		ClosingSpeed = FMath::Max(0.0f, FVector::DotProduct(RelativeVelocity, -SafeHitNormal));
+	}
+	else
+	{
+		ClosingSpeed = RelativeVelocity.Size();
+	}
+
+	if (ClosingSpeed <= KINDA_SMALL_NUMBER)
+	{
+		return 0.0f;
+	}
+
+	const float SourceMass = OtherComp->IsSimulatingPhysics() ? FMath::Max(1.0f, OtherComp->GetMass()) : 1.0f;
+	ImpactMagnitude = ClosingSpeed * SourceMass;
+	return ImpactMagnitude;
+}
+
+void AAgentCharacter::ShowClumsinessDebug() const
+{
+	if (!GEngine)
+	{
+		return;
+	}
+
+	const float SafeInstabilityMax = FMath::Max(1.0f, InstabilityMaxValue);
+	const FString LastSource = LastClumsinessEventSource.IsNone() ? TEXT("-") : LastClumsinessEventSource.ToString();
+	const FString TripRollText = LastTripRoll < 0.0f
+		? TEXT("--")
+		: FString::Printf(TEXT("%.2f"), LastTripRoll);
+	const FString ClumsinessDebugMessage = FString::Printf(
+		TEXT("Clumsy %.2f (A %.2f)  Inst %.1f/%.1f  Trip %.1f%% (Roll %s, %s)  Step %.1fcm  Speed %.0f  Fall %.0f  Hit %.0f  Src %s"),
+		ClumsinessValue,
+		GetMostClumsyAlpha(),
+		InstabilityValue,
+		SafeInstabilityMax,
+		LastComputedTripChance * 100.0f,
+		*TripRollText,
+		bLastTripMovingBackward ? TEXT("Back") : TEXT("Forward"),
+		LastStepUpHeightCm,
+		LastTripHorizontalSpeed,
+		LastFallImpactSpeed,
+		LastImpactMagnitude,
+		*LastSource);
+	GEngine->AddOnScreenDebugMessage(
+		static_cast<uint64>(GetUniqueID()) + 19101ULL,
+		0.0f,
+		FColor::Cyan,
+		ClumsinessDebugMessage);
+}
+
 void AAgentCharacter::AdjustPickupStrength(float Delta)
 {
 	const float NewStrength = FMath::Max(0.0f, CharacterPickupStrengthMultiplier + Delta);
@@ -5148,11 +5775,13 @@ void AAgentCharacter::OnPickupOrPlaceReleased()
 void AAgentCharacter::OnPickupStrengthDecreasePressed()
 {
 	AdjustPickupStrength(-0.1f);
+	AdjustClumsiness(-FMath::Max(0.0f, ClumsinessBracketStep));
 }
 
 void AAgentCharacter::OnPickupStrengthIncreasePressed()
 {
 	AdjustPickupStrength(0.1f);
+	AdjustClumsiness(FMath::Max(0.0f, ClumsinessBracketStep));
 }
 
 void AAgentCharacter::OnInteractPressed()

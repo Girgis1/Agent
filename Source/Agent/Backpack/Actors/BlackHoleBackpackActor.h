@@ -33,6 +33,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Backpack")
 	void SetDeployedState(bool bInDeployed, const FVector& InitialImpulse = FVector::ZeroVector);
 
+	UFUNCTION(BlueprintCallable, Category="Backpack")
+	void SetMagnetHeldState(bool bInMagnetHeld);
+
 	UFUNCTION(BlueprintCallable, Category="BlackHole|Backpack|Portal")
 	void SetPortalEnabled(bool bInEnabled);
 
@@ -57,6 +60,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category="Backpack")
 	bool IsItemDeployed() const { return bIsDeployed; }
+
+	UFUNCTION(BlueprintPure, Category="Backpack")
+	bool IsMagnetHeld() const { return bIsMagnetHeld; }
 
 	UFUNCTION(BlueprintPure, Category="Backpack")
 	FTransform GetSnapAnchorLocalTransform() const;
@@ -119,6 +125,15 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Backpack|Collision")
 	FName DeployedCollisionProfileName = TEXT("PhysicsActor");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Backpack|Collision")
+	FName MagnetHeldCollisionProfileName = TEXT("PhysicsActor");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Backpack|Deploy")
+	bool bSimulatePhysicsWhenMagnetHeld = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Backpack|Deploy")
+	bool bEnableGravityWhenMagnetHeld = true;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="BlackHole|Backpack")
 	TObjectPtr<UInputVolume> InputVolume = nullptr;
@@ -212,6 +227,9 @@ public:
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Backpack")
 	bool bIsDeployed = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Backpack")
+	bool bIsMagnetHeld = false;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="BlackHole|Backpack|Portal")
 	bool bPortalEnabled = true;

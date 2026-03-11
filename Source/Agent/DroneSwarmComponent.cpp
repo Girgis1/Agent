@@ -96,12 +96,19 @@ ADroneCompanion* UDroneSwarmComponent::GetDroneById(int32 DroneId) const
 void UDroneSwarmComponent::SetActiveDrone(ADroneCompanion* Drone)
 {
 	const int32 NewDroneId = RegisterDroneInternal(Drone);
-	if (ActiveDroneId == NewDroneId)
+	ActiveDroneId = NewDroneId;
+
+	for (const TPair<int32, TWeakObjectPtr<ADroneCompanion>>& Pair : DroneIdToDrone)
 	{
-		return;
+		ADroneCompanion* CandidateDrone = Pair.Value.Get();
+		if (!IsValid(CandidateDrone))
+		{
+			continue;
+		}
+
+		CandidateDrone->bShowDebugOverlay = (Pair.Key == ActiveDroneId);
 	}
 
-	ActiveDroneId = NewDroneId;
 	RefreshDroneRecords();
 }
 

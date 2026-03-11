@@ -17,6 +17,7 @@
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/Controller.h"
+#include "GameFramework/PlayerController.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "PhysicalMaterials/PhysicalMaterial.h"
 #include "UObject/ConstructorHelpers.h"
@@ -2822,14 +2823,14 @@ void ADroneCompanion::UpdateLiftAssistFlight(float DeltaSeconds)
 		DeltaRotation.Yaw * RotationResponse);
 	ApplyDesiredAngularVelocity(DesiredLocalAngularVelocity, DeltaSeconds, RotationResponse);
 
-	if (bLiftAssistRopeVisible)
-	{
-		if (UWorld* World = GetWorld())
+		if (bLiftAssistRopeVisible)
 		{
-			const float RopeDistance = FVector::Dist(DroneLocation, AnchorLocation);
-			const FColor RopeColor = bLiftAssistLiftEngaged
-				? (RopeDistance > RopeTautLength ? FColor::Orange : FColor::Yellow)
-				: FColor::Cyan;
+			if (UWorld* World = GetWorld(); World && bShowDebugOverlay && IsLocalPlayerDebugTarget())
+			{
+				const float RopeDistance = FVector::Dist(DroneLocation, AnchorLocation);
+				const FColor RopeColor = bLiftAssistLiftEngaged
+					? (RopeDistance > RopeTautLength ? FColor::Orange : FColor::Yellow)
+					: FColor::Cyan;
 			DrawDebugLine(World, DroneLocation, AnchorLocation, RopeColor, false, 0.0f, 0, 2.0f);
 		}
 	}
@@ -3105,9 +3106,40 @@ void ADroneCompanion::LogRollModeState(const TCHAR* Context, bool bProbeGround)
 		bCrashed ? 1 : 0);
 }
 
+bool ADroneCompanion::IsLocalPlayerDebugTarget() const
+{
+	const UWorld* World = GetWorld();
+	if (!World)
+	{
+		return false;
+	}
+
+	const APawn* FollowPawn = Cast<APawn>(FollowTarget.Get());
+	for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+	{
+		const APlayerController* PlayerController = It->Get();
+		if (!PlayerController || !PlayerController->IsLocalController())
+		{
+			continue;
+		}
+
+		if (PlayerController->GetViewTarget() == this)
+		{
+			return true;
+		}
+
+		if (FollowPawn && PlayerController->GetPawn() == FollowPawn)
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
 void ADroneCompanion::UpdateDebugOutput() const
 {
-	if (!bShowDebugOverlay || !GEngine || !DroneBody)
+	if (!bShowDebugOverlay || !GEngine || !DroneBody || !IsLocalPlayerDebugTarget())
 	{
 		return;
 	}

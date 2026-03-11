@@ -14,6 +14,7 @@ class AConveyorBeltStraight;
 class AConveyorPlacementPreview;
 class AMachineActor;
 class AStorageBin;
+class AActor;
 class UVehicleInteractionComponent;
 class UBackAttachmentComponent;
 class UCameraComponent;
@@ -142,6 +143,16 @@ protected:
 	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
+	virtual void Landed(const FHitResult& Hit) override;
+	virtual void NotifyHit(
+		UPrimitiveComponent* MyComp,
+		AActor* Other,
+		UPrimitiveComponent* OtherComp,
+		bool bSelfMoved,
+		FVector HitLocation,
+		FVector HitNormal,
+		FVector NormalImpulse,
+		const FHitResult& Hit) override;
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 	void RefreshFirstPersonCameraReference();
 	void RefreshFirstPersonCameraAttachment();
@@ -162,6 +173,7 @@ protected:
 	FName ResolveRagdollAnchorBoneName() const;
 	FVector GetRagdollAnchorLocation() const;
 	FRotator GetRagdollAnchorRotation() const;
+	void UpdateRagdollAutoRecovery(float DeltaSeconds);
 	void ResetRagdollInputState();
 
 	void OnViewModeButtonPressed();
@@ -202,11 +214,15 @@ protected:
 	void EnterRollTransitionMode(bool bTrackHeldReturn, bool bFromCrashRecovery);
 	void ExitRollTransitionMode(bool bTryJumpLift);
 	void SyncDroneCompanionControlState(bool bAllowRollControls, bool bSuppressCameraMountRefresh = false);
+	void UpdateThirdPersonCameraChase(float DeltaSeconds);
 	void UpdateDroneCompanionThirdPersonTarget();
 	void UpdateDroneTorchTarget();
 	void UpdateDronePilotInputs(float DeltaSeconds);
 	void UpdateThirdPersonTransition(float DeltaSeconds);
 	bool GetThirdPersonDroneTarget(FVector& OutLocation, FRotator& OutRotation) const;
+	FVector ResolveThirdPersonCameraFocusLocation() const;
+	float ComputeThirdPersonCameraChaseAlpha(float DistanceToTarget) const;
+	void ResetThirdPersonCameraChaseState();
 	void ResetDroneInputState();
 	void ResetCharacterCameraRoll();
 	void UpdateDronePilotCameraLimits();
@@ -273,6 +289,15 @@ protected:
 	void SyncDroneLiftAssistTuning() const;
 	void AdjustDroneLiftAssistStrength(float Delta);
 	void AdjustPickupStrength(float Delta);
+	void AdjustClumsiness(float Delta);
+	float GetMostClumsyAlpha() const;
+	float ComputeTripChance(float StepUpHeightCm, float HorizontalSpeedCmPerSec, bool bMovingBackward) const;
+	void HandleStepUpEvent(float StepUpHeightCm);
+	void UpdateClumsinessSystems(float DeltaSeconds);
+	void AddInstability(float InstabilityDelta, EAgentRagdollReason ThresholdReason, FName SourceTag);
+	bool TryTriggerAutoRagdoll(EAgentRagdollReason Reason, FName SourceTag);
+	float ComputeImpactMagnitude(const FVector& NormalImpulse, const UPrimitiveComponent* OtherComp, const FVector& HitNormal) const;
+	void ShowClumsinessDebug() const;
 	void ShowPickupStrengthDebug() const;
 	bool TryAssignActiveDroneToHookJob(bool bCycleAfterAssign);
 	bool TryReleaseAllHookJobDrones();
@@ -460,6 +485,48 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera")
 	float ThirdPersonDroneProxyScale = 1.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera|ThirdPerson")
+	bool bEnableThirdPersonCameraChase = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera|ThirdPerson")
+	bool bThirdPersonCameraTargetTracksCharacterMesh = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera|ThirdPerson", meta=(ClampMin="50.0", UIMin="50.0"))
+	float ThirdPersonCameraRagdollMinDistance = 250.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera|ThirdPerson", meta=(ClampMin="100.0", UIMin="100.0"))
+	float ThirdPersonCameraRagdollMaxDistance = 500.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera|ThirdPerson")
+	FName ThirdPersonCameraTrackBoneName = FName(TEXT("pelvis"));
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera|ThirdPerson")
+	bool bThirdPersonCameraLookAtCharacter = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera|ThirdPerson")
+	float ThirdPersonCameraLookAtHeightOffset = 70.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera|ThirdPerson", meta=(ClampMin="0.0", UIMin="0.0"))
+	float ThirdPersonCameraChaseNearDistance = 120.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera|ThirdPerson", meta=(ClampMin="1.0", UIMin="1.0"))
+	float ThirdPersonCameraChaseFarDistance = 2000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera|ThirdPerson", meta=(ClampMin="0.1", UIMin="0.1"))
+	float ThirdPersonCameraChaseDistanceExponent = 1.4f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera|ThirdPerson", meta=(ClampMin="0.0", UIMin="0.0"))
+	float ThirdPersonCameraChaseNearLocationInterpSpeed = 5.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera|ThirdPerson", meta=(ClampMin="0.0", UIMin="0.0"))
+	float ThirdPersonCameraChaseFarLocationInterpSpeed = 18.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera|ThirdPerson", meta=(ClampMin="0.0", UIMin="0.0"))
+	float ThirdPersonCameraChaseNearRotationInterpSpeed = 4.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera|ThirdPerson", meta=(ClampMin="0.0", UIMin="0.0"))
+	float ThirdPersonCameraChaseFarRotationInterpSpeed = 14.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera")
 	float DroneViewHoldTime = 0.25f;
 
@@ -520,6 +587,21 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Recovery")
 	bool bRestorePreRagdollMovementMode = false;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Recovery")
+	bool bEnableAutoRagdollRecovery = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Recovery", meta=(ClampMin="0.0", UIMin="0.0"))
+	float AutoRagdollRecoveryMinDuration = 0.65f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Recovery", meta=(ClampMin="0.0", UIMin="0.0"))
+	float AutoRagdollRecoveryMaxLinearSpeed = 60.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Recovery", meta=(ClampMin="0.0", UIMin="0.0"))
+	float AutoRagdollRecoveryMaxAngularSpeedDeg = 90.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Recovery", meta=(ClampMin="0.0", UIMin="0.0"))
+	float AutoRagdollRecoveryStableDuration = 0.4f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Control")
 	bool bAllowLookInputWhileRagdoll = true;
 
@@ -528,6 +610,144 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Debug")
 	bool bLogRagdollStateChanges = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ragdoll|Debug")
+	bool bLogAutoRagdollRecovery = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Skill", meta=(ClampMin="1.0", UIMin="1.0"))
+	float ClumsinessMinValue = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Skill", meta=(ClampMin="1.0", UIMin="1.0"))
+	float ClumsinessMaxValue = 100.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Skill", meta=(ClampMin="1.0", UIMin="1.0"))
+	float ClumsinessValue = 100.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Skill")
+	bool bHigherClumsinessValueMeansMoreClumsy = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Input", meta=(ClampMin="0.0", UIMin="0.0"))
+	float ClumsinessBracketStep = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip")
+	bool bEnableClumsinessTrip = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", UIMin="0.0"))
+	float TripBaseChance = 0.12f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", UIMin="0.0"))
+	float TripLeastClumsyMultiplier = 1.15f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", UIMin="0.0"))
+	float TripMostClumsyMultiplier = 5.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", UIMin="0.0"))
+	float TripStepUpMinHeightCm = 6.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", UIMin="0.0"))
+	float TripStepUpMaxHeightCm = 36.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", UIMin="0.0"))
+	float TripStepUpMinMultiplier = 0.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", UIMin="0.0"))
+	float TripStepUpMaxMultiplier = 3.2f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.1", UIMin="0.1"))
+	float TripStepUpExponent = 1.1f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", UIMin="0.0"))
+	float TripSpeedMinCmPerSecond = 60.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", UIMin="0.0"))
+	float TripSpeedMaxCmPerSecond = 700.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", UIMin="0.0"))
+	float TripSpeedMinMultiplier = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", UIMin="0.0"))
+	float TripSpeedMaxMultiplier = 2.8f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", ClampMax="1.0", UIMin="0.0", UIMax="1.0"))
+	float TripBackwardDotThreshold = 0.2f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="1.0", UIMin="1.0"))
+	float TripBackwardMultiplier = 1.45f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", ClampMax="1.0", UIMin="0.0", UIMax="1.0"))
+	float TripChanceMaxClamp = 0.99f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Trip", meta=(ClampMin="0.0", UIMin="0.0"))
+	float TripEventCooldownSeconds = 0.12f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Instability")
+	bool bEnableInstabilityMeter = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Instability", meta=(ClampMin="1.0", UIMin="1.0"))
+	float InstabilityMaxValue = 100.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Instability", meta=(ClampMin="0.0", UIMin="0.0"))
+	float InstabilityRagdollThreshold = 100.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Instability", meta=(ClampMin="0.0", UIMin="0.0"))
+	float InstabilityDecayPerSecond = 5.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Instability", meta=(ClampMin="0.0", UIMin="0.0"))
+	float AutoRagdollCooldownSeconds = 0.75f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Instability")
+	bool bResetInstabilityOnRagdollEntry = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Fall")
+	bool bEnableFallInstability = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Fall", meta=(ClampMin="0.0", UIMin="0.0"))
+	float FallInstabilityStartSpeed = 550.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Fall", meta=(ClampMin="0.0", UIMin="0.0"))
+	float FallInstabilityMaxSpeed = 1400.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Fall", meta=(ClampMin="0.0", UIMin="0.0"))
+	float FallInstabilityMinAdd = 18.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Fall", meta=(ClampMin="0.0", UIMin="0.0"))
+	float FallInstabilityMaxAdd = 82.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Fall", meta=(ClampMin="0.0", UIMin="0.0"))
+	float FallHardRagdollSpeed = 1850.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Impact")
+	bool bEnableImpactInstability = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Impact", meta=(ClampMin="0.0", UIMin="0.0"))
+	float ImpactInstabilityStartImpulse = 12000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Impact", meta=(ClampMin="0.0", UIMin="0.0"))
+	float ImpactInstabilityMaxImpulse = 52000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Impact", meta=(ClampMin="0.0", UIMin="0.0"))
+	float ImpactInstabilityMinAdd = 16.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Impact", meta=(ClampMin="0.0", UIMin="0.0"))
+	float ImpactInstabilityMaxAdd = 90.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Impact", meta=(ClampMin="0.0", UIMin="0.0"))
+	float ImpactHardRagdollImpulse = 68000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Impact", meta=(ClampMin="0.1", UIMin="0.1"))
+	float ImpactPhysicsBodyMultiplier = 1.35f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Debug")
+	bool bShowClumsinessDebug = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Debug")
+	bool bShowTripEventDebug = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Debug", meta=(ClampMin="0.0", UIMin="0.0"))
+	float TripEventDebugDuration = 0.65f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Debug")
+	bool bLogClumsinessEvents = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
 	TSubclassOf<AConveyorBeltStraight> ConveyorBeltClass;
@@ -686,6 +906,48 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Ragdoll", meta=(AllowPrivateAccess="true"))
 	EAgentRagdollState RagdollState = EAgentRagdollState::Normal;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Ragdoll", meta=(AllowPrivateAccess="true"))
+	float RagdollElapsedDuration = 0.0f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Ragdoll", meta=(AllowPrivateAccess="true"))
+	float RagdollStableDuration = 0.0f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Ragdoll", meta=(AllowPrivateAccess="true"))
+	float LastRagdollLinearSpeed = 0.0f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Ragdoll", meta=(AllowPrivateAccess="true"))
+	float LastRagdollAngularSpeedDeg = 0.0f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Clumsiness", meta=(AllowPrivateAccess="true"))
+	float InstabilityValue = 0.0f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Clumsiness", meta=(AllowPrivateAccess="true"))
+	float LastComputedTripChance = 0.0f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Clumsiness", meta=(AllowPrivateAccess="true"))
+	float LastStepUpHeightCm = 0.0f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Clumsiness", meta=(AllowPrivateAccess="true"))
+	float LastFallImpactSpeed = 0.0f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Clumsiness", meta=(AllowPrivateAccess="true"))
+	float LastImpactMagnitude = 0.0f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Clumsiness", meta=(AllowPrivateAccess="true"))
+	FName LastClumsinessEventSource = NAME_None;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Clumsiness", meta=(AllowPrivateAccess="true"))
+	float LastTripRoll = -1.0f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Clumsiness", meta=(AllowPrivateAccess="true"))
+	float LastTripHorizontalSpeed = 0.0f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Clumsiness", meta=(AllowPrivateAccess="true"))
+	bool bLastTripMovingBackward = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Clumsiness", meta=(AllowPrivateAccess="true"))
+	bool bLastTripTriggeredRagdoll = false;
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Drone", meta=(AllowPrivateAccess="true"))
 	bool bUseSimpleDronePilotControls = false;
 
@@ -733,6 +995,7 @@ protected:
 	bool bDefaultOrientRotationToMovement = true;
 	bool bThirdPersonTransitionActive = false;
 	bool bPendingThirdPersonSwapFromDroneCamera = false;
+	bool bHasThirdPersonCameraChaseState = false;
 	bool bViewModeButtonHeld = false;
 	bool bViewModeHoldTriggered = false;
 	bool bHasStoredDefaultViewPitchLimits = false;
@@ -761,6 +1024,8 @@ protected:
 	float BackpackControllerButtonHeldDuration = 0.0f;
 	float HookJobButtonHeldDuration = 0.0f;
 	float DroneWorldDiscoveryTimeRemaining = 0.0f;
+	float AutoRagdollCooldownRemaining = 0.0f;
+	float TripEventCooldownRemaining = 0.0f;
 	float DefaultViewPitchMin = -89.9f;
 	float DefaultViewPitchMax = 89.9f;
 	float CrashRollRecoveryStableTime = 0.0f;
@@ -773,6 +1038,8 @@ protected:
 	float HeldPickupOriginalAngularDamping = 0.0f;
 	FVector ThirdPersonTransitionStartLocation = FVector::ZeroVector;
 	FRotator ThirdPersonTransitionStartRotation = FRotator::ZeroRotator;
+	FVector ThirdPersonCameraChaseLocation = FVector::ZeroVector;
+	FRotator ThirdPersonCameraChaseRotation = FRotator::ZeroRotator;
 	FVector PendingConveyorPlacementLocation = FVector::ZeroVector;
 	FRotator PendingConveyorPlacementRotation = FRotator::ZeroRotator;
 	int32 ConveyorPlacementRotationSteps = 0;
@@ -812,6 +1079,12 @@ protected:
 	EAgentViewMode PreRagdollViewMode = EAgentViewMode::ThirdPerson;
 
 public:
+	UFUNCTION(BlueprintPure, Category="Clumsiness")
+	float GetClumsinessValue() const { return ClumsinessValue; }
+
+	UFUNCTION(BlueprintPure, Category="Clumsiness")
+	float GetInstabilityValue() const { return InstabilityValue; }
+
 	UFUNCTION(BlueprintPure, Category="Drone|Availability")
 	bool IsPrimaryDroneAvailable() const { return bPrimaryDroneAvailable; }
 
