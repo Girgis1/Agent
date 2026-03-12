@@ -17,6 +17,7 @@ class AStorageBin;
 class AActor;
 class UVehicleInteractionComponent;
 class UBackAttachmentComponent;
+class UPlayerMagnetComponent;
 class UCameraComponent;
 class UDroneSwarmComponent;
 class UInputAction;
@@ -118,6 +119,10 @@ class AAgentCharacter : public ACharacter
 	/** Reusable backpack deploy/recall manager used by carried world items */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UBackAttachmentComponent* BackAttachmentComponent;
+
+	/** Player-owned backpack magnet settings and attach target. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	UPlayerMagnetComponent* PlayerMagnetComponent;
 
 	/** Swarm registry and role-slot coordinator for all known drones */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
@@ -302,6 +307,7 @@ protected:
 	float GetMostClumsyAlpha() const;
 	float ComputeTripChance(float StepUpHeightCm, float HorizontalSpeedCmPerSec, bool bMovingBackward) const;
 	float ComputeTripRagdollFollowThroughChance() const;
+	float ComputeDroneImpactKnockdownChance(float ClosingSpeed, bool bHeadHit, bool bLegHit) const;
 	void HandleStepUpEvent(float StepUpHeightCm);
 	void UpdateClumsinessSystems(float DeltaSeconds);
 	void UpdateFallHeightTracking();
@@ -317,7 +323,6 @@ protected:
 	bool CanUseBackpackDeployInput() const;
 	void UpdateBackpackDeployButtonHold(float DeltaSeconds);
 	void ResetBackpackDeployButtonHoldState();
-	void TryToggleBackpackDeployState();
 
 	void OnDronePitchForwardPressed();
 	void OnDronePitchForwardReleased();
@@ -554,8 +559,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Map")
 	float ControllerMapButtonHoldTime = 0.35f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Backpack", meta=(ClampMin="0.05", UIMin="0.05"))
-	float BackpackDeployHoldTime = 0.35f;
+	/** Time in seconds to ramp Hold-B backpack magnet strength from 0 to 100%. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Backpack", meta=(ClampMin="0.05", UIMin="0.05", DisplayName="Backpack Magnet Charge Time"))
+	float BackpackDeployHoldTime = 0.25f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Movement|Speed", meta=(ClampMin="0.0", UIMin="0.0"))
 	float WalkModeSpeed = 230.0f;
@@ -784,6 +790,48 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Impact", meta=(ClampMin="0.0", UIMin="0.0"))
 	float ImpactVelocityRagdollThreshold = 1100.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Impact|Drone")
+	bool bEnableDroneImpactKnockdownChance = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Impact|Drone")
+	bool bDroneImpactRequiresDroneMovement = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Impact|Drone", meta=(ClampMin="0.0", UIMin="0.0"))
+	float DroneImpactMinDroneSpeed = 140.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Impact|Drone", meta=(ClampMin="0.0", UIMin="0.0"))
+	float DroneImpactChanceMinClosingSpeed = 350.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Impact|Drone", meta=(ClampMin="0.0", UIMin="0.0"))
+	float DroneImpactChanceMaxClosingSpeed = 1800.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Impact|Drone", meta=(ClampMin="0.0", ClampMax="1.0", UIMin="0.0", UIMax="1.0"))
+	float DroneImpactMinKnockdownChance = 0.08f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Impact|Drone", meta=(ClampMin="0.0", ClampMax="1.0", UIMin="0.0", UIMax="1.0"))
+	float DroneImpactMaxKnockdownChance = 0.92f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Impact|Drone", meta=(ClampMin="0.0", UIMin="0.0"))
+	float DroneImpactHeadHitChanceMultiplier = 1.35f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Impact|Drone", meta=(ClampMin="0.0", UIMin="0.0"))
+	float DroneImpactLegHitChanceMultiplier = 1.2f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Impact|Drone", meta=(ClampMin="0.0", ClampMax="1.0", UIMin="0.0", UIMax="1.0"))
+	float DroneImpactChanceMaxClamp = 0.98f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Impact|Drone")
+	FName DroneImpactHeadBoneName = FName(TEXT("head"));
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Impact|Drone", meta=(ClampMin="0.0", UIMin="0.0"))
+	float DroneImpactHeadRadiusCm = 32.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Impact|Drone", meta=(ClampMin="0.0", UIMin="0.0"))
+	float DroneImpactLegMaxHeightFromFeetCm = 70.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Impact|Drone")
+	bool bShowDroneImpactKnockdownDebug = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Clumsiness|Impact", meta=(ClampMin="0.0", UIMin="0.0"))
 	float ImpactInstabilityStartImpulse = 12000.0f;
@@ -1085,9 +1133,7 @@ protected:
 	bool bControllerMapButtonHeld = false;
 	bool bControllerMapButtonTriggeredMiniMap = false;
 	bool bBackpackKeyboardButtonHeld = false;
-	bool bBackpackKeyboardHoldTriggered = false;
 	bool bBackpackControllerButtonHeld = false;
-	bool bBackpackControllerHoldTriggered = false;
 	bool bHookJobButtonHeld = false;
 	bool bHookJobButtonTriggeredHoldRelease = false;
 	bool bRollModeHoldStartedInFlight = false;
@@ -1182,6 +1228,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category="Interaction|Backpack")
 	UBackAttachmentComponent* GetBackAttachmentComponent() const { return BackAttachmentComponent; }
+
+	UFUNCTION(BlueprintPure, Category="Interaction|Backpack")
+	UPlayerMagnetComponent* GetPlayerMagnetComponent() const { return PlayerMagnetComponent; }
 
 	FORCEINLINE USpringArmComponent* GetCameraBoom() const { return CameraBoom; }
 	FORCEINLINE UCameraComponent* GetFollowCamera() const { return FollowCamera; }

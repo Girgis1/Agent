@@ -3,6 +3,7 @@
 #include "AgentCharacter.h"
 #include "Backpack/Actors/BlackHoleBackpackActor.h"
 #include "Backpack/Components/BackAttachmentComponent.h"
+#include "Backpack/Components/PlayerMagnetComponent.h"
 #include "DroneCompanion.h"
 #include "DroneSwarmComponent.h"
 #include "Factory/ConveyorBeltStraight.h"
@@ -126,6 +127,7 @@ AAgentCharacter::AAgentCharacter(const FObjectInitializer& ObjectInitializer)
 	PickupPhysicsHandle = CreateDefaultSubobject<UPhysicsHandleComponent>(TEXT("PickupPhysicsHandle"));
 	VehicleInteractionComponent = CreateDefaultSubobject<UVehicleInteractionComponent>(TEXT("VehicleInteractionComponent"));
 	BackAttachmentComponent = CreateDefaultSubobject<UBackAttachmentComponent>(TEXT("BackAttachmentComponent"));
+	PlayerMagnetComponent = CreateDefaultSubobject<UPlayerMagnetComponent>(TEXT("PlayerMagnetComponent"));
 	DroneSwarmComponent = CreateDefaultSubobject<UDroneSwarmComponent>(TEXT("DroneSwarmComponent"));
 
 	ThirdPersonDroneProxyMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ThirdPersonDroneProxyMesh"));
@@ -579,6 +581,77 @@ void AAgentCharacter::NotifyHit(
 	const float ImpactClosingSpeed = ComputeImpactClosingSpeed(OtherComp, HitNormal);
 	LastImpactMagnitude = ImpactMagnitude;
 	LastImpactClosingSpeed = ImpactClosingSpeed;
+
+	if (bEnableDroneImpactKnockdownChance && Cast<ADroneCompanion>(Other))
+	{
+		const float DroneSpeed = OtherComp->GetComponentVelocity().Size();
+		const bool bDroneMovingFastEnough = !bDroneImpactRequiresDroneMovement
+			|| DroneSpeed >= FMath::Max(0.0f, DroneImpactMinDroneSpeed);
+		if (bDroneMovingFastEnough)
+		{
+			const FVector ImpactPoint = !Hit.ImpactPoint.IsNearlyZero()
+				? FVector(Hit.ImpactPoint)
+				: HitLocation;
+			const UCapsuleComponent* CapsuleComp = GetCapsuleComponent();
+			const float CapsuleHalfHeight = CapsuleComp ? CapsuleComp->GetScaledCapsuleHalfHeight() : 0.0f;
+			const float FeetZ = GetActorLocation().Z - CapsuleHalfHeight;
+			const float HeightFromFeet = ImpactPoint.Z - FeetZ;
+			const bool bLegHit = HeightFromFeet <= FMath::Max(0.0f, DroneImpactLegMaxHeightFromFeetCm);
+
+			FVector HeadLocation = GetActorLocation() + FVector(0.0f, 0.0f, CapsuleHalfHeight);
+			if (const USkeletalMeshComponent* MeshComp = GetMesh())
+			{
+				if (DroneImpactHeadBoneName != NAME_None && MeshComp->GetBoneIndex(DroneImpactHeadBoneName) != INDEX_NONE)
+				{
+					HeadLocation = MeshComp->GetBoneLocation(DroneImpactHeadBoneName);
+				}
+				else
+				{
+					static const FName DefaultHeadBoneName(TEXT("head"));
+					if (MeshComp->GetBoneIndex(DefaultHeadBoneName) != INDEX_NONE)
+					{
+						HeadLocation = MeshComp->GetBoneLocation(DefaultHeadBoneName);
+					}
+				}
+			}
+
+			const float HeadRadius = FMath::Max(0.0f, DroneImpactHeadRadiusCm);
+			const bool bHeadHit = FVector::DistSquared(ImpactPoint, HeadLocation) <= FMath::Square(HeadRadius);
+			const float DroneKnockdownChance = ComputeDroneImpactKnockdownChance(ImpactClosingSpeed, bHeadHit, bLegHit);
+			if (DroneKnockdownChance > 0.0f)
+			{
+				const float DroneKnockdownRoll = FMath::FRand();
+				const bool bTriggerDroneKnockdown = DroneKnockdownRoll <= DroneKnockdownChance;
+
+				if (bShowDroneImpactKnockdownDebug && GEngine)
+				{
+					const FString ImpactMessage = FString::Printf(
+						TEXT("Drone Hit V=%.0f  Chance=%.1f%%  Roll=%.2f  Head=%s  Legs=%s"),
+						ImpactClosingSpeed,
+						DroneKnockdownChance * 100.0f,
+						DroneKnockdownRoll,
+						bHeadHit ? TEXT("Y") : TEXT("N"),
+						bLegHit ? TEXT("Y") : TEXT("N"));
+					GEngine->AddOnScreenDebugMessage(
+						static_cast<uint64>(GetUniqueID()) + 19106ULL,
+						0.85f,
+						bTriggerDroneKnockdown ? FColor::Red : FColor::Yellow,
+						ImpactMessage);
+				}
+
+				if (bTriggerDroneKnockdown)
+				{
+					const FName SourceTag = bHeadHit
+						? FName(TEXT("DroneImpactHead"))
+						: (bLegHit ? FName(TEXT("DroneImpactLegs")) : FName(TEXT("DroneImpactBody")));
+					if (TryTriggerAutoRagdoll(EAgentRagdollReason::Impact, SourceTag))
+					{
+						return;
+					}
+				}
+			}
+		}
+	}
 
 	const float OtherSpeed = OtherComp->GetComponentVelocity().Size();
 	const bool bMovingOtherFastEnough = !bImpactVelocityRequiresMovingOther
@@ -4076,81 +4149,44 @@ void AAgentCharacter::UpdateBackpackDeployButtonHold(float DeltaSeconds)
 		return;
 	}
 
-	const float HoldTime = FMath::Max(0.05f, BackpackDeployHoldTime);
+	const float ChargeTime = FMath::Max(0.05f, BackpackDeployHoldTime);
 	const float SafeDelta = FMath::Max(0.0f, DeltaSeconds);
 
-	if (bBackpackKeyboardButtonHeld && !bBackpackKeyboardHoldTriggered)
+	if (bBackpackKeyboardButtonHeld)
 	{
 		BackpackKeyboardButtonHeldDuration += SafeDelta;
-		if (BackpackKeyboardButtonHeldDuration >= HoldTime)
-		{
-			bBackpackKeyboardHoldTriggered = true;
-			TryToggleBackpackDeployState();
-		}
 	}
 
-	if (bBackpackControllerButtonHeld && !bBackpackControllerHoldTriggered)
+	if (bBackpackControllerButtonHeld)
 	{
 		BackpackControllerButtonHeldDuration += SafeDelta;
-		if (BackpackControllerButtonHeldDuration >= HoldTime)
-		{
-			bBackpackControllerHoldTriggered = true;
-			TryToggleBackpackDeployState();
-		}
+	}
+
+	if (BackAttachmentComponent)
+	{
+		const bool bMagnetHoldActive = bBackpackKeyboardButtonHeld || bBackpackControllerButtonHeld;
+		const float KeyboardHeldDuration = bBackpackKeyboardButtonHeld ? BackpackKeyboardButtonHeldDuration : 0.0f;
+		const float ControllerHeldDuration = bBackpackControllerButtonHeld ? BackpackControllerButtonHeldDuration : 0.0f;
+		const float ChargeAlpha = bMagnetHoldActive
+			? FMath::Clamp(FMath::Max(KeyboardHeldDuration, ControllerHeldDuration) / ChargeTime, 0.0f, 1.0f)
+			: 0.0f;
+		BackAttachmentComponent->SetManualMagnetRequested(bMagnetHoldActive);
+		BackAttachmentComponent->SetManualMagnetChargeAlpha(ChargeAlpha);
 	}
 }
 
 void AAgentCharacter::ResetBackpackDeployButtonHoldState()
 {
 	bBackpackKeyboardButtonHeld = false;
-	bBackpackKeyboardHoldTriggered = false;
 	BackpackKeyboardButtonHeldDuration = 0.0f;
 
 	bBackpackControllerButtonHeld = false;
-	bBackpackControllerHoldTriggered = false;
 	BackpackControllerButtonHeldDuration = 0.0f;
-}
 
-void AAgentCharacter::TryToggleBackpackDeployState()
-{
-	if (!BackAttachmentComponent)
+	if (BackAttachmentComponent)
 	{
-		return;
-	}
-
-	const ABlackHoleBackpackActor* EquippedBackpack = BackAttachmentComponent->GetBackItemActor();
-	if (EquippedBackpack && !EquippedBackpack->IsItemDeployed())
-	{
-		const UCharacterMovementComponent* CharacterMovementComponent = GetCharacterMovement();
-		if (CharacterMovementComponent && !CharacterMovementComponent->IsMovingOnGround())
-		{
-			return;
-		}
-	}
-
-	bool bHandledHeldBackItemEquip = false;
-	if (UPrimitiveComponent* HeldComponent = HeldPickupComponent.Get())
-	{
-		if (ABlackHoleBackpackActor* HeldBackItem = Cast<ABlackHoleBackpackActor>(HeldComponent->GetOwner()))
-		{
-			EndPickup();
-			bHandledHeldBackItemEquip = BackAttachmentComponent->EquipBackpack(HeldBackItem, true);
-		}
-	}
-
-	if (bHandledHeldBackItemEquip)
-	{
-		// Prevent duplicate toggles while either hold button remains pressed.
-		bBackpackKeyboardHoldTriggered = true;
-		bBackpackControllerHoldTriggered = true;
-		return;
-	}
-
-	if (BackAttachmentComponent->ToggleBackItemDeployment())
-	{
-		// Prevent duplicate toggles while either hold button remains pressed.
-		bBackpackKeyboardHoldTriggered = true;
-		bBackpackControllerHoldTriggered = true;
+		BackAttachmentComponent->SetManualMagnetRequested(false);
+		BackAttachmentComponent->SetManualMagnetChargeAlpha(0.0f);
 	}
 }
 
@@ -4372,6 +4408,37 @@ float AAgentCharacter::ComputeTripRagdollFollowThroughChance() const
 	return FMath::Lerp(LowSkillChance, HighSkillChance, SkillAlpha);
 }
 
+float AAgentCharacter::ComputeDroneImpactKnockdownChance(float ClosingSpeed, bool bHeadHit, bool bLegHit) const
+{
+	if (!bEnableDroneImpactKnockdownChance)
+	{
+		return 0.0f;
+	}
+
+	const float MinSpeed = FMath::Max(0.0f, DroneImpactChanceMinClosingSpeed);
+	const float MaxSpeed = FMath::Max(MinSpeed + KINDA_SMALL_NUMBER, DroneImpactChanceMaxClosingSpeed);
+	const float SpeedAlpha = FMath::GetMappedRangeValueClamped(
+		FVector2D(MinSpeed, MaxSpeed),
+		FVector2D(0.0f, 1.0f),
+		ClosingSpeed);
+	float Chance = FMath::Lerp(
+		FMath::Clamp(DroneImpactMinKnockdownChance, 0.0f, 1.0f),
+		FMath::Clamp(DroneImpactMaxKnockdownChance, 0.0f, 1.0f),
+		SpeedAlpha);
+
+	if (bHeadHit)
+	{
+		Chance *= FMath::Max(0.0f, DroneImpactHeadHitChanceMultiplier);
+	}
+
+	if (bLegHit)
+	{
+		Chance *= FMath::Max(0.0f, DroneImpactLegHitChanceMultiplier);
+	}
+
+	return FMath::Clamp(Chance, 0.0f, FMath::Clamp(DroneImpactChanceMaxClamp, 0.0f, 1.0f));
+}
+
 void AAgentCharacter::HandleStepUpEvent(float StepUpHeightCm)
 {
 	LastStepUpHeightCm = StepUpHeightCm;
@@ -4502,6 +4569,11 @@ void AAgentCharacter::UpdateClumsinessSystems(float DeltaSeconds)
 	MinFallHeightForRagdollCm = FMath::Max(0.0f, MinFallHeightForRagdollCm);
 	ImpactVelocityMovingOtherMinSpeed = FMath::Max(0.0f, ImpactVelocityMovingOtherMinSpeed);
 	ImpactVelocityRagdollThreshold = FMath::Max(0.0f, ImpactVelocityRagdollThreshold);
+	DroneImpactMinDroneSpeed = FMath::Max(0.0f, DroneImpactMinDroneSpeed);
+	DroneImpactChanceMinClosingSpeed = FMath::Max(0.0f, DroneImpactChanceMinClosingSpeed);
+	DroneImpactChanceMaxClosingSpeed = FMath::Max(DroneImpactChanceMinClosingSpeed, DroneImpactChanceMaxClosingSpeed);
+	DroneImpactHeadRadiusCm = FMath::Max(0.0f, DroneImpactHeadRadiusCm);
+	DroneImpactLegMaxHeightFromFeetCm = FMath::Max(0.0f, DroneImpactLegMaxHeightFromFeetCm);
 
 	const float SafeInstabilityMax = FMath::Max(1.0f, InstabilityMaxValue);
 	InstabilityValue = FMath::Clamp(InstabilityValue, 0.0f, SafeInstabilityMax);
@@ -5729,8 +5801,17 @@ void AAgentCharacter::OnBackpackOrDroneModePressed()
 {
 	if (CanUseBackpackDeployInput())
 	{
+		if (BackAttachmentComponent && BackAttachmentComponent->HasLockedItems())
+		{
+			BackAttachmentComponent->DeployBackItem();
+			BackAttachmentComponent->SetManualMagnetRequested(false);
+			BackAttachmentComponent->SetManualMagnetChargeAlpha(0.0f);
+			bBackpackKeyboardButtonHeld = false;
+			BackpackKeyboardButtonHeldDuration = 0.0f;
+			return;
+		}
+
 		bBackpackKeyboardButtonHeld = true;
-		bBackpackKeyboardHoldTriggered = false;
 		BackpackKeyboardButtonHeldDuration = 0.0f;
 		return;
 	}
@@ -5746,16 +5827,30 @@ void AAgentCharacter::OnBackpackOrDroneModeReleased()
 	}
 
 	bBackpackKeyboardButtonHeld = false;
-	bBackpackKeyboardHoldTriggered = false;
 	BackpackKeyboardButtonHeldDuration = 0.0f;
+
+	if (BackAttachmentComponent && !bBackpackControllerButtonHeld)
+	{
+		BackAttachmentComponent->SetManualMagnetRequested(false);
+		BackAttachmentComponent->SetManualMagnetChargeAlpha(0.0f);
+	}
 }
 
 void AAgentCharacter::OnBackpackOrDroneCameraDownPressed()
 {
 	if (CanUseBackpackDeployInput())
 	{
+		if (BackAttachmentComponent && BackAttachmentComponent->HasLockedItems())
+		{
+			BackAttachmentComponent->DeployBackItem();
+			BackAttachmentComponent->SetManualMagnetRequested(false);
+			BackAttachmentComponent->SetManualMagnetChargeAlpha(0.0f);
+			bBackpackControllerButtonHeld = false;
+			BackpackControllerButtonHeldDuration = 0.0f;
+			return;
+		}
+
 		bBackpackControllerButtonHeld = true;
-		bBackpackControllerHoldTriggered = false;
 		BackpackControllerButtonHeldDuration = 0.0f;
 		return;
 	}
@@ -5771,8 +5866,13 @@ void AAgentCharacter::OnBackpackOrDroneCameraDownReleased()
 	}
 
 	bBackpackControllerButtonHeld = false;
-	bBackpackControllerHoldTriggered = false;
 	BackpackControllerButtonHeldDuration = 0.0f;
+
+	if (BackAttachmentComponent && !bBackpackKeyboardButtonHeld)
+	{
+		BackAttachmentComponent->SetManualMagnetRequested(false);
+		BackAttachmentComponent->SetManualMagnetChargeAlpha(0.0f);
+	}
 }
 
 void AAgentCharacter::OnDroneControlModeTogglePressed()

@@ -7,6 +7,8 @@
 #include "Curves/CurveFloat.h"
 #include "BackpackMagnetComponent.generated.h"
 
+class USceneComponent;
+
 UCLASS(ClassGroup=(Backpack), meta=(BlueprintSpawnableComponent))
 class AGENT_API UBackpackMagnetComponent : public UActorComponent
 {
@@ -14,6 +16,10 @@ class AGENT_API UBackpackMagnetComponent : public UActorComponent
 
 public:
 	UBackpackMagnetComponent();
+
+	/** Allows this actor to be influenced by the player backpack magnet field. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Backpack|Magnet")
+	bool bEligibleForPlayerMagnet = true;
 
 	/** Global pull strength multiplier. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Backpack|Magnet", meta=(ClampMin="0.1", UIMin="0.1"))
@@ -59,7 +65,28 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Backpack|Magnet|Collision")
 	bool bBlockPawnCollisionWhenMagnetHeld = true;
 
+	/** Optional socket on the backpack mesh for this module when snapped (for example: "Backpack Socket"). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Backpack|Magnet|Attach")
+	FName BackpackSocketName = TEXT("Backpack Socket");
+
+	/** Optional component tag used to find this object's attach point for snapping. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Backpack|Magnet|Attach")
+	FName AttachPointComponentTag = TEXT("BackpackAttachPoint");
+
+	/** Optional name hint used to find this object's attach point when no tag is set. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Backpack|Magnet|Attach")
+	FString AttachPointNameHint = TEXT("BackpackAttachPoint");
+
+	/** Optional socket on the object's attach-point component. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Backpack|Magnet|Attach")
+	FName AttachPointSocketName = NAME_None;
+
 	UFUNCTION(BlueprintPure, Category="Backpack|Magnet")
 	float ComputeDistanceStrength(float DistanceToTarget, float MaxDistance) const;
-};
 
+	UFUNCTION(BlueprintCallable, Category="Backpack|Magnet|Attach")
+	bool ResolveAttachPoint(USceneComponent*& OutAttachPointComponent, FName& OutAttachSocketName) const;
+
+	UFUNCTION(BlueprintPure, Category="Backpack|Magnet|Attach")
+	FTransform GetAttachPointWorldTransform() const;
+};
