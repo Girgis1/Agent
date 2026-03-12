@@ -66,7 +66,7 @@ public:
 
 	/** Field range where nearby magnetic objects get weak attraction/noise while Hold-B is active. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field", meta=(ClampMin="1.0", UIMin="1.0"))
-	float AttractRange = 200.0f;
+	float AttractRange = 300.0f;
 
 	/** Scan interval for overlap-based candidate collection while magnet is active. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field", meta=(ClampMin="0.01", UIMin="0.01"))
@@ -78,7 +78,11 @@ public:
 
 	/** Limits per-frame force processing cost in heavy chaos scenarios. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field", meta=(ClampMin="1", UIMin="1"))
-	int32 MaxAffectedItems = 24;
+	int32 MaxAffectedItems = 64;
+
+	/** When true, items already inside the lock zone are processed even if MaxAffectedItems budget is exceeded. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field")
+	bool bAllowUnlimitedItemsInsideMagLockZone = true;
 
 	/** Closest object inside this range is captured toward the backpack magnet. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field", meta=(ClampMin="1.0", UIMin="1.0"))
@@ -116,6 +120,74 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="1.0", UIMax="1.0"))
 	float InAirPullStrengthScale = 0.5f;
 
+	/** Stage 1 duration (seconds): weak charged wobble with physics still enabled. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field|Charge", meta=(ClampMin="0.0", UIMin="0.0"))
+	float ChargeStageOneDuration = 2.0f;
+
+	/** Time after magnet press before random lift begins during stage 1. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field|Charge", meta=(ClampMin="0.0", UIMin="0.0"))
+	float ChargeLiftStartDelay = 0.5f;
+
+	/** Minimum random lift height in centimeters during stage 1. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field|Charge", meta=(ClampMin="0.0", UIMin="0.0"))
+	float ChargeLiftMinHeight = 5.0f;
+
+	/** Maximum random lift height in centimeters during stage 1. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field|Charge", meta=(ClampMin="1.0", UIMin="1.0"))
+	float ChargeLiftMaxHeight = 20.0f;
+
+	/** Multiplier applied after charge completes so items slam toward the magnet. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field|Charge", meta=(ClampMin="1.0", UIMin="1.0"))
+	float ChargeSlamStrengthMultiplier = 2.2f;
+
+	/** Stage 1 pull alpha at charge start. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field|Charge", meta=(ClampMin="0.0", UIMin="0.0"))
+	float ChargeStageOnePullMinAlpha = 0.03f;
+
+	/** Stage 1 pull alpha at charge completion. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field|Charge", meta=(ClampMin="0.0", UIMin="0.0"))
+	float ChargeStageOnePullMaxAlpha = 0.14f;
+
+	/** Stage 1 linear wobble force minimum (per kg scale). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field|Charge", meta=(ClampMin="0.0", UIMin="0.0"))
+	float ChargeStageOneLinearNoiseMin = 80.0f;
+
+	/** Stage 1 linear wobble force maximum (per kg scale). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field|Charge", meta=(ClampMin="0.0", UIMin="0.0"))
+	float ChargeStageOneLinearNoiseMax = 300.0f;
+
+	/** Stage 1 angular wobble multiplier minimum. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field|Charge", meta=(ClampMin="0.0", UIMin="0.0"))
+	float ChargeStageOneAngularNoiseMinScale = 8.0f;
+
+	/** Stage 1 angular wobble multiplier maximum. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field|Charge", meta=(ClampMin="0.0", UIMin="0.0"))
+	float ChargeStageOneAngularNoiseMaxScale = 30.0f;
+
+	/** Random extra delay after lift start before each item can begin snap/slam toward player. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field|Charge", meta=(ClampMin="0.0", UIMin="0.0"))
+	float ChargeSnapDelayAfterLiftMin = 0.05f;
+
+	/** Upper bound for random snap/slam delay after lift start (seconds). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field|Charge", meta=(ClampMin="0.0", UIMin="0.0"))
+	float ChargeSnapDelayAfterLiftMax = 1.35f;
+
+	/** Stage 1 lift spring strength while physics remains enabled. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field|Charge", meta=(ClampMin="0.0", UIMin="0.0"))
+	float ChargeLiftSpringStrength = 34.0f;
+
+	/** Stage 1 lift damping while physics remains enabled. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field|Charge", meta=(ClampMin="0.0", UIMin="0.0"))
+	float ChargeLiftDamping = 8.0f;
+
+	/** Stage 1 max upward lift force per kg. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field|Charge", meta=(ClampMin="0.0", UIMin="0.0"))
+	float ChargeLiftMaxForcePerKg = 2200.0f;
+
+	/** Stage 1 downward correction clamp ratio (0..1 of max lift force). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field|Charge", meta=(ClampMin="0.0", ClampMax="1.0", UIMin="0.0", UIMax="1.0"))
+	float ChargeLiftDownwardClampRatio = 0.35f;
+
 	/** Tangential linear noise in field phase for unstable magnetic wobble. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field", meta=(ClampMin="0.0", UIMin="0.0"))
 	float FieldLinearNoiseScale = 0.2f;
@@ -147,6 +219,42 @@ public:
 	/** Delay after release before items can re-enter MagLock. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Hold", meta=(ClampMin="0.0", UIMin="0.0"))
 	float LockReacquireDelay = 0.15f;
+
+	/** Distance fallback lock radius around magnet anchor, even when volume checks miss. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Hold", meta=(ClampMin="0.0", UIMin="0.0"))
+	float LockDistanceFallback = 25.0f;
+
+	/** When true, lock-state items are welded/attached to the magnet anchor until released. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Hold")
+	bool bWeldLockedItemsToMagnet = true;
+
+	/** Only allow welded anchoring while magnet input is inactive (button released). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Hold")
+	bool bOnlyWeldWhenMagnetInactive = true;
+
+	/** Keep captured/locked items rotationally loose while magnet is active so clusters pack naturally. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Hold")
+	bool bLooseRotationWhileMagnetActive = true;
+
+	/** Use an intentional approach profile for backpack-class items (BackpackMagnetComponent owners). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Hold|Backpack")
+	bool bIntentionalBackpackItemSnapMotion = true;
+
+	/** Slows backpack-item translation during approach for a deliberate, readable pull-in. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Hold|Backpack", meta=(ClampMin="0.05", UIMin="0.05"))
+	float BackpackItemApproachSpeedScale = 0.58f;
+
+	/** Speeds up backpack-item rotation while approaching so they visibly orient before final lock. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Hold|Backpack", meta=(ClampMin="0.05", UIMin="0.05"))
+	float BackpackItemRotationInterpScale = 2.25f;
+
+	/** Within this distance, backpack items snap exactly to target transform before lock. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Hold|Backpack", meta=(ClampMin="0.0", UIMin="0.0"))
+	float BackpackItemFinalSnapDistance = 12.0f;
+
+	/** Backpack items can auto-lock this close to anchor even if the lock volume misses. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Hold|Backpack", meta=(ClampMin="0.0", UIMin="0.0"))
+	float BackpackItemAutoLockDistance = 30.0f;
 
 	/** Keep MagLock'd items held after entering the zone, even if they drift outside briefly. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Hold")
@@ -204,6 +312,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Collision")
 	bool bIgnoreCameraCollisionWhenMagnetHeld = true;
 
+	/** Keep camera-ignore collision after field exposure to avoid spring-arm pop-in. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Collision", meta=(ClampMin="0.0", UIMin="0.0"))
+	float CameraIgnoreDecayDuration = 2.0f;
+
 	/** Whether backpack blocks pawns while magnet-held/recalling. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Collision")
 	bool bBlockPawnCollisionWhenMagnetHeld = true;
@@ -231,6 +343,42 @@ public:
 	/** Material ids treated as magnetic (for example "Iron"). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Filter")
 	TArray<FName> MagneticMaterialIds;
+
+	/** Item-side anchor tag used to decide whether rotation alignment should happen. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Filter")
+	FName ItemMagLockAnchorTag = TEXT("MagLockAnchor");
+
+	/** Allow front-side high-velocity magnet items to knock down the player while active. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Impact")
+	bool bEnableFrontMagnetImpactKnockdown = true;
+
+	/** Maximum distance from player center for front-impact knockdown checks. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Impact", meta=(ClampMin="0.0", UIMin="0.0"))
+	float FrontMagnetImpactMaxDistance = 180.0f;
+
+	/** Dot threshold against player forward vector to count as a front-side impact. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Impact", meta=(ClampMin="-1.0", ClampMax="1.0", UIMin="-1.0", UIMax="1.0"))
+	float FrontMagnetImpactMinFrontDot = 0.05f;
+
+	/** Closing speed where front-impact knockdown chance begins. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Impact", meta=(ClampMin="0.0", UIMin="0.0"))
+	float FrontMagnetImpactMinClosingSpeed = 900.0f;
+
+	/** Closing speed where front-impact knockdown reaches max chance. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Impact", meta=(ClampMin="0.0", UIMin="0.0"))
+	float FrontMagnetImpactMaxClosingSpeed = 2300.0f;
+
+	/** Knockdown chance at min closing speed. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Impact", meta=(ClampMin="0.0", ClampMax="1.0", UIMin="0.0", UIMax="1.0"))
+	float FrontMagnetImpactMinKnockdownChance = 0.18f;
+
+	/** Knockdown chance at max closing speed. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Impact", meta=(ClampMin="0.0", ClampMax="1.0", UIMin="0.0", UIMax="1.0"))
+	float FrontMagnetImpactMaxKnockdownChance = 0.9f;
+
+	/** Cooldown between front-impact knockdown attempts to avoid per-frame rerolls. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Impact", meta=(ClampMin="0.0", UIMin="0.0"))
+	float FrontMagnetImpactAttemptCooldown = 0.25f;
 
 	UFUNCTION(BlueprintPure, Category="PlayerMagnet|Recall")
 	float ComputeDistanceStrength(float DistanceToTarget, float MaxDistance) const;
