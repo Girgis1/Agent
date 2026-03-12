@@ -4,143 +4,222 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
-#include "Curves/CurveFloat.h"
+#include "Engine/EngineTypes.h"
+#include "UObject/ObjectKey.h"
 #include "BackAttachmentComponent.generated.h"
 
+class AActor;
 class ACharacter;
 class ABlackHoleBackpackActor;
-class AActor;
+class UBackpackMagnetComponent;
+class UPlayerMagnetComponent;
+class UPrimitiveComponent;
 class USceneComponent;
-class USkeletalMeshComponent;
-
-enum class EBackpackMagnetState : uint8
-{
-	Inactive,
-	Recalling,
-	Held
-};
+class UShapeComponent;
 
 UCLASS(ClassGroup=(BackItem), meta=(BlueprintSpawnableComponent))
-class UBackAttachmentComponent : public UActorComponent
+class AGENT_API UBackAttachmentComponent : public UActorComponent
 {
 	GENERATED_BODY()
+
+private:
+	struct FTrackedMagnetItem;
 
 public:
 	UBackAttachmentComponent();
 
 	virtual void BeginPlay() override;
-	virtual void TickComponent(float DeltaTime, enum ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
-
-	UFUNCTION(BlueprintCallable, Category="BackItem")
-	ABlackHoleBackpackActor* EnsureBackItem();
-
-	UFUNCTION(BlueprintPure, Category="BackItem|Equip")
-	ABlackHoleBackpackActor* FindNearestBackpackInRange(float RangeOverrideCm = -1.0f) const;
-
-	UFUNCTION(BlueprintCallable, Category="BackItem|Equip")
-	bool EquipNearestBackpack(float RangeOverrideCm = -1.0f);
-
-	UFUNCTION(BlueprintCallable, Category="BackItem|Equip")
-	bool EquipBackpack(ABlackHoleBackpackActor* InBackpack, bool bUseMagnetLerp = true);
-
-	UFUNCTION(BlueprintCallable, Category="BackItem")
-	void SetBackItemActor(ABlackHoleBackpackActor* InBackItemActor, bool bAttachImmediately = true);
-
-	UFUNCTION(BlueprintCallable, Category="BackItem")
-	void ClearBackItemActor(bool bDestroyActor = false);
-
-	UFUNCTION(BlueprintCallable, Category="BackItem")
-	bool ToggleBackItemDeployment();
-
-	UFUNCTION(BlueprintCallable, Category="BackItem")
-	bool DeployBackItem();
-
-	UFUNCTION(BlueprintCallable, Category="BackItem")
-	bool RecallBackItem();
-
-	UFUNCTION(BlueprintCallable, Category="BackItem")
-	void RefreshBackItemAttachment();
-
-	UFUNCTION(BlueprintCallable, Category="BackItem|Ragdoll")
-	void SetOwnerRagdolling(bool bInOwnerRagdolling);
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
 	UFUNCTION(BlueprintPure, Category="BackItem")
-	ABlackHoleBackpackActor* GetBackItemActor() const { return BackItemActor; }
+	AActor* GetBackItemActorRaw() const { return IsValid(BackItemActor.Get()) ? BackItemActor.Get() : nullptr; }
+
+	/** Legacy compatibility accessor for existing Blueprint graphs. */
+	UFUNCTION(BlueprintPure, Category="BackItem")
+	ABlackHoleBackpackActor* GetBackItemActor() const;
 
 	UFUNCTION(BlueprintPure, Category="BackItem")
 	bool IsBackItemDeployed() const;
 
+	UFUNCTION(BlueprintPure, Category="BackItem|Equip")
+	AActor* FindNearestBackItemInRange(float RangeOverrideCm = -1.0f) const;
+
+	/** Legacy compatibility wrapper for existing Blueprint graphs. */
+	UFUNCTION(BlueprintPure, Category="BackItem|Equip")
+	ABlackHoleBackpackActor* FindNearestBackpackInRange(float RangeOverrideCm = -1.0f) const;
+
+	UFUNCTION(BlueprintCallable, Category="BackItem|Equip")
+	bool EquipBackItemActor(AActor* InBackItemActor, bool bRequireManualHold = false);
+
+	/** Legacy compatibility wrapper for existing Blueprint graphs. */
+	UFUNCTION(BlueprintCallable, Category="BackItem|Equip")
+	bool EquipBackpack(ABlackHoleBackpackActor* InBackpack, bool bUseMagnetLerp = true);
+
+	/** Legacy compatibility wrapper for existing Blueprint graphs. */
+	UFUNCTION(BlueprintCallable, Category="BackItem|Equip")
+	bool EquipNearestBackpack(float RangeOverrideCm = -1.0f);
+
+	/** Legacy compatibility wrapper for existing Blueprint graphs. */
+	UFUNCTION(BlueprintCallable, Category="BackItem")
+	void SetBackItemActor(ABlackHoleBackpackActor* InBackItemActor, bool bAttachImmediately = true);
+
+	UFUNCTION(BlueprintCallable, Category="BackItem|Deploy")
+	bool DeployBackItem();
+
+	/** Legacy compatibility wrapper for existing Blueprint graphs. */
+	UFUNCTION(BlueprintCallable, Category="BackItem")
+	bool ToggleBackItemDeployment();
+
+	/** Legacy compatibility wrapper for existing Blueprint graphs. */
+	UFUNCTION(BlueprintCallable, Category="BackItem")
+	bool RecallBackItem();
+
+	/** Legacy compatibility no-op for existing Blueprint graphs. */
+	UFUNCTION(BlueprintCallable, Category="BackItem")
+	void RefreshBackItemAttachment() {}
+
+	/** Legacy compatibility no-op for existing Blueprint graphs. */
 	UFUNCTION(BlueprintCallable, Category="BackItem|Tuning")
-	void SetAttachFineTune(const FVector& NewLocationOffset, const FRotator& NewRotationOffset);
+	void SetAttachFineTune(const FVector& NewLocationOffset, const FRotator& NewRotationOffset) { (void)NewLocationOffset; (void)NewRotationOffset; }
+
+	UFUNCTION(BlueprintCallable, Category="BackItem")
+	void ClearBackItemActor(bool bDestroyActor = false);
+
+	UFUNCTION(BlueprintCallable, Category="BackItem|Magnet")
+	void SetManualMagnetRequested(bool bInManualMagnetRequested);
+
+	UFUNCTION(BlueprintCallable, Category="BackItem|Magnet")
+	void SetManualMagnetChargeAlpha(float InChargeAlpha);
+
+	UFUNCTION(BlueprintPure, Category="BackItem|Magnet")
+	bool IsManualMagnetRequested() const { return bManualMagnetRequested; }
+
+	UFUNCTION(BlueprintPure, Category="BackItem|Magnet")
+	float GetManualMagnetChargeAlpha() const { return ManualMagnetChargeAlpha; }
+
+	UFUNCTION(BlueprintPure, Category="BackItem|Magnet")
+	bool HasLockedItems() const { return LockedItemKeys.Num() > 0; }
+
+	UFUNCTION(BlueprintCallable, Category="BackItem|Ragdoll")
+	void SetOwnerRagdolling(bool bInOwnerRagdolling);
 
 protected:
 	ACharacter* ResolveOwnerCharacter() const;
-	USkeletalMeshComponent* ResolveCarrierMesh() const;
+	UPlayerMagnetComponent* ResolvePlayerMagnetComponent() const;
 	bool ResolveAttachTarget(USceneComponent*& OutAttachParent, FName& OutAttachSocketName) const;
-	USceneComponent* ResolveMagnetAttachComponent() const;
-	bool DoesActorMatchMagnetHint(const AActor* CandidateActor) const;
-	ABlackHoleBackpackActor* FindWorldBackItemCandidate(const ACharacter* OwnerCharacter, float MaxRangeCm = -1.0f) const;
-	FTransform BuildAttachFineTuneTransform() const;
+	bool ResolveMagLockAnchor(USceneComponent*& OutAnchorComponent, FName& OutAnchorSocketName) const;
+	UShapeComponent* ResolveMagLockZone() const;
+
+	AActor* FindWorldBackItemCandidate(
+		const ACharacter* OwnerCharacter,
+		const FVector& RangeOrigin,
+		float MaxRangeCm = -1.0f) const;
+	bool CanEquipBackItem(
+		const AActor* CandidateItem,
+		const FVector& RangeOrigin,
+		float MaxRangeCm = -1.0f) const;
+
+	UPrimitiveComponent* ResolveBackItemPrimitive(AActor* BackItem) const;
+	UPrimitiveComponent* ResolveBackItemPrimitive(const AActor* BackItem) const;
+	UBackpackMagnetComponent* ResolveBackItemMagnet(AActor* BackItem) const;
+	const UBackpackMagnetComponent* ResolveBackItemMagnet(const AActor* BackItem) const;
+
+	bool IsBackItemDeployedState(const AActor* BackItem) const;
+	bool IsActorTrackedAndLocked(const AActor* CandidateActor) const;
+	bool IsActorMagneticEligible(
+		const AActor* CandidateItem,
+		const UPrimitiveComponent* CandidatePrimitive,
+		const UBackpackMagnetComponent* CandidateMagnet,
+		const UPlayerMagnetComponent* PlayerMagnet) const;
+	bool HasAnyConfiguredTag(const AActor* Actor, const UActorComponent* Component, const TArray<FName>& RequiredTags) const;
+	float ResolveItemMagnetStrengthMultiplier(const UBackpackMagnetComponent* BackItemMagnet) const;
+	float ResolveMagnetActivationAlpha() const;
+
+	FTransform ResolveBackItemAttachPointWorldTransform(
+		const AActor* BackItem,
+		const UBackpackMagnetComponent* BackItemMagnet) const;
 	FTransform BuildTargetBackItemWorldTransform(
-		const ABlackHoleBackpackActor* BackItem,
-		const USceneComponent* AttachParent,
-		FName AttachSocketName) const;
+		const AActor* BackItem,
+		const UBackpackMagnetComponent* BackItemMagnet,
+		const FTransform& TargetAttachPointWorldTransform) const;
 	FVector BuildDropImpulse() const;
-	bool CanEquipBackItem(const ABlackHoleBackpackActor* CandidateItem, float MaxRangeCm = -1.0f) const;
-	void StartMagnetBackpackState(ABlackHoleBackpackActor* BackItem, bool bStartAsRecalling);
-	void DetachEquippedBackpackFromMagnet(bool bApplyDropImpulse);
-	void UpdateMagnetRecall(float DeltaTime);
-	void StopMagnetRecall(bool bSnapAttach);
-	void ConfigureBackpackForMagnetPhysics(ABlackHoleBackpackActor* BackItem) const;
+
+	void UpdateMagnetSimulation(float DeltaTime);
+	void ScanMagnetCandidates(const FVector& MagnetLocation, float FieldRangeCm);
+	void RegisterTrackedItem(
+		AActor* BackItemActor,
+		UPrimitiveComponent* BackItemPrimitive,
+		const UBackpackMagnetComponent* BackItemMagnet);
+	void PruneTrackedItems(float CurrentWorldTime, bool bMagnetActive);
+	void ApplyMagnetForces(
+		float DeltaTime,
+		float MagnetAlpha,
+		const FTransform& MagnetAnchorTransform,
+		const FVector& MagnetAnchorVelocity,
+		UShapeComponent* MagLockZone);
+
+	bool IsInsideMagLockZone(const UShapeComponent* MagLockZone, const FVector& WorldLocation) const;
+	void SetItemLocked(FObjectKey ItemKey, bool bLocked, float CurrentWorldTime, float ReacquireDelay);
+	void ReleaseAllLockedItems(bool bSetReacquireCooldown, bool bApplyDropImpulse = false);
+
+	void ApplyAttractionForce(
+		UPrimitiveComponent* BackItemPrimitive,
+		float ItemMassKg,
+		const FVector& CurrentAttachPointLocation,
+		const FVector& MagnetAnchorLocation,
+		float DistanceToAnchor,
+		float MagnetAlpha,
+		float ItemStrengthMultiplier,
+		const UPlayerMagnetComponent* PlayerMagnet) const;
+	void ApplyMagLockForce(
+		UPrimitiveComponent* BackItemPrimitive,
+		float ItemMassKg,
+		const FVector& CurrentAttachPointLocation,
+		const FVector& CurrentAttachPointVelocity,
+		const FVector& MagnetAnchorLocation,
+		const FVector& MagnetAnchorVelocity,
+		float MagnetAlpha,
+		float ItemStrengthMultiplier,
+		const UPlayerMagnetComponent* PlayerMagnet) const;
+	void ApplyAlignmentTorque(
+		UPrimitiveComponent* BackItemPrimitive,
+		float ItemMassKg,
+		const FQuat& TargetRotation,
+		float MagnetAlpha,
+		float ItemStrengthMultiplier,
+		const UPlayerMagnetComponent* PlayerMagnet) const;
+	void ApplyMagnetCollisionOverrides(
+		FTrackedMagnetItem& TrackedItem,
+		const UPlayerMagnetComponent* PlayerMagnet) const;
+	void RestoreMagnetCollisionOverrides(FTrackedMagnetItem& TrackedItem) const;
+	void EnsureMagnetKinematicState(FTrackedMagnetItem& TrackedItem) const;
+	void RestoreMagnetKinematicState(FTrackedMagnetItem& TrackedItem, bool bWakePhysics = true) const;
+	void MoveMagnetItemKinematic(
+		float DeltaTime,
+		FTrackedMagnetItem& TrackedItem,
+		const FTransform& TargetBackItemTransform,
+		float DistanceToAnchor,
+		float MagnetAlpha,
+		float ItemStrengthMultiplier,
+		const UPlayerMagnetComponent* PlayerMagnet) const;
+
+	void SetCapsuleBackItemCollisionIgnored(UPrimitiveComponent* BackItemPrimitive, bool bIgnore);
+	void ClearCapsuleBackItemCollisionIgnore();
 	void DrawAttachDebug() const;
 
 protected:
 	UPROPERTY(Transient)
-	TObjectPtr<ABlackHoleBackpackActor> BackItemActor = nullptr;
+	TObjectPtr<AActor> BackItemActor = nullptr;
 
 public:
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem")
-	TSubclassOf<ABlackHoleBackpackActor> BackItemClass;
+	/** When enabled, only actors matching BackItemClass can be magnet-managed. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Filter")
+	bool bRestrictToBackItemClass = false;
 
-	/** Legacy compatibility flag. Backpacks are now world-persistent and are not auto-spawned by this component. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem")
-	bool bAutoSpawnBackItem = false;
-
-	/** Legacy compatibility flag retained for existing Blueprints. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Spawn")
-	bool bClaimExistingWorldBackItemBeforeSpawn = false;
-
-	/** Legacy compatibility value retained for existing Blueprints. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Spawn", meta=(ClampMin="0.0", UIMin="0.0", EditCondition="bClaimExistingWorldBackItemBeforeSpawn"))
-	float ExistingWorldBackItemClaimRadius = 0.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Attach")
-	FName AttachSocketName = TEXT("spine_03");
-
-	/** Optional custom magnet component or child actor tag to attach to (for example: PlayerMagnet). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Attach")
-	FName AttachMagnetTag = TEXT("PlayerMagnet");
-
-	/** Name/class hint used to find an attach magnet actor or component when no tag is present. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Attach")
-	FString AttachMagnetNameHint = TEXT("PlayerMagnet");
-
-	/** If true, search for a magnet first and attach to its transform (no socket offset guessing). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Attach")
-	bool bPreferAttachMagnet = true;
-
-	/** If true, do not fall back to mesh socket attachment when a magnet cannot be found. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Attach", meta=(EditCondition="bPreferAttachMagnet"))
-	bool bRequireAttachMagnet = true;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Attach")
-	FVector AttachLocationOffset = FVector::ZeroVector;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Attach")
-	FRotator AttachRotationOffset = FRotator::ZeroRotator;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Attach")
-	FVector AttachScale = FVector::OneVector;
+	/** Optional class filter for valid magnet items when bRestrictToBackItemClass is enabled. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Filter", meta=(EditCondition="bRestrictToBackItemClass"))
+	TSubclassOf<AActor> BackItemClass;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Deploy")
 	float DropForwardImpulse = 200.0f;
@@ -157,52 +236,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Equip")
 	bool bRequireLineOfSightForRecall = false;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet")
-	bool bUseMagnetRecall = true;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(ClampMin="0.01", UIMin="0.01", EditCondition="bUseMagnetRecall"))
-	float MagnetMoveInterpSpeed = 14.0f;
-
-	/** Global multiplier for how tightly the backpack tries to stick to the magnet target. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(ClampMin="0.1", UIMin="0.1", EditCondition="bUseMagnetRecall && bMagnetRecallKeepsPhysicsActor"))
-	float BackpackMagnetStrength = 1.0f;
-
-	/** Strength at max recall distance before BackpackMagnetStrength is applied (0..1). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(ClampMin="0.0", ClampMax="1.0", UIMin="0.0", UIMax="1.0", EditCondition="bUseMagnetRecall && bMagnetRecallKeepsPhysicsActor"))
-	float MagnetStrengthAtMaxDistance = 0.2f;
-
-	/** Shapes distance strength using proximity alpha (X: 0 = far, 1 = close; Y: 0..1). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(EditCondition="bUseMagnetRecall && bMagnetRecallKeepsPhysicsActor"))
-	FRuntimeFloatCurve MagnetStrengthByDistanceCurve;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(ClampMin="0.01", UIMin="0.01", EditCondition="bUseMagnetRecall"))
-	float MagnetRotationInterpSpeed = 14.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(ClampMin="0.1", UIMin="0.1", EditCondition="bUseMagnetRecall"))
-	float MagnetAttachDistance = 6.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(ClampMin="0.1", UIMin="0.1", EditCondition="bUseMagnetRecall"))
-	float MagnetAttachAngleDegrees = 8.0f;
-
-	/** Keep summoned backpack as a world physics actor while magnet-recalling/sticking (no no-collision hard-attach). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(EditCondition="bUseMagnetRecall"))
-	bool bMagnetRecallKeepsPhysicsActor = true;
-
-	/** Max speed used when steering a physics backpack toward the magnet target. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(ClampMin="100.0", UIMin="100.0", EditCondition="bUseMagnetRecall && bMagnetRecallKeepsPhysicsActor"))
-	float MagnetRecallMaxSpeed = 2500.0f;
-
-	/** Once a backpack is settled on the magnet, exceeding this distance drops it back into the world. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(ClampMin="1.0", UIMin="1.0", EditCondition="bUseMagnetRecall && bMagnetRecallKeepsPhysicsActor"))
-	float MagnetDetachDistance = 35.0f;
-
-	/** Keep the third-person camera from retracting when the backpack is magnet-held. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(EditCondition="bUseMagnetRecall && bMagnetRecallKeepsPhysicsActor"))
-	bool bIgnoreCameraCollisionWhenMagnetHeld = true;
-
-	/** Small grace window to avoid single-frame detach jitter while the backpack is bouncing on the magnet. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Magnet", meta=(ClampMin="0.0", UIMin="0.0", EditCondition="bUseMagnetRecall && bMagnetRecallKeepsPhysicsActor"))
-	float MagnetDetachGraceTime = 0.08f;
+	/** Ignore magnet-managed items against the player capsule while magnet is active; mesh collision remains intact. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Recall|Collision")
+	bool bIgnoreOwnerCapsuleCollisionWhileRecalling = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="BackItem|Debug")
 	bool bShowAttachDebug = false;
@@ -211,14 +247,37 @@ public:
 	float AttachDebugAxisLength = 18.0f;
 
 protected:
-	EBackpackMagnetState MagnetState = EBackpackMagnetState::Inactive;
-
-	UPROPERTY(Transient)
-	float MagnetDetachExceededDuration = 0.0f;
-
 	UPROPERTY(Transient)
 	bool bOwnerRagdolling = false;
 
 	UPROPERTY(Transient)
-	mutable TWeakObjectPtr<USceneComponent> CachedAttachMagnetComponent = nullptr;
+	bool bManualMagnetRequested = false;
+
+	UPROPERTY(Transient)
+	float ManualMagnetChargeAlpha = 0.0f;
+
+private:
+	struct FTrackedMagnetItem
+	{
+		TWeakObjectPtr<AActor> Actor = nullptr;
+		TWeakObjectPtr<UPrimitiveComponent> Primitive = nullptr;
+		TWeakObjectPtr<UBackpackMagnetComponent> BackpackMagnet = nullptr;
+		float LastSeenTime = 0.0f;
+		float LockReacquireTime = 0.0f;
+		bool bLocked = false;
+		bool bCollisionResponsesCaptured = false;
+		TEnumAsByte<ECollisionResponse> CachedCameraResponse = ECR_Block;
+		TEnumAsByte<ECollisionResponse> CachedPawnResponse = ECR_Block;
+		bool bPhysicsStateCaptured = false;
+		bool bWasSimulatingPhysics = false;
+		TEnumAsByte<ECollisionEnabled::Type> CachedCollisionEnabled = ECollisionEnabled::QueryAndPhysics;
+	};
+
+	TMap<FObjectKey, FTrackedMagnetItem> TrackedItems;
+	TSet<FObjectKey> LockedItemKeys;
+	TSet<TWeakObjectPtr<UPrimitiveComponent>> CapsuleIgnoredBackItemPrimitives;
+	float CandidateScanTimer = 0.0f;
+	float LastMagnetAlpha = 0.0f;
+	bool bCapsulePhysicsBodyResponseOverridden = false;
+	TEnumAsByte<ECollisionResponse> CachedCapsulePhysicsBodyResponse = ECR_Block;
 };
