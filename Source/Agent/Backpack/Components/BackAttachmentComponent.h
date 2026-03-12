@@ -135,6 +135,7 @@ protected:
 	bool HasAnyConfiguredTag(const AActor* Actor, const UActorComponent* Component, const TArray<FName>& RequiredTags) const;
 	float ResolveItemMagnetStrengthMultiplier(const UBackpackMagnetComponent* BackItemMagnet) const;
 	float ResolveMagnetActivationAlpha() const;
+	bool DoesBackItemHaveMagLockAnchor(const AActor* BackItem) const;
 
 	FTransform ResolveBackItemAttachPointWorldTransform(
 		const AActor* BackItem,
@@ -155,6 +156,8 @@ protected:
 	void ApplyMagnetForces(
 		float DeltaTime,
 		float MagnetAlpha,
+		USceneComponent* MagnetAnchorComponent,
+		FName MagnetAnchorSocketName,
 		const FTransform& MagnetAnchorTransform,
 		const FVector& MagnetAnchorVelocity,
 		UShapeComponent* MagLockZone);
@@ -191,10 +194,31 @@ protected:
 		const UPlayerMagnetComponent* PlayerMagnet) const;
 	void ApplyMagnetCollisionOverrides(
 		FTrackedMagnetItem& TrackedItem,
-		const UPlayerMagnetComponent* PlayerMagnet) const;
-	void RestoreMagnetCollisionOverrides(FTrackedMagnetItem& TrackedItem) const;
+		const UPlayerMagnetComponent* PlayerMagnet,
+		float CurrentWorldTime) const;
+	void RestoreMagnetCollisionOverrides(FTrackedMagnetItem& TrackedItem, float CurrentWorldTime = -1.0f) const;
 	void EnsureMagnetKinematicState(FTrackedMagnetItem& TrackedItem) const;
 	void RestoreMagnetKinematicState(FTrackedMagnetItem& TrackedItem, bool bWakePhysics = true) const;
+	void WeldLockedItemToMagnet(
+		FTrackedMagnetItem& TrackedItem,
+		USceneComponent* MagnetAnchorComponent,
+		FName MagnetAnchorSocketName) const;
+	void UnweldLockedItemFromMagnet(FTrackedMagnetItem& TrackedItem) const;
+	void ApplyStageOneWobble(
+		UPrimitiveComponent* BackItemPrimitive,
+		float ItemMassKg,
+		float CurrentWorldTime,
+		float StageAlpha,
+		const UPlayerMagnetComponent* PlayerMagnet) const;
+	void ApplyStageOneLiftForce(
+		FTrackedMagnetItem& TrackedItem,
+		const FVector& CurrentAttachPointLocation,
+		const FVector& CurrentAttachPointVelocity,
+		const UPlayerMagnetComponent* PlayerMagnet) const;
+	void TryTriggerFrontMagnetImpactKnockdown(
+		const FTrackedMagnetItem& TrackedItem,
+		const UPlayerMagnetComponent* PlayerMagnet,
+		float CurrentWorldTime);
 	void MoveMagnetItemKinematic(
 		float DeltaTime,
 		FTrackedMagnetItem& TrackedItem,
@@ -202,7 +226,11 @@ protected:
 		float DistanceToAnchor,
 		float MagnetAlpha,
 		float ItemStrengthMultiplier,
-		const UPlayerMagnetComponent* PlayerMagnet) const;
+		const UPlayerMagnetComponent* PlayerMagnet,
+		bool bAlignRotation,
+		float LocationSpeedScale = 1.0f,
+		float RotationSpeedScale = 1.0f,
+		float FinalSnapDistance = 0.0f) const;
 
 	void SetCapsuleBackItemCollisionIgnored(UPrimitiveComponent* BackItemPrimitive, bool bIgnore);
 	void ClearCapsuleBackItemCollisionIgnore();
@@ -256,6 +284,9 @@ protected:
 	UPROPERTY(Transient)
 	float ManualMagnetChargeAlpha = 0.0f;
 
+	UPROPERTY(Transient)
+	float ManualMagnetHeldDuration = 0.0f;
+
 private:
 	struct FTrackedMagnetItem
 	{
@@ -268,9 +299,17 @@ private:
 		bool bCollisionResponsesCaptured = false;
 		TEnumAsByte<ECollisionResponse> CachedCameraResponse = ECR_Block;
 		TEnumAsByte<ECollisionResponse> CachedPawnResponse = ECR_Block;
+		float CameraIgnoreUntilTime = 0.0f;
 		bool bPhysicsStateCaptured = false;
 		bool bWasSimulatingPhysics = false;
 		TEnumAsByte<ECollisionEnabled::Type> CachedCollisionEnabled = ECollisionEnabled::QueryAndPhysics;
+		bool bWeldedToMagnet = false;
+		bool bHasMagLockAnchor = false;
+		bool bStageOneLiftInitialized = false;
+		FVector StageOneLiftBaseLocation = FVector::ZeroVector;
+		float StageOneLiftTargetCm = 0.0f;
+		bool bStageOneSnapDelayInitialized = false;
+		float StageOneSnapDelaySeconds = 0.0f;
 	};
 
 	TMap<FObjectKey, FTrackedMagnetItem> TrackedItems;
@@ -278,6 +317,7 @@ private:
 	TSet<TWeakObjectPtr<UPrimitiveComponent>> CapsuleIgnoredBackItemPrimitives;
 	float CandidateScanTimer = 0.0f;
 	float LastMagnetAlpha = 0.0f;
+	float NextFrontMagnetImpactKnockdownTime = 0.0f;
 	bool bCapsulePhysicsBodyResponseOverridden = false;
 	TEnumAsByte<ECollisionResponse> CachedCapsulePhysicsBodyResponse = ECR_Block;
 };
