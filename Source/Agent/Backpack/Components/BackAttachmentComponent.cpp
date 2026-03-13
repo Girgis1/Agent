@@ -261,6 +261,7 @@ void UBackAttachmentComponent::SetManualMagnetRequested(bool bInManualMagnetRequ
 			TrackedItem.bStageOneLiftInitialized = false;
 			TrackedItem.bStageOneSnapDelayInitialized = false;
 			TrackedItem.StageOneSnapDelaySeconds = 0.0f;
+			TrackedItem.MagLockVolumeEnterTime = -1.0f;
 		}
 		return;
 	}
@@ -268,6 +269,104 @@ void UBackAttachmentComponent::SetManualMagnetRequested(bool bInManualMagnetRequ
 	ManualMagnetChargeAlpha = 0.0f;
 	ManualMagnetHeldDuration = 0.0f;
 	const float CurrentWorldTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
+	const UPlayerMagnetComponent* PlayerMagnet = ResolvePlayerMagnetComponent();
+	const float CaptureRange = PlayerMagnet ? FMath::Max(1.0f, PlayerMagnet->CaptureRange) : 100.0f;
+	const float LockFallbackDistance = PlayerMagnet ? FMath::Max(0.0f, PlayerMagnet->LockDistanceFallback) : 0.0f;
+	USceneComponent* MagnetAnchorComponent = nullptr;
+	FName MagnetAnchorSocket = NAME_None;
+	const bool bHasAnchor = ResolveMagLockAnchor(MagnetAnchorComponent, MagnetAnchorSocket) && MagnetAnchorComponent;
+	const FTransform MagnetAnchorTransform = bHasAnchor
+		? (MagnetAnchorSocket.IsNone()
+			? MagnetAnchorComponent->GetComponentTransform()
+			: MagnetAnchorComponent->GetSocketTransform(MagnetAnchorSocket, RTS_World))
+		: FTransform::Identity;
+	const FVector MagnetAnchorLocation = MagnetAnchorTransform.GetLocation();
+	if (UShapeComponent* MagLockZone = ResolveMagLockZone())
+	{
+		TArray<FObjectKey> KeysToLock;
+		for (const TPair<FObjectKey, FTrackedMagnetItem>& Pair : TrackedItems)
+		{
+			const FObjectKey ItemKey = Pair.Key;
+			const FTrackedMagnetItem& TrackedItem = Pair.Value;
+			if (TrackedItem.bLocked)
+			{
+				continue;
+			}
+
+			const AActor* CandidateActor = TrackedItem.Actor.Get();
+			const UPrimitiveComponent* CandidatePrimitive = TrackedItem.Primitive.Get();
+			if (!CandidateActor || !CandidatePrimitive)
+			{
+				continue;
+			}
+
+			const FVector AttachPointLocation = ResolveBackItemAttachPointWorldTransform(
+				CandidateActor,
+				TrackedItem.BackpackMagnet.Get()).GetLocation();
+			const FVector PrimitiveLocation = CandidatePrimitive->GetComponentLocation();
+			const bool bInsideZoneByAttachPoint = IsInsideMagLockZone(MagLockZone, AttachPointLocation);
+			const bool bInsideZoneByPrimitive = IsInsideMagLockZone(MagLockZone, PrimitiveLocation);
+			if (bInsideZoneByAttachPoint || bInsideZoneByPrimitive)
+			{
+				KeysToLock.Add(ItemKey);
+			}
+		}
+
+		for (const FObjectKey& ItemKey : KeysToLock)
+		{
+			SetItemLocked(ItemKey, true, CurrentWorldTime, 0.0f);
+		}
+	}
+	else if (bHasAnchor)
+	{
+		TArray<FObjectKey> KeysToLock;
+		KeysToLock.Reserve(TrackedItems.Num());
+		for (const TPair<FObjectKey, FTrackedMagnetItem>& Pair : TrackedItems)
+		{
+			const FObjectKey ItemKey = Pair.Key;
+			const FTrackedMagnetItem& TrackedItem = Pair.Value;
+			if (TrackedItem.bLocked)
+			{
+				continue;
+			}
+
+			const AActor* CandidateActor = TrackedItem.Actor.Get();
+			const UPrimitiveComponent* CandidatePrimitive = TrackedItem.Primitive.Get();
+			if (!CandidateActor || !CandidatePrimitive)
+			{
+				continue;
+			}
+
+			const bool bIsBackpackItem = TrackedItem.BackpackMagnet.IsValid();
+			const float BackpackAutoLockDistance = (PlayerMagnet && bIsBackpackItem)
+				? FMath::Max(0.0f, PlayerMagnet->BackpackItemAutoLockDistance)
+				: 0.0f;
+			const float FinalizeLockDistance = FMath::Max3(CaptureRange, LockFallbackDistance, BackpackAutoLockDistance);
+			if (FinalizeLockDistance <= KINDA_SMALL_NUMBER)
+			{
+				continue;
+			}
+
+			const FVector AttachPointLocation = ResolveBackItemAttachPointWorldTransform(
+				CandidateActor,
+				TrackedItem.BackpackMagnet.Get()).GetLocation();
+			const FVector PrimitiveLocation = CandidatePrimitive->GetComponentLocation();
+			const bool bNearByAttachPoint = FVector::DistSquared(AttachPointLocation, MagnetAnchorLocation)
+				<= FMath::Square(FinalizeLockDistance);
+			const bool bNearByPrimitive = FVector::DistSquared(PrimitiveLocation, MagnetAnchorLocation)
+				<= FMath::Square(FinalizeLockDistance);
+			if (bNearByAttachPoint || bNearByPrimitive)
+			{
+				KeysToLock.Add(ItemKey);
+			}
+		}
+
+		for (const FObjectKey& ItemKey : KeysToLock)
+		{
+			SetItemLocked(ItemKey, true, CurrentWorldTime, 0.0f);
+		}
+	}
+
 	for (TPair<FObjectKey, FTrackedMagnetItem>& Pair : TrackedItems)
 	{
 		FTrackedMagnetItem& TrackedItem = Pair.Value;
@@ -288,6 +387,7 @@ void UBackAttachmentComponent::SetManualMagnetRequested(bool bInManualMagnetRequ
 		TrackedItem.bStageOneLiftInitialized = false;
 		TrackedItem.bStageOneSnapDelayInitialized = false;
 		TrackedItem.StageOneSnapDelaySeconds = 0.0f;
+		TrackedItem.MagLockVolumeEnterTime = -1.0f;
 	}
 }
 
@@ -779,15 +879,13 @@ void UBackAttachmentComponent::UpdateMagnetSimulation(float DeltaTime)
 				const float DistanceToAnchor = FVector::Distance(
 					BackItemAttachPointLocation,
 					MagnetAnchorTransform.GetLocation());
-				const float WeldAttachDistance = FMath::Max(1.0f, PlayerMagnet->AttachDistance);
 				const float ItemStrengthMultiplier = ResolveItemMagnetStrengthMultiplier(BackItemMagnet);
 
 				EnsureMagnetKinematicState(*TrackedItem);
 				ApplyMagnetCollisionOverrides(*TrackedItem, PlayerMagnet, CurrentWorldTime);
 
 				const bool bShouldWeldLockedItem = PlayerMagnet->bWeldLockedItemsToMagnet
-					&& MagnetAnchorComponent
-					&& DistanceToAnchor <= WeldAttachDistance;
+					&& MagnetAnchorComponent;
 				if (bShouldWeldLockedItem)
 				{
 					WeldLockedItemToMagnet(*TrackedItem, MagnetAnchorComponent, MagnetAnchorSocket);
@@ -1005,6 +1103,7 @@ void UBackAttachmentComponent::RegisterTrackedItem(
 		TrackedItem.bStageOneLiftInitialized = false;
 		TrackedItem.bStageOneSnapDelayInitialized = false;
 		TrackedItem.StageOneSnapDelaySeconds = 0.0f;
+		TrackedItem.MagLockVolumeEnterTime = -1.0f;
 	}
 }
 
@@ -1067,6 +1166,10 @@ void UBackAttachmentComponent::ApplyMagnetForces(
 	}
 
 	const FVector MagnetAnchorLocation = MagnetAnchorTransform.GetLocation();
+	const bool bHasMagLockVolume = MagLockZone != nullptr;
+	const FVector FieldTargetLocation = (bHasMagLockVolume && PlayerMagnet->bUseMagLockZoneCenterAsAttractTarget)
+		? MagLockZone->GetComponentLocation()
+		: MagnetAnchorLocation;
 	const float FieldRange = FMath::Max(1.0f, PlayerMagnet->AttractRange);
 	const float FieldRangeSq = FMath::Square(FieldRange);
 	const float CaptureRange = FMath::Clamp(PlayerMagnet->CaptureRange, 1.0f, FieldRange);
@@ -1085,6 +1188,7 @@ void UBackAttachmentComponent::ApplyMagnetForces(
 		: 1.0f;
 	const float StageOneSnapDelayMin = FMath::Max(0.0f, PlayerMagnet->ChargeSnapDelayAfterLiftMin);
 	const float StageOneSnapDelayMax = FMath::Max(StageOneSnapDelayMin, PlayerMagnet->ChargeSnapDelayAfterLiftMax);
+	const float MagLockVolumeAnchorDelay = FMath::Max(0.0f, PlayerMagnet->MagLockVolumeAnchorDelay);
 	const float SlamStrengthMultiplier = FMath::Max(1.0f, PlayerMagnet->ChargeSlamStrengthMultiplier);
 
 	struct FProcessCandidate
@@ -1109,7 +1213,7 @@ void UBackAttachmentComponent::ApplyMagnetForces(
 		const FVector AttachPointLocation = ResolveBackItemAttachPointWorldTransform(
 			CandidateActor,
 			TrackedItem.BackpackMagnet.Get()).GetLocation();
-		const float DistanceSq = FVector::DistSquared(AttachPointLocation, MagnetAnchorLocation);
+		const float DistanceSq = FVector::DistSquared(AttachPointLocation, FieldTargetLocation);
 
 		if (!TrackedItem.bLocked && DistanceSq > FieldRangeSq)
 		{
@@ -1168,22 +1272,51 @@ void UBackAttachmentComponent::ApplyMagnetForces(
 			BackItemMagnet);
 		const FVector BackItemAttachPointLocation = BackItemAttachPointTransform.GetLocation();
 		const float DistanceToAnchor = FVector::Distance(BackItemAttachPointLocation, MagnetAnchorLocation);
-		if (!TrackedItem->bLocked && DistanceToAnchor > FieldRange)
+		const float DistanceToFieldTarget = FVector::Distance(BackItemAttachPointLocation, FieldTargetLocation);
+		if (!TrackedItem->bLocked && DistanceToFieldTarget > FieldRange)
 		{
 			continue;
 		}
 
-		bool bInsideMagLockZone = MagLockZone
+		const FVector PrimitiveLocation = BackItemPrimitive->GetComponentLocation();
+		const bool bInsideZoneByAttachPoint = MagLockZone
 			? IsInsideMagLockZone(MagLockZone, BackItemAttachPointLocation)
 			: (DistanceToAnchor <= CaptureRange);
-		if (LockFallbackDistance > KINDA_SMALL_NUMBER && DistanceToAnchor <= LockFallbackDistance)
+		const bool bInsideZoneByPrimitive = MagLockZone
+			? IsInsideMagLockZone(MagLockZone, PrimitiveLocation)
+			: (FVector::Distance(PrimitiveLocation, MagnetAnchorLocation) <= CaptureRange);
+		const bool bInsideMagLockVolume = bInsideZoneByAttachPoint || bInsideZoneByPrimitive;
+		if (bInsideMagLockVolume)
 		{
-			bInsideMagLockZone = true;
+			if (TrackedItem->MagLockVolumeEnterTime < 0.0f)
+			{
+				TrackedItem->MagLockVolumeEnterTime = CurrentWorldTime;
+			}
 		}
-		if (BackpackAutoLockDistance > KINDA_SMALL_NUMBER && DistanceToAnchor <= BackpackAutoLockDistance)
+		else
 		{
-			bInsideMagLockZone = true;
+			TrackedItem->MagLockVolumeEnterTime = -1.0f;
 		}
+		const bool bVolumeAnchorDwellMet = bInsideMagLockVolume
+			&& (CurrentWorldTime - TrackedItem->MagLockVolumeEnterTime) >= MagLockVolumeAnchorDelay;
+		const float LowVelocityThreshold = FMath::Max(0.0f, PlayerMagnet->MagLockLowVelocityThreshold);
+		const float CurrentItemSpeed = BackItemPrimitive->GetComponentVelocity().Size();
+		const bool bLowVelocityLockReady = bInsideMagLockVolume
+			&& PlayerMagnet->bAllowLowVelocityLockInsideMagLockVolume
+			&& CurrentItemSpeed <= LowVelocityThreshold;
+
+		bool bInsideFallbackLockRange = false;
+		if (!bHasMagLockVolume && LockFallbackDistance > KINDA_SMALL_NUMBER && DistanceToAnchor <= LockFallbackDistance)
+		{
+			bInsideFallbackLockRange = true;
+		}
+		if (!bHasMagLockVolume && BackpackAutoLockDistance > KINDA_SMALL_NUMBER && DistanceToAnchor <= BackpackAutoLockDistance)
+		{
+			bInsideFallbackLockRange = true;
+		}
+		const bool bInsideLockRetentionZone = bHasMagLockVolume
+			? bInsideMagLockVolume
+			: (bInsideMagLockVolume || bInsideFallbackLockRange);
 
 		if (bStageOne)
 		{
@@ -1205,8 +1338,12 @@ void UBackAttachmentComponent::ApplyMagnetForces(
 			&& TrackedItem->bStageOneSnapDelayInitialized
 			&& TimeSinceLiftStart >= TrackedItem->StageOneSnapDelaySeconds;
 		const bool bItemInStageOne = bStageOne && !bAllowSnapDuringStageOne;
+		const bool bCanLockNow = CurrentWorldTime >= TrackedItem->LockReacquireTime;
+		const bool bLockByZoneNow = bHasMagLockVolume
+			? ((bVolumeAnchorDwellMet || bLowVelocityLockReady) && bCanLockNow)
+			: (bInsideLockRetentionZone && bCanLockNow);
 
-		const bool bBudgetBypassForZone = PlayerMagnet->bAllowUnlimitedItemsInsideMagLockZone && bInsideMagLockZone;
+		const bool bBudgetBypassForZone = PlayerMagnet->bAllowUnlimitedItemsInsideMagLockZone && bInsideMagLockVolume;
 		if (bOverBudget && !TrackedItem->bLocked && !bBudgetBypassForZone)
 		{
 			continue;
@@ -1215,11 +1352,11 @@ void UBackAttachmentComponent::ApplyMagnetForces(
 
 		if (!bItemInStageOne)
 		{
-			if (bInsideMagLockZone && CurrentWorldTime >= TrackedItem->LockReacquireTime)
+			if (bLockByZoneNow)
 			{
 				SetItemLocked(ItemKey, true, CurrentWorldTime, 0.0f);
 			}
-			else if (TrackedItem->bLocked && !bInsideMagLockZone && !PlayerMagnet->bStickyLockInZone)
+			else if (TrackedItem->bLocked && !bInsideLockRetentionZone && !PlayerMagnet->bStickyLockInZone)
 			{
 				SetItemLocked(ItemKey, false, CurrentWorldTime, PlayerMagnet->LockReacquireDelay);
 			}
@@ -1253,19 +1390,33 @@ void UBackAttachmentComponent::ApplyMagnetForces(
 			else
 			{
 				UnweldLockedItemFromMagnet(*TrackedItem);
-				const float LockedPullAlpha = bItemInStageOne ? 1.0f : (MagnetAlpha * SlamStrengthMultiplier);
-				MoveMagnetItemKinematic(
-					DeltaTime,
-					*TrackedItem,
-					TargetBackItemTransform,
-					DistanceToAnchor,
-					LockedPullAlpha,
-					ItemStrengthMultiplier,
-					PlayerMagnet,
-					bShouldAlignLockedRotation,
-					BackpackLocationSpeedScale,
-					BackpackRotationSpeedScale,
-					BackpackFinalSnapDistance);
+				if (PlayerMagnet->bDirectAnchorLockedItems)
+				{
+					const FQuat CurrentRotation = BackItemPrimitive->GetComponentQuat().GetNormalized();
+					const FQuat TargetRotation = TargetBackItemTransform.GetRotation().GetNormalized();
+					BackItemPrimitive->SetWorldLocationAndRotation(
+						TargetBackItemTransform.GetLocation(),
+						bShouldAlignLockedRotation ? TargetRotation : CurrentRotation,
+						false,
+						nullptr,
+						ETeleportType::TeleportPhysics);
+				}
+				else
+				{
+					const float LockedPullAlpha = bItemInStageOne ? 1.0f : (MagnetAlpha * SlamStrengthMultiplier);
+					MoveMagnetItemKinematic(
+						DeltaTime,
+						*TrackedItem,
+						TargetBackItemTransform,
+						DistanceToAnchor,
+						LockedPullAlpha,
+						ItemStrengthMultiplier,
+						PlayerMagnet,
+						bShouldAlignLockedRotation,
+						BackpackLocationSpeedScale,
+						BackpackRotationSpeedScale,
+						BackpackFinalSnapDistance);
+				}
 			}
 			BackItemActor = CurrentBackItemActor;
 		}
@@ -1306,8 +1457,8 @@ void UBackAttachmentComponent::ApplyMagnetForces(
 					BackItemPrimitive,
 					ItemMassKg,
 					BackItemAttachPointLocation,
-					MagnetAnchorLocation,
-					DistanceToAnchor,
+					FieldTargetLocation,
+					DistanceToFieldTarget,
 					StageOnePullAlpha,
 					ItemStrengthMultiplier,
 					PlayerMagnet);
@@ -1348,8 +1499,8 @@ void UBackAttachmentComponent::ApplyMagnetForces(
 						BackItemPrimitive,
 						ItemMassKg,
 						BackItemAttachPointLocation,
-						MagnetAnchorLocation,
-						DistanceToAnchor,
+						FieldTargetLocation,
+						DistanceToFieldTarget,
 						OuterPullAlpha,
 						ItemStrengthMultiplier,
 						PlayerMagnet);
@@ -1382,6 +1533,7 @@ void UBackAttachmentComponent::ApplyMagnetForces(
 		TrackedItem.bStageOneLiftInitialized = false;
 		TrackedItem.bStageOneSnapDelayInitialized = false;
 		TrackedItem.StageOneSnapDelaySeconds = 0.0f;
+		TrackedItem.MagLockVolumeEnterTime = -1.0f;
 	}
 
 	TArray<TWeakObjectPtr<UPrimitiveComponent>> IgnoredPrimitivesToClear;
@@ -1474,6 +1626,7 @@ void UBackAttachmentComponent::SetItemLocked(
 	TrackedItem->bStageOneLiftInitialized = false;
 	TrackedItem->bStageOneSnapDelayInitialized = false;
 	TrackedItem->StageOneSnapDelaySeconds = 0.0f;
+	TrackedItem->MagLockVolumeEnterTime = -1.0f;
 	TrackedItem->LockReacquireTime = CurrentWorldTime + FMath::Max(0.0f, ReacquireDelay);
 }
 
@@ -1504,6 +1657,7 @@ void UBackAttachmentComponent::ReleaseAllLockedItems(bool bSetReacquireCooldown,
 		TrackedItem->bStageOneLiftInitialized = false;
 		TrackedItem->bStageOneSnapDelayInitialized = false;
 		TrackedItem->StageOneSnapDelaySeconds = 0.0f;
+		TrackedItem->MagLockVolumeEnterTime = -1.0f;
 		TrackedItem->LockReacquireTime = CurrentWorldTime + ReacquireDelay;
 
 		if (UPrimitiveComponent* BackItemPrimitive = TrackedItem->Primitive.Get())

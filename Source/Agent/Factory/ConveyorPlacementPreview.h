@@ -7,8 +7,11 @@
 #include "ConveyorPlacementPreview.generated.h"
 
 class UArrowComponent;
+class UChildActorComponent;
+class UMaterialInterface;
 class UStaticMeshComponent;
 class USceneComponent;
+class AActor;
 
 UCLASS()
 class AConveyorPlacementPreview : public AActor
@@ -21,6 +24,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Conveyor")
 	void SetPlacementState(bool bIsValid);
 
+	UFUNCTION(BlueprintCallable, Category="Conveyor")
+	void SetPreviewActorClass(TSubclassOf<AActor> InPreviewActorClass);
+
+	UFUNCTION(BlueprintCallable, Category="Conveyor")
+	void SetGhostMaterials(UMaterialInterface* InValidPlacementMaterial, UMaterialInterface* InInvalidPlacementMaterial);
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Conveyor")
 	TObjectPtr<USceneComponent> SceneRoot = nullptr;
 
@@ -28,8 +37,24 @@ public:
 	TObjectPtr<UStaticMeshComponent> PreviewMesh = nullptr;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Conveyor")
+	TObjectPtr<UChildActorComponent> PreviewBuildable = nullptr;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Conveyor")
 	TObjectPtr<UArrowComponent> DirectionArrow = nullptr;
 
 protected:
+	void RefreshPreviewVisuals();
+	void ConfigurePreviewBuildableActor(AActor* PreviewActor) const;
+	void ApplyGhostMaterialToActor(AActor* PreviewActor, UMaterialInterface* GhostMaterial) const;
+
+	UPROPERTY(Transient)
+	TSubclassOf<AActor> PreviewActorClass;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Conveyor", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<UMaterialInterface> ValidPlacementMaterial = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Conveyor", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<UMaterialInterface> InvalidPlacementMaterial = nullptr;
+
 	bool bPlacementValid = true;
 };

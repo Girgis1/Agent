@@ -310,6 +310,7 @@ private:
 		float StageOneLiftTargetCm = 0.0f;
 		bool bStageOneSnapDelayInitialized = false;
 		float StageOneSnapDelaySeconds = 0.0f;
+		float MagLockVolumeEnterTime = -1.0f;
 	};
 
 	TMap<FObjectKey, FTrackedMagnetItem> TrackedItems;

@@ -12,7 +12,10 @@
 class ADroneCompanion;
 class AConveyorBeltStraight;
 class AConveyorPlacementPreview;
+class AMaterialNodeActor;
 class AMachineActor;
+class AMinerActor;
+class AMiningSwarmMachine;
 class AStorageBin;
 class AActor;
 class UVehicleInteractionComponent;
@@ -59,7 +62,9 @@ enum class EAgentFactoryPlacementType : uint8
 {
 	Conveyor,
 	StorageBin,
-	Machine
+	Machine,
+	Miner,
+	MiningSwarm
 };
 
 UENUM(BlueprintType)
@@ -271,7 +276,12 @@ protected:
 	void RotateConveyorPlacement(int32 Direction);
 	bool EvaluateConveyorPlacement(FVector& OutLocation, FRotator& OutRotation, bool& bOutIsValid) const;
 	bool TryGetFactoryBuildableFaceSnapLocation(const FHitResult& AimHit, FVector& OutLocation) const;
+	AMaterialNodeActor* ResolveMaterialNodeFromPlacementHit(const FHitResult& AimHit) const;
+	AMaterialNodeActor* ResolveMaterialNodeAtPlacementLocation(const FVector& PlacementLocation) const;
 	void SelectFactoryPlacementType(EAgentFactoryPlacementType NewType, bool bToggleIfAlreadySelected);
+	UClass* ResolveFactoryBuildableClass(EAgentFactoryPlacementType PlacementType) const;
+	bool IsFreeFactoryPlacementActive() const;
+	void UpdateFactoryPlacementRotationHold(float DeltaSeconds);
 	bool CanUsePickupInteraction() const;
 	bool CanMaintainHeldPickup() const;
 	bool CanUseDroneLiftAssist() const;
@@ -364,7 +374,10 @@ protected:
 	void OnConveyorPlacementModePressed();
 	void OnStorageBinPlacementModePressed();
 	void OnMachinePlacementModePressed();
+	void OnMinerPlacementModePressed();
+	void OnMiningSwarmPlacementModePressed();
 	void OnFactoryPlacementTogglePressed();
+	void OnFactoryFreePlacementTogglePressed();
 	void OnConveyorPlacePressed();
 	void OnConveyorCancelPressed();
 	void OnConveyorRotateLeftPressed();
@@ -876,6 +889,12 @@ public:
 	TSubclassOf<AMachineActor> MachineClass;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
+	TSubclassOf<AMinerActor> MinerClass;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
+	TSubclassOf<AMiningSwarmMachine> MiningSwarmClass;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
 	float ConveyorPlacementTraceDistance = 2000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
@@ -886,6 +905,15 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement")
 	FVector ConveyorPlacementClearanceExtents = FVector(48.0f, 48.0f, 12.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement", meta=(ClampMin="0.1", UIMin="0.1"))
+	float FreePlacementRotationStepDegrees = 5.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement", meta=(ClampMin="0.0", UIMin="0.0"))
+	float FreePlacementRotationHoldDelay = 0.2f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Placement", meta=(ClampMin="0.01", UIMin="0.01"))
+	float FreePlacementRotationHoldInterval = 0.06f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction|Pickup")
 	float PickupTraceDistance = 650.0f;
@@ -1117,6 +1145,9 @@ protected:
 	bool bConveyorPlacementValid = false;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Placement", meta=(AllowPrivateAccess="true"))
+	bool bFactoryFreePlacementEnabled = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Placement", meta=(AllowPrivateAccess="true"))
 	EAgentFactoryPlacementType CurrentFactoryPlacementType = EAgentFactoryPlacementType::Conveyor;
 
 	bool bViewModeInitialized = false;
@@ -1174,7 +1205,9 @@ protected:
 	FRotator ThirdPersonCameraChaseRotation = FRotator::ZeroRotator;
 	FVector PendingConveyorPlacementLocation = FVector::ZeroVector;
 	FRotator PendingConveyorPlacementRotation = FRotator::ZeroRotator;
-	int32 ConveyorPlacementRotationSteps = 0;
+	float FactoryPlacementRotationYawDegrees = 0.0f;
+	float FactoryPlacementRotationHoldTimeRemaining = 0.0f;
+	int32 FactoryPlacementRotationHoldDirection = 0;
 	TWeakObjectPtr<UPrimitiveComponent> PickupCandidateComponent;
 	TWeakObjectPtr<UPrimitiveComponent> HeldPickupComponent;
 	FVector PickupCandidateLocation = FVector::ZeroVector;
@@ -1198,6 +1231,8 @@ protected:
 	bool bDroneRollRightHeld = false;
 	bool bDroneYawLeftHeld = false;
 	bool bDroneYawRightHeld = false;
+	bool bPlacementRotateLeftHeld = false;
+	bool bPlacementRotateRightHeld = false;
 	bool bDroneThrottleUpHeld = false;
 	bool bDroneThrottleDownHeld = false;
 	bool bInteractKeyDrivingDroneThrottle = false;
