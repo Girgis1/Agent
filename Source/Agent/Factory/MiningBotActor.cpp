@@ -1,8 +1,13 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Factory/MiningBotActor.h"
+#include "Components/BoxComponent.h"
+#include "Components/CapsuleComponent.h"
+#include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/SphereComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "CollisionShape.h"
 #include "Engine/World.h"
 #include "Factory/FactoryPlacementHelpers.h"
 #include "Factory/MaterialNodeActor.h"
@@ -16,14 +21,54 @@ AMiningBotActor::AMiningBotActor()
 	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.bStartWithTickEnabled = true;
 
+	BotCollision = CreateDefaultSubobject<USphereComponent>(TEXT("BotCollision"));
+	BotCollision->InitSphereRadius(18.0f);
+	BotCollision->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	BotCollision->SetCollisionObjectType(ECC_WorldDynamic);
+	BotCollision->SetCollisionResponseToAllChannels(ECR_Block);
+	BotCollision->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
+	BotCollision->SetGenerateOverlapEvents(false);
+	BotCollision->SetCanEverAffectNavigation(false);
+	BotCollision->SetSimulatePhysics(false);
+	SetRootComponent(BotCollision);
+
+	BotBoxCollision = CreateDefaultSubobject<UBoxComponent>(TEXT("BotBoxCollision"));
+	BotBoxCollision->SetupAttachment(BotCollision);
+	BotBoxCollision->SetBoxExtent(FVector(18.0f, 18.0f, 18.0f));
+	BotBoxCollision->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	BotBoxCollision->SetCollisionResponseToAllChannels(ECR_Ignore);
+	BotBoxCollision->SetGenerateOverlapEvents(false);
+	BotBoxCollision->SetCanEverAffectNavigation(false);
+	BotBoxCollision->SetSimulatePhysics(false);
+
+	BotCapsuleCollision = CreateDefaultSubobject<UCapsuleComponent>(TEXT("BotCapsuleCollision"));
+	BotCapsuleCollision->SetupAttachment(BotCollision);
+	BotCapsuleCollision->SetCapsuleSize(16.0f, 22.0f);
+	BotCapsuleCollision->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	BotCapsuleCollision->SetCollisionResponseToAllChannels(ECR_Ignore);
+	BotCapsuleCollision->SetGenerateOverlapEvents(false);
+	BotCapsuleCollision->SetCanEverAffectNavigation(false);
+	BotCapsuleCollision->SetSimulatePhysics(false);
+
+	BotCustomCollision = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BotCustomCollision"));
+	BotCustomCollision->SetupAttachment(BotCollision);
+	BotCustomCollision->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	BotCustomCollision->SetCollisionResponseToAllChannels(ECR_Ignore);
+	BotCustomCollision->SetGenerateOverlapEvents(false);
+	BotCustomCollision->SetCanEverAffectNavigation(false);
+	BotCustomCollision->SetSimulatePhysics(false);
+	BotCustomCollision->SetHiddenInGame(true);
+	BotCustomCollision->SetVisibility(false, true);
+
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
-	SetRootComponent(SceneRoot);
+	SceneRoot->SetupAttachment(BotCollision);
+	SceneRoot->SetUsingAbsoluteLocation(true);
+	SceneRoot->SetUsingAbsoluteRotation(true);
 
 	BotMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BotMesh"));
 	BotMesh->SetupAttachment(SceneRoot);
-	BotMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-	BotMesh->SetCollisionResponseToAllChannels(ECR_Block);
-	BotMesh->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
+	BotMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	BotMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
 	BotMesh->SetGenerateOverlapEvents(false);
 	BotMesh->SetCanEverAffectNavigation(false);
 	BotMesh->SetSimulatePhysics(false);
@@ -36,11 +81,29 @@ AMiningBotActor::AMiningBotActor()
 	}
 
 	RuntimeStatus = FText::FromString(TEXT("Awaiting swarm"));
+	ActiveCollisionBody = BotCollision;
+	SmoothedSupportNormal = FVector::UpVector;
+	bHasSmoothedSupportNormal = false;
+	bVisualLagInitialized = false;
+	TravelSpeedCmPerSecond = 100.0f;
+	MaxTraversalStepPerTickCm = 35.0f;
+	ObstacleSlideScale = 0.65f;
+	ObstacleContactPadding = 0.03f;
+}
+
+void AMiningBotActor::OnConstruction(const FTransform& Transform)
+{
+	Super::OnConstruction(Transform);
+	ApplyCollisionBodySelection();
 }
 
 void AMiningBotActor::BeginPlay()
 {
 	Super::BeginPlay();
+	ApplyCollisionBodySelection();
+	SmoothedSupportNormal = GetActorUpVector().GetSafeNormal(UE_SMALL_NUMBER, FVector::UpVector);
+	bHasSmoothedSupportNormal = true;
+	bVisualLagInitialized = false;
 
 	if (!OwningSwarmMachine)
 	{
@@ -86,9 +149,9 @@ void AMiningBotActor::Tick(float DeltaSeconds)
 
 	if (!OwningSwarmMachine->IsSwarmEnabled())
 	{
-		const FVector HomeLocation = OwningSwarmMachine->GetBotHomeLocation(this);
-		MoveTowardsPoint(HomeLocation, OwningSwarmMachine->GetBotHomeNormal(), DeltaSeconds);
-		SetRuntimeState(EMiningBotRuntimeState::Idle, TEXT("Swarm paused"));
+		CurrentTargetNode = nullptr;
+		MiningTimeRemaining = 0.0f;
+		SetRuntimeState(EMiningBotRuntimeState::Idle, TEXT("Swarm offline"));
 		return;
 	}
 
@@ -156,7 +219,7 @@ void AMiningBotActor::SetOwningSwarmMachine(AMiningSwarmMachine* NewOwningSwarmM
 void AMiningBotActor::SetMiningTuning(int32 InCapacityUnits, float InTravelSpeedCmPerSecond, float InMiningSpeedMultiplier)
 {
 	MiningCapacityUnits = FMath::Max(1, InCapacityUnits);
-	TravelSpeedCmPerSecond = FMath::Max(1.0f, InTravelSpeedCmPerSecond);
+	TravelSpeedCmPerSecond = FMath::Clamp(InTravelSpeedCmPerSecond, 1.0f, 100.0f);
 	MiningSpeedMultiplier = FMath::Max(0.1f, InMiningSpeedMultiplier);
 }
 
@@ -182,6 +245,235 @@ void AMiningBotActor::SetRuntimeState(EMiningBotRuntimeState NewState, const FSt
 	RuntimeState = NewState;
 	RuntimeStatus = NewStatusText;
 	OnMiningBotStateChanged(RuntimeState, RuntimeStatus);
+}
+
+void AMiningBotActor::ApplyCollisionBodySelection()
+{
+	TArray<UPrimitiveComponent*> CollisionBodies;
+	if (BotCollision)
+	{
+		CollisionBodies.Add(BotCollision);
+	}
+	if (BotBoxCollision)
+	{
+		CollisionBodies.Add(BotBoxCollision);
+	}
+	if (BotCapsuleCollision)
+	{
+		CollisionBodies.Add(BotCapsuleCollision);
+	}
+	if (BotCustomCollision)
+	{
+		CollisionBodies.Add(BotCustomCollision);
+	}
+
+	UPrimitiveComponent* SelectedBody = ResolveCollisionBodyForType(CollisionBodyType);
+	if (!SelectedBody)
+	{
+		SelectedBody = BotCollision;
+	}
+
+	if (!SelectedBody)
+	{
+		return;
+	}
+
+	const FName SelectedBodyName = SelectedBody->GetFName();
+	const FTransform OldSelectedWorldTransform = SelectedBody->GetComponentTransform();
+
+	for (UPrimitiveComponent* Body : CollisionBodies)
+	{
+		if (!Body)
+		{
+			continue;
+		}
+
+		Body->SetCollisionObjectType(ECC_WorldDynamic);
+		Body->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
+		Body->SetGenerateOverlapEvents(false);
+		Body->SetCanEverAffectNavigation(false);
+		Body->SetSimulatePhysics(false);
+
+		const bool bIsSelected = Body == SelectedBody;
+		Body->SetCollisionEnabled(bIsSelected ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
+		Body->SetCollisionResponseToAllChannels(bIsSelected ? ECR_Block : ECR_Ignore);
+	}
+
+	if (GetRootComponent() != SelectedBody)
+	{
+		SetRootComponent(SelectedBody);
+	}
+
+	SelectedBody->SetWorldTransform(OldSelectedWorldTransform, false, nullptr, ETeleportType::TeleportPhysics);
+
+	for (UPrimitiveComponent* Body : CollisionBodies)
+	{
+		if (!Body || Body == SelectedBody)
+		{
+			continue;
+		}
+
+		Body->AttachToComponent(SelectedBody, FAttachmentTransformRules::KeepWorldTransform);
+	}
+
+	if (SceneRoot && SceneRoot->GetAttachParent() != SelectedBody)
+	{
+		SceneRoot->AttachToComponent(SelectedBody, FAttachmentTransformRules::KeepWorldTransform);
+	}
+
+	// Custom collision mesh is optional and usually only used as the selected collision body.
+	if (BotCustomCollision)
+	{
+		const bool bCustomIsSelected = SelectedBodyName == BotCustomCollision->GetFName();
+		BotCustomCollision->SetHiddenInGame(!bCustomIsSelected);
+		BotCustomCollision->SetVisibility(bCustomIsSelected, true);
+	}
+
+	ActiveCollisionBody = SelectedBody;
+}
+
+UPrimitiveComponent* AMiningBotActor::ResolveCollisionBodyForType(EMiningBotCollisionBodyType BodyType) const
+{
+	switch (BodyType)
+	{
+	case EMiningBotCollisionBodyType::Box:
+		return BotBoxCollision.Get();
+	case EMiningBotCollisionBodyType::Capsule:
+		return BotCapsuleCollision.Get();
+	case EMiningBotCollisionBodyType::CustomMesh:
+		return BotCustomCollision.Get();
+	case EMiningBotCollisionBodyType::Sphere:
+	default:
+		return BotCollision.Get();
+	}
+}
+
+UPrimitiveComponent* AMiningBotActor::GetActiveCollisionBody() const
+{
+	if (ActiveCollisionBody)
+	{
+		return ActiveCollisionBody;
+	}
+
+	if (UPrimitiveComponent* SelectedBody = ResolveCollisionBodyForType(CollisionBodyType))
+	{
+		return SelectedBody;
+	}
+
+	return BotCollision.Get();
+}
+
+float AMiningBotActor::GetSurfaceSupportDistance(const FVector& SurfaceNormal) const
+{
+	UPrimitiveComponent* CollisionBody = GetActiveCollisionBody();
+	if (!CollisionBody)
+	{
+		return 0.0f;
+	}
+
+	const FVector SafeNormal = SurfaceNormal.GetSafeNormal(UE_SMALL_NUMBER, FVector::UpVector);
+	if (const USphereComponent* SphereBody = Cast<USphereComponent>(CollisionBody))
+	{
+		return FMath::Max(0.0f, SphereBody->GetScaledSphereRadius());
+	}
+
+	if (const UBoxComponent* BoxBody = Cast<UBoxComponent>(CollisionBody))
+	{
+		const FVector Extent = BoxBody->GetScaledBoxExtent();
+		const FVector LocalNormal = BoxBody->GetComponentTransform().InverseTransformVectorNoScale(SafeNormal).GetAbs();
+		return FMath::Max(0.0f, FVector::DotProduct(Extent, LocalNormal));
+	}
+
+	if (const UCapsuleComponent* CapsuleBody = Cast<UCapsuleComponent>(CollisionBody))
+	{
+		const float Radius = FMath::Max(0.0f, CapsuleBody->GetScaledCapsuleRadius());
+		const float HalfHeight = FMath::Max(Radius, CapsuleBody->GetScaledCapsuleHalfHeight());
+		const FVector LocalNormal = CapsuleBody->GetComponentTransform().InverseTransformVectorNoScale(SafeNormal).GetAbs();
+		const float Axial = FMath::Clamp(LocalNormal.Z, 0.0f, 1.0f);
+		return FMath::Lerp(Radius, HalfHeight, Axial);
+	}
+
+	const FVector Extent = CollisionBody->Bounds.BoxExtent;
+	const FVector AbsNormal = SafeNormal.GetAbs();
+	return FMath::Max(0.0f, FVector::DotProduct(Extent, AbsNormal));
+}
+
+float AMiningBotActor::GetTraversalTraceRadius() const
+{
+	UPrimitiveComponent* CollisionBody = GetActiveCollisionBody();
+	if (!CollisionBody)
+	{
+		return 8.0f;
+	}
+
+	if (const USphereComponent* SphereBody = Cast<USphereComponent>(CollisionBody))
+	{
+		const float Radius = FMath::Max(4.0f, SphereBody->GetScaledSphereRadius());
+		return FMath::Clamp(Radius * 0.7f, 4.0f, Radius);
+	}
+
+	if (const UBoxComponent* BoxBody = Cast<UBoxComponent>(CollisionBody))
+	{
+		const FVector Extent = BoxBody->GetScaledBoxExtent();
+		const float Radius = FMath::Max(4.0f, FMath::Min(Extent.X, Extent.Y));
+		return FMath::Clamp(Radius * 0.7f, 4.0f, Radius);
+	}
+
+	if (const UCapsuleComponent* CapsuleBody = Cast<UCapsuleComponent>(CollisionBody))
+	{
+		const float Radius = FMath::Max(4.0f, CapsuleBody->GetScaledCapsuleRadius());
+		return FMath::Clamp(Radius * 0.7f, 4.0f, Radius);
+	}
+
+	const FVector Extent = CollisionBody->Bounds.BoxExtent;
+	const float Radius = FMath::Max(4.0f, FMath::Min3(Extent.X, Extent.Y, Extent.Z));
+	return FMath::Clamp(Radius * 0.7f, 4.0f, Radius);
+}
+
+void AMiningBotActor::UpdateVisualLag(float DeltaSeconds)
+{
+	if (!SceneRoot || !GetRootComponent())
+	{
+		return;
+	}
+
+	const FTransform TargetTransform = GetRootComponent()->GetComponentTransform();
+	if (!bEnableVisualLag)
+	{
+		SceneRoot->SetWorldTransform(TargetTransform, false, nullptr, ETeleportType::None);
+		bVisualLagInitialized = false;
+		return;
+	}
+
+	if (!bVisualLagInitialized)
+	{
+		SceneRoot->SetWorldTransform(TargetTransform, false, nullptr, ETeleportType::None);
+		bVisualLagInitialized = true;
+		return;
+	}
+
+	const FVector CurrentLocation = SceneRoot->GetComponentLocation();
+	const FVector TargetLocation = TargetTransform.GetLocation();
+	const float MaxLagDistance = FMath::Max(0.0f, VisualLagMaxDistanceCm);
+	if (MaxLagDistance > 0.0f
+		&& FVector::DistSquared(CurrentLocation, TargetLocation) > FMath::Square(MaxLagDistance))
+	{
+		SceneRoot->SetWorldTransform(TargetTransform, false, nullptr, ETeleportType::None);
+		return;
+	}
+
+	const FVector NewLocation = FMath::VInterpTo(
+		CurrentLocation,
+		TargetLocation,
+		FMath::Max(0.0f, DeltaSeconds),
+		FMath::Max(0.05f, VisualLagLocationInterpSpeed));
+	const FQuat NewRotation = FMath::QInterpTo(
+		SceneRoot->GetComponentQuat(),
+		TargetTransform.GetRotation(),
+		FMath::Max(0.0f, DeltaSeconds),
+		FMath::Max(0.05f, VisualLagRotationInterpSpeed));
+
+	SceneRoot->SetWorldLocationAndRotation(NewLocation, NewRotation, false, nullptr, ETeleportType::None);
 }
 
 bool AMiningBotActor::RequestAssignmentFromSwarm()
@@ -297,107 +589,237 @@ void AMiningBotActor::HandleReturnToSwarm(float DeltaSeconds)
 		return;
 	}
 
-	if (GetCarriedTotalQuantityScaled() <= 0)
-	{
-		CarriedResourcesScaled.Reset();
-		SetRuntimeState(EMiningBotRuntimeState::Idle, TEXT("Ready"));
-		return;
-	}
-
-	TimeUntilNextDepositAttempt = FMath::Max(0.0f, TimeUntilNextDepositAttempt - FMath::Max(0.0f, DeltaSeconds));
-	if (TimeUntilNextDepositAttempt > 0.0f)
-	{
-		SetRuntimeState(EMiningBotRuntimeState::WaitingForOutput, TEXT("Waiting for output"));
-		return;
-	}
-
-	TMap<FName, int32> RejectedResourcesScaled;
 	int32 QueuedScaled = 0;
-	OwningSwarmMachine->QueueBotResources(CarriedResourcesScaled, RejectedResourcesScaled, QueuedScaled);
+	int32 BufferedScaled = 0;
+	const bool bDockedAndDespawned = OwningSwarmMachine->HandleBotDocking(
+		this,
+		CarriedResourcesScaled,
+		QueuedScaled,
+		BufferedScaled);
 
-	if (QueuedScaled <= 0)
+	CarriedResourcesScaled.Reset();
+	TimeUntilNextDepositAttempt = 0.0f;
+
+	if (bDockedAndDespawned)
 	{
-		TimeUntilNextDepositAttempt = FMath::Max(0.05f, DepositRetryIntervalSeconds);
-		SetRuntimeState(EMiningBotRuntimeState::WaitingForOutput, TEXT("Output blocked"));
 		return;
 	}
 
-	CarriedResourcesScaled = MoveTemp(RejectedResourcesScaled);
-	if (GetCarriedTotalQuantityScaled() > 0)
+	if (BufferedScaled > 0)
 	{
-		TimeUntilNextDepositAttempt = FMath::Max(0.05f, DepositRetryIntervalSeconds);
-		SetRuntimeState(EMiningBotRuntimeState::WaitingForOutput, TEXT("Deposited partial cargo"));
+		SetRuntimeState(EMiningBotRuntimeState::Idle, TEXT("Docked (buffered)"));
 		return;
 	}
 
-	SetRuntimeState(EMiningBotRuntimeState::Idle, TEXT("Cargo delivered"));
+	if (QueuedScaled > 0)
+	{
+		SetRuntimeState(EMiningBotRuntimeState::Idle, TEXT("Docked (delivered)"));
+		return;
+	}
+
+	SetRuntimeState(EMiningBotRuntimeState::Idle, TEXT("Docked"));
 }
 
 bool AMiningBotActor::MoveTowardsPoint(const FVector& TargetLocation, const FVector& SurfaceNormal, float DeltaSeconds)
 {
-	const FVector SafeSurfaceNormal = SurfaceNormal.GetSafeNormal(UE_SMALL_NUMBER, FVector::UpVector);
-	const FVector DesiredTargetLocation = TargetLocation + SafeSurfaceNormal * FMath::Max(0.0f, SurfaceHoverOffsetCm);
+	const FVector RequestedSurfaceNormal = SurfaceNormal.GetSafeNormal(UE_SMALL_NUMBER, FVector::UpVector);
+	const float SafeHoverOffset = FMath::Max(0.0f, SurfaceHoverOffsetCm);
+	const float ArrivalTolerance = FMath::Max(1.0f, ArrivalToleranceCm);
+	const float EffectiveTravelSpeed = FMath::Clamp(TravelSpeedCmPerSecond, 1.0f, 100.0f);
+	const float RequestedStepDistance = EffectiveTravelSpeed * FMath::Max(0.0f, DeltaSeconds);
+	const float MaxStepDistance = FMath::Min(RequestedStepDistance, FMath::Max(1.0f, MaxTraversalStepPerTickCm));
 
 	const FVector CurrentLocation = GetActorLocation();
+	FVector ActiveSurfaceNormal = RequestedSurfaceNormal;
+	FHitResult CurrentSurfaceHit;
+	if (ResolveSupportSurface(CurrentLocation, RequestedSurfaceNormal, CurrentSurfaceHit))
+	{
+		ActiveSurfaceNormal = CurrentSurfaceHit.ImpactNormal.GetSafeNormal(UE_SMALL_NUMBER, ActiveSurfaceNormal);
+	}
+
+	if (!bHasSmoothedSupportNormal)
+	{
+		SmoothedSupportNormal = ActiveSurfaceNormal;
+		bHasSmoothedSupportNormal = true;
+	}
+
+	const float NormalSmoothingAlpha = FMath::Clamp(
+		FMath::Max(0.05f, SupportNormalSmoothingSpeed) * FMath::Max(0.0f, DeltaSeconds),
+		0.0f,
+		1.0f);
+	SmoothedSupportNormal = FMath::Lerp(SmoothedSupportNormal, ActiveSurfaceNormal, NormalSmoothingAlpha)
+		.GetSafeNormal(UE_SMALL_NUMBER, ActiveSurfaceNormal);
+	ActiveSurfaceNormal = SmoothedSupportNormal;
+
+	const float SurfaceClearance = FMath::Max(0.0f, GetSurfaceSupportDistance(ActiveSurfaceNormal) + SafeHoverOffset);
+	const FVector DesiredTargetLocation = TargetLocation + ActiveSurfaceNormal * SurfaceClearance;
 	const FVector ToTarget = DesiredTargetLocation - CurrentLocation;
 	const float DistanceToTarget = ToTarget.Size();
-	const float ArrivalTolerance = FMath::Max(1.0f, ArrivalToleranceCm);
-	const float MaxStepDistance = FMath::Max(1.0f, TravelSpeedCmPerSecond) * FMath::Max(0.0f, DeltaSeconds);
 
-	FVector MoveDirection = ToTarget.GetSafeNormal();
-	if (!MoveDirection.IsNearlyZero())
+	FVector MoveDirection = FVector::VectorPlaneProject(ToTarget, ActiveSurfaceNormal).GetSafeNormal();
+	if (MoveDirection.IsNearlyZero())
 	{
-		LastMovementDirection = MoveDirection;
-	}
-	else
-	{
-		MoveDirection = LastMovementDirection.GetSafeNormal(UE_SMALL_NUMBER, FVector::ForwardVector);
+		MoveDirection = FVector::VectorPlaneProject(LastMovementDirection, ActiveSurfaceNormal).GetSafeNormal();
 	}
 
-	FVector NewLocation = CurrentLocation;
+	if (MoveDirection.IsNearlyZero())
+	{
+		MoveDirection = FVector::CrossProduct(ActiveSurfaceNormal, FVector::RightVector).GetSafeNormal(
+			UE_SMALL_NUMBER,
+			FVector::ForwardVector);
+	}
+
+	LastMovementDirection = MoveDirection;
+	FVector NewSurfaceNormal = ActiveSurfaceNormal;
+	FVector MoveStartLocation = GetActorLocation();
+
 	if (DistanceToTarget > ArrivalTolerance && MaxStepDistance > 0.0f)
 	{
-		NewLocation += MoveDirection * FMath::Min(DistanceToTarget, MaxStepDistance);
-		SetActorLocation(NewLocation, false, nullptr, ETeleportType::None);
-	}
-	else
-	{
-		NewLocation = DesiredTargetLocation;
-		SetActorLocation(NewLocation, false, nullptr, ETeleportType::None);
-	}
+		const float StepDistance = FMath::Min(DistanceToTarget, MaxStepDistance);
+		const FVector RequestedMoveDelta = MoveDirection * StepDistance;
+		FVector AppliedMoveDelta = RequestedMoveDelta;
 
-	FVector AlignmentNormal = SafeSurfaceNormal;
-	if (UWorld* World = GetWorld())
-	{
-		FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(MiningBotSurfaceAlign), false, this);
-		QueryParams.AddIgnoredActor(this);
-		if (OwningSwarmMachine)
+		if (UWorld* World = GetWorld())
 		{
-			QueryParams.AddIgnoredActor(OwningSwarmMachine);
+			FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(MiningBotMoveSweep), false, this);
+			QueryParams.AddIgnoredActor(this);
+
+			const FCollisionShape SweepShape = FCollisionShape::MakeSphere(FMath::Max(4.0f, GetTraversalTraceRadius()));
+			FHitResult MoveHit;
+			bool bMoveHit = World->SweepSingleByChannel(
+				MoveHit,
+				MoveStartLocation,
+				MoveStartLocation + RequestedMoveDelta,
+				FQuat::Identity,
+				AgentFactory::BuildPlacementTraceChannel,
+				SweepShape,
+				QueryParams);
+			if (!bMoveHit)
+			{
+				bMoveHit = World->SweepSingleByChannel(
+					MoveHit,
+					MoveStartLocation,
+					MoveStartLocation + RequestedMoveDelta,
+					FQuat::Identity,
+					ECC_Visibility,
+					SweepShape,
+					QueryParams);
+			}
+
+			if (bMoveHit && MoveHit.bBlockingHit)
+			{
+				const float ContactPadding = FMath::Clamp(ObstacleContactPadding, 0.0f, 0.45f);
+				const float SafeHitTime = FMath::Clamp(MoveHit.Time - ContactPadding, 0.0f, 1.0f);
+				const FVector SafeMoveDelta = RequestedMoveDelta * SafeHitTime;
+				const FVector RemainingDelta = RequestedMoveDelta - SafeMoveDelta;
+				const FVector SlideMoveDelta = FVector::VectorPlaneProject(RemainingDelta, MoveHit.Normal)
+					* FMath::Clamp(ObstacleSlideScale, 0.0f, 1.0f);
+				AppliedMoveDelta = SafeMoveDelta + SlideMoveDelta;
+			}
 		}
 
-		FHitResult SurfaceHit;
-		const FVector TraceStart = NewLocation + SafeSurfaceNormal * 120.0f;
-		const FVector TraceEnd = NewLocation - SafeSurfaceNormal * 220.0f;
-		bool bHit = World->LineTraceSingleByChannel(
-			SurfaceHit,
+		MoveStartLocation += AppliedMoveDelta;
+		SetActorLocation(MoveStartLocation, false, nullptr, ETeleportType::None);
+	}
+
+	FVector PostMoveLocation = GetActorLocation();
+	const FVector SurfaceProbeForward = MoveDirection * FMath::Max(0.0f, SurfaceProbeForwardLookCm);
+	FHitResult FinalSurfaceHit;
+	bool bHasFinalSurface = ResolveSupportSurface(PostMoveLocation + SurfaceProbeForward, NewSurfaceNormal, FinalSurfaceHit);
+	if (!bHasFinalSurface && MaxStepUpHeightCm > 0.0f)
+	{
+		const FVector StepUpProbeOrigin = PostMoveLocation + SurfaceProbeForward + NewSurfaceNormal * FMath::Max(0.0f, MaxStepUpHeightCm);
+		bHasFinalSurface = ResolveSupportSurface(StepUpProbeOrigin, NewSurfaceNormal, FinalSurfaceHit);
+	}
+
+	if (bHasFinalSurface)
+	{
+		NewSurfaceNormal = FinalSurfaceHit.ImpactNormal.GetSafeNormal(UE_SMALL_NUMBER, NewSurfaceNormal);
+		SmoothedSupportNormal = FMath::Lerp(SmoothedSupportNormal, NewSurfaceNormal, NormalSmoothingAlpha)
+			.GetSafeNormal(UE_SMALL_NUMBER, NewSurfaceNormal);
+		NewSurfaceNormal = SmoothedSupportNormal;
+
+		const float NewSurfaceClearance = FMath::Max(0.0f, GetSurfaceSupportDistance(NewSurfaceNormal) + SafeHoverOffset);
+		const FVector SnappedLocation = FinalSurfaceHit.ImpactPoint + NewSurfaceNormal * NewSurfaceClearance;
+		const FVector SmoothedSnapLocation = FMath::VInterpTo(
+			GetActorLocation(),
+			SnappedLocation,
+			FMath::Max(0.0f, DeltaSeconds),
+			FMath::Max(0.05f, GroundSnapInterpSpeed));
+		SetActorLocation(SmoothedSnapLocation, false, nullptr, ETeleportType::None);
+	}
+
+	UpdateSurfaceAlignment(MoveDirection, NewSurfaceNormal, DeltaSeconds);
+	UpdateVisualLag(DeltaSeconds);
+	return FVector::DistSquared(GetActorLocation(), DesiredTargetLocation) <= FMath::Square(ArrivalTolerance);
+}
+
+bool AMiningBotActor::ResolveSupportSurface(
+	const FVector& ProbeOrigin,
+	const FVector& PreferredSurfaceNormal,
+	FHitResult& OutSurfaceHit) const
+{
+	const FVector SafeSurfaceNormal = PreferredSurfaceNormal.GetSafeNormal(UE_SMALL_NUMBER, FVector::UpVector);
+	const FVector PreferredDownDirection = -SafeSurfaceNormal;
+	if (TraceSurface(ProbeOrigin, PreferredDownDirection, OutSurfaceHit))
+	{
+		return true;
+	}
+
+	const FVector ActorDownDirection = -GetActorUpVector().GetSafeNormal(UE_SMALL_NUMBER, FVector::UpVector);
+	if (TraceSurface(ProbeOrigin, ActorDownDirection, OutSurfaceHit))
+	{
+		return true;
+	}
+
+	return TraceSurface(ProbeOrigin, FVector(0.0f, 0.0f, -1.0f), OutSurfaceHit);
+}
+
+bool AMiningBotActor::TraceSurface(
+	const FVector& ProbeOrigin,
+	const FVector& DownDirection,
+	FHitResult& OutSurfaceHit) const
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return false;
+	}
+
+	const FVector SafeDownDirection = DownDirection.GetSafeNormal(UE_SMALL_NUMBER, FVector(0.0f, 0.0f, -1.0f));
+	const float ProbeStartOffset = FMath::Max(0.0f, SurfaceProbeStartOffsetCm);
+	const float ProbeDepth = FMath::Max(25.0f, SurfaceProbeDepthCm);
+
+	const FVector TraceStart = ProbeOrigin - SafeDownDirection * ProbeStartOffset;
+	const FVector TraceEnd = ProbeOrigin + SafeDownDirection * ProbeDepth;
+
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(MiningBotSurfaceTrace), false, this);
+	QueryParams.AddIgnoredActor(this);
+
+	const float TraceRadius = FMath::Max(4.0f, GetTraversalTraceRadius());
+	const FCollisionShape SweepShape = FCollisionShape::MakeSphere(TraceRadius);
+
+	bool bHit = World->SweepSingleByChannel(
+		OutSurfaceHit,
+		TraceStart,
+		TraceEnd,
+		FQuat::Identity,
+		AgentFactory::BuildPlacementTraceChannel,
+		SweepShape,
+		QueryParams);
+	if (!bHit)
+	{
+		bHit = World->SweepSingleByChannel(
+			OutSurfaceHit,
 			TraceStart,
 			TraceEnd,
-			AgentFactory::BuildPlacementTraceChannel,
+			FQuat::Identity,
+			ECC_Visibility,
+			SweepShape,
 			QueryParams);
-		if (!bHit)
-		{
-			bHit = World->LineTraceSingleByChannel(SurfaceHit, TraceStart, TraceEnd, ECC_Visibility, QueryParams);
-		}
-
-		if (bHit)
-		{
-			AlignmentNormal = SurfaceHit.ImpactNormal.GetSafeNormal(UE_SMALL_NUMBER, AlignmentNormal);
-		}
 	}
 
-	UpdateSurfaceAlignment(MoveDirection, AlignmentNormal, DeltaSeconds);
-	return FVector::DistSquared(NewLocation, DesiredTargetLocation) <= FMath::Square(ArrivalTolerance);
+	return bHit && OutSurfaceHit.bBlockingHit;
 }
 
 void AMiningBotActor::UpdateSurfaceAlignment(const FVector& DesiredDirection, const FVector& SurfaceNormal, float DeltaSeconds)
