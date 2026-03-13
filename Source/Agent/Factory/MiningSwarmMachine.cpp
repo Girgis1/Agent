@@ -8,6 +8,7 @@
 #include "Engine/OverlapResult.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "Factory/ConveyorPlacementPreview.h"
 #include "Factory/FactoryPlacementHelpers.h"
 #include "Factory/MachineOutputVolumeComponent.h"
 #include "Factory/MaterialNodeActor.h"
@@ -44,6 +45,15 @@ AMiningSwarmMachine::AMiningSwarmMachine()
 	BotSpawnRoot->SetupAttachment(SceneRoot);
 	BotSpawnRoot->SetRelativeLocation(FVector(0.0f, 0.0f, 85.0f));
 
+	BotDockVolume = CreateDefaultSubobject<UBoxComponent>(TEXT("BotDockVolume"));
+	BotDockVolume->SetupAttachment(SceneRoot);
+	BotDockVolume->SetRelativeLocation(FVector(0.0f, 0.0f, 100.0f));
+	BotDockVolume->SetBoxExtent(FVector(140.0f, 140.0f, 70.0f));
+	BotDockVolume->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	BotDockVolume->SetCollisionResponseToAllChannels(ECR_Ignore);
+	BotDockVolume->SetGenerateOverlapEvents(false);
+	BotDockVolume->SetCanEverAffectNavigation(false);
+
 	OutputVolume = CreateDefaultSubobject<UMachineOutputVolumeComponent>(TEXT("OutputVolume"));
 	OutputVolume->SetupAttachment(SceneRoot);
 	OutputVolume->SetBoxExtent(FVector(28.0f, 28.0f, 28.0f));
@@ -65,7 +75,8 @@ AMiningSwarmMachine::AMiningSwarmMachine()
 		MachineMesh->SetRelativeScale3D(FVector(1.6f, 1.6f, 1.15f));
 	}
 
-	static ConstructorHelpers::FClassFinder<AMiningBotActor> MiningBotBlueprintClass(TEXT("/Game/Factory/BP_MiningBot"));
+	static ConstructorHelpers::FClassFinder<AMiningBotActor> MiningBotBlueprintClass(
+		TEXT("/Game/Factory/Mining/BP_MiningBot"));
 	if (MiningBotBlueprintClass.Succeeded())
 	{
 		MiningBotClass = MiningBotBlueprintClass.Class;
@@ -76,8 +87,25 @@ void AMiningSwarmMachine::BeginPlay()
 {
 	Super::BeginPlay();
 
+	if (IsPlacementPreviewInstance())
+	{
+		SetActorTickEnabled(false);
+		return;
+	}
+
 	TimeUntilNodeRefresh = 0.0f;
 	TimeUntilBotMaintenance = 0.0f;
+	TimeUntilNextBotSpawn = 0.0f;
+	bLastEnabledState = bEnabled;
+	if (bEnabled)
+	{
+		StartActivationWarmup();
+	}
+	else
+	{
+		WarmupTimeRemainingSeconds = 0.0f;
+		SetSwarmOperational(false);
+	}
 
 	RefreshNearbyResourceNodes();
 	EnsureBotPopulation();
@@ -87,10 +115,18 @@ void AMiningSwarmMachine::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	if (!bEnabled)
+	if (IsPlacementPreviewInstance())
 	{
 		return;
 	}
+
+	UpdateActivationState(DeltaSeconds);
+	if (!IsSwarmEnabled())
+	{
+		return;
+	}
+
+	FlushBufferedBotResourcesToOutput();
 
 	TimeUntilNodeRefresh = FMath::Max(0.0f, TimeUntilNodeRefresh - FMath::Max(0.0f, DeltaSeconds));
 	if (TimeUntilNodeRefresh <= 0.0f)
@@ -104,6 +140,15 @@ void AMiningSwarmMachine::Tick(float DeltaSeconds)
 	{
 		EnsureBotPopulation();
 		TimeUntilBotMaintenance = FMath::Max(0.05f, BotMaintenanceIntervalSeconds);
+	}
+
+	if (bAutoSpawnBots)
+	{
+		TimeUntilNextBotSpawn = FMath::Max(0.0f, TimeUntilNextBotSpawn - FMath::Max(0.0f, DeltaSeconds));
+		if (TimeUntilNextBotSpawn <= 0.0f)
+		{
+			EnsureBotPopulation();
+		}
 	}
 }
 
@@ -157,6 +202,11 @@ int32 AMiningSwarmMachine::GetActiveBotCount() const
 	return Count;
 }
 
+bool AMiningSwarmMachine::IsSwarmEnabled() const
+{
+	return bEnabled && bSwarmOperational;
+}
+
 bool AMiningSwarmMachine::RequestMiningAssignment(
 	AMiningBotActor* RequestingBot,
 	AMaterialNodeActor*& OutTargetNode,
@@ -169,7 +219,7 @@ bool AMiningSwarmMachine::RequestMiningAssignment(
 	OutTargetLocation = FVector::ZeroVector;
 	OutTargetSurfaceNormal = FVector::UpVector;
 
-	if (!bEnabled)
+	if (IsPlacementPreviewInstance() || !IsSwarmEnabled())
 	{
 		return false;
 	}
@@ -218,7 +268,7 @@ bool AMiningSwarmMachine::QueueBotResources(
 	OutRejectedResourcesScaled.Reset();
 	OutQueuedScaled = 0;
 
-	if (!OutputVolume || ResourcesScaled.Num() == 0)
+	if (IsPlacementPreviewInstance() || !IsSwarmEnabled() || !OutputVolume || ResourcesScaled.Num() == 0)
 	{
 		return false;
 	}
@@ -245,40 +295,167 @@ bool AMiningSwarmMachine::QueueBotResources(
 	return OutQueuedScaled > 0;
 }
 
+bool AMiningSwarmMachine::HandleBotDocking(
+	AMiningBotActor* Bot,
+	const TMap<FName, int32>& ResourcesScaled,
+	int32& OutQueuedScaled,
+	int32& OutBufferedScaled)
+{
+	OutQueuedScaled = 0;
+	OutBufferedScaled = 0;
+
+	if (!IsValid(Bot))
+	{
+		return false;
+	}
+
+	if (ResourcesScaled.Num() > 0)
+	{
+		TMap<FName, int32> RejectedResourcesScaled;
+		QueueBotResources(ResourcesScaled, RejectedResourcesScaled, OutQueuedScaled);
+
+		for (const TPair<FName, int32>& RejectedPair : RejectedResourcesScaled)
+		{
+			const FName ResourceId = RejectedPair.Key;
+			const int32 QuantityScaled = FMath::Max(0, RejectedPair.Value);
+			if (ResourceId.IsNone() || QuantityScaled <= 0)
+			{
+				continue;
+			}
+
+			BufferedBotResourcesScaled.FindOrAdd(ResourceId) += QuantityScaled;
+			OutBufferedScaled += QuantityScaled;
+		}
+	}
+
+	if (!bDespawnBotsOnDock)
+	{
+		return false;
+	}
+
+	SpawnedBots.RemoveSingleSwap(Bot);
+	TimeUntilNextBotSpawn = FMath::Max(
+		TimeUntilNextBotSpawn,
+		FMath::Max(0.01f, BotSpawnIntervalSeconds));
+	Bot->Destroy();
+	return true;
+}
+
 FVector AMiningSwarmMachine::GetBotHomeLocation(const AMiningBotActor* Bot) const
 {
-	const FTransform SpawnTransform = BotSpawnRoot ? BotSpawnRoot->GetComponentTransform() : GetActorTransform();
-	if (!Bot || BotHomeRingRadiusCm <= KINDA_SMALL_NUMBER || MaxBotCount <= 1)
-	{
-		return SpawnTransform.GetLocation();
-	}
-
-	int32 BotIndex = SpawnedBots.IndexOfByPredicate(
-		[Bot](const AMiningBotActor* SpawnedBot)
-		{
-			return SpawnedBot == Bot;
-		});
-
-	if (BotIndex == INDEX_NONE)
-	{
-		BotIndex = static_cast<int32>(Bot->GetUniqueID() & 0x7FFFFFFF);
-	}
-
-	const int32 SafeCount = FMath::Max(1, MaxBotCount);
-	const float AngleDegrees = (360.0f / static_cast<float>(SafeCount)) * static_cast<float>(BotIndex % SafeCount);
-	const float AngleRadians = FMath::DegreesToRadians(AngleDegrees);
-	const FVector RingOffset(
-		FMath::Cos(AngleRadians) * BotHomeRingRadiusCm,
-		FMath::Sin(AngleRadians) * BotHomeRingRadiusCm,
-		0.0f);
-
-	return SpawnTransform.TransformPositionNoScale(RingOffset);
+	return ResolveBotDockPoint(ResolveBotIndex(Bot));
 }
 
 FVector AMiningSwarmMachine::GetBotHomeNormal() const
 {
-	const FVector PreferredNormal = BotSpawnRoot ? BotSpawnRoot->GetUpVector() : GetActorUpVector();
+	const FVector PreferredNormal = BotDockVolume
+		? BotDockVolume->GetUpVector()
+		: (BotSpawnRoot ? BotSpawnRoot->GetUpVector() : GetActorUpVector());
 	return PreferredNormal.GetSafeNormal(UE_SMALL_NUMBER, FVector::UpVector);
+}
+
+void AMiningSwarmMachine::StartActivationWarmup()
+{
+	const float WarmupDuration = bUseActivationWarmup
+		? FMath::Max(0.0f, ActivationWarmupDurationSeconds)
+		: 0.0f;
+
+	WarmupTimeRemainingSeconds = WarmupDuration;
+	SetSwarmOperational(WarmupDuration <= KINDA_SMALL_NUMBER);
+	if (IsSwarmEnabled())
+	{
+		TimeUntilBotMaintenance = 0.0f;
+		TimeUntilNextBotSpawn = FMath::Max(0.0f, InitialBotSpawnDelaySeconds);
+	}
+}
+
+void AMiningSwarmMachine::SetSwarmOperational(bool bNewOperational)
+{
+	bSwarmOperational = bNewOperational;
+
+	if (OutputVolume)
+	{
+		OutputVolume->bEnabled = bSwarmOperational;
+		OutputVolume->SetComponentTickEnabled(bSwarmOperational);
+		OutputVolume->SetCollisionEnabled(bSwarmOperational ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
+		OutputVolume->SetGenerateOverlapEvents(bSwarmOperational);
+		OutputVolume->SetHiddenInGame(!bSwarmOperational);
+		OutputVolume->SetVisibility(bSwarmOperational, true);
+	}
+
+	if (OutputArrow)
+	{
+		OutputArrow->SetHiddenInGame(!bSwarmOperational);
+		OutputArrow->SetVisibility(bSwarmOperational, true);
+	}
+}
+
+void AMiningSwarmMachine::UpdateActivationState(float DeltaSeconds)
+{
+	const bool bCurrentEnabledState = bEnabled;
+	if (bCurrentEnabledState != bLastEnabledState)
+	{
+		if (bCurrentEnabledState)
+		{
+			StartActivationWarmup();
+		}
+		else
+		{
+			WarmupTimeRemainingSeconds = 0.0f;
+			SetSwarmOperational(false);
+		}
+		bLastEnabledState = bCurrentEnabledState;
+	}
+
+	if (!bEnabled || bSwarmOperational)
+	{
+		return;
+	}
+
+	WarmupTimeRemainingSeconds = FMath::Max(0.0f, WarmupTimeRemainingSeconds - FMath::Max(0.0f, DeltaSeconds));
+	if (WarmupTimeRemainingSeconds > 0.0f)
+	{
+		return;
+	}
+
+	SetSwarmOperational(true);
+	TimeUntilBotMaintenance = 0.0f;
+	TimeUntilNextBotSpawn = FMath::Max(0.0f, InitialBotSpawnDelaySeconds);
+}
+
+void AMiningSwarmMachine::FlushBufferedBotResourcesToOutput()
+{
+	if (!IsSwarmEnabled() || !OutputVolume || BufferedBotResourcesScaled.Num() == 0)
+	{
+		return;
+	}
+
+	TArray<FName> ResourceIdsToClear;
+	for (TPair<FName, int32>& BufferedPair : BufferedBotResourcesScaled)
+	{
+		const FName ResourceId = BufferedPair.Key;
+		const int32 PendingQuantityScaled = FMath::Max(0, BufferedPair.Value);
+		if (ResourceId.IsNone() || PendingQuantityScaled <= 0)
+		{
+			ResourceIdsToClear.Add(ResourceId);
+			continue;
+		}
+
+		const int32 AcceptedScaled = FMath::Clamp(
+			OutputVolume->QueueResourceScaled(ResourceId, PendingQuantityScaled),
+			0,
+			PendingQuantityScaled);
+		BufferedPair.Value = PendingQuantityScaled - AcceptedScaled;
+		if (BufferedPair.Value <= 0)
+		{
+			ResourceIdsToClear.Add(ResourceId);
+		}
+	}
+
+	for (const FName& ResourceId : ResourceIdsToClear)
+	{
+		BufferedBotResourcesScaled.Remove(ResourceId);
+	}
 }
 
 bool AMiningSwarmMachine::IsNodeWithinSearchRange(const AMaterialNodeActor* Node) const
@@ -307,6 +484,83 @@ bool AMiningSwarmMachine::IsNodeViableForMining(const AMaterialNodeActor* Node) 
 	return Node->IsInfiniteNode() || !Node->IsDepleted();
 }
 
+bool AMiningSwarmMachine::IsPlacementPreviewInstance() const
+{
+	if (const AActor* OwnerActor = GetOwner())
+	{
+		if (OwnerActor->IsA<AConveyorPlacementPreview>())
+		{
+			return true;
+		}
+	}
+
+	for (const AActor* ParentActor = GetAttachParentActor(); ParentActor; ParentActor = ParentActor->GetAttachParentActor())
+	{
+		if (ParentActor->IsA<AConveyorPlacementPreview>())
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+int32 AMiningSwarmMachine::ResolveBotIndex(const AMiningBotActor* Bot) const
+{
+	if (!Bot)
+	{
+		return 0;
+	}
+
+	int32 BotIndex = SpawnedBots.IndexOfByPredicate(
+		[Bot](const AMiningBotActor* SpawnedBot)
+		{
+			return SpawnedBot == Bot;
+		});
+
+	if (BotIndex == INDEX_NONE)
+	{
+		BotIndex = static_cast<int32>(Bot->GetUniqueID() & 0x7FFFFFFF);
+	}
+
+	return FMath::Max(0, BotIndex);
+}
+
+FVector AMiningSwarmMachine::ResolveBotDockPoint(int32 BotIndex) const
+{
+	const int32 SafeIndex = FMath::Max(0, BotIndex);
+
+	if (BotDockVolume)
+	{
+		const FTransform DockTransform = BotDockVolume->GetComponentTransform();
+		const FVector DockExtent = BotDockVolume->GetScaledBoxExtent()
+			* FMath::Clamp(BotDockAreaFill, 0.1f, 1.0f);
+
+		const float U = FMath::Frac(static_cast<float>(SafeIndex + 1) * 0.754877666f);
+		const float V = FMath::Frac(static_cast<float>(SafeIndex + 1) * 0.569840296f);
+		const FVector LocalPoint(
+			(U * 2.0f - 1.0f) * DockExtent.X,
+			(V * 2.0f - 1.0f) * DockExtent.Y,
+			0.0f);
+		return DockTransform.TransformPositionNoScale(LocalPoint);
+	}
+
+	const FTransform SpawnTransform = BotSpawnRoot ? BotSpawnRoot->GetComponentTransform() : GetActorTransform();
+	if (BotHomeRingRadiusCm <= KINDA_SMALL_NUMBER || MaxBotCount <= 1)
+	{
+		return SpawnTransform.GetLocation();
+	}
+
+	const int32 SafeCount = FMath::Max(1, MaxBotCount);
+	const float AngleDegrees = (360.0f / static_cast<float>(SafeCount)) * static_cast<float>(SafeIndex % SafeCount);
+	const float AngleRadians = FMath::DegreesToRadians(AngleDegrees);
+	const FVector RingOffset(
+		FMath::Cos(AngleRadians) * BotHomeRingRadiusCm,
+		FMath::Sin(AngleRadians) * BotHomeRingRadiusCm,
+		0.0f);
+	return SpawnTransform.TransformPositionNoScale(RingOffset);
+}
+
 void AMiningSwarmMachine::RemoveInvalidBotReferences()
 {
 	SpawnedBots.RemoveAll(
@@ -320,62 +574,133 @@ void AMiningSwarmMachine::EnsureBotPopulation()
 {
 	RemoveInvalidBotReferences();
 
-	if (!bEnabled)
+	if (IsPlacementPreviewInstance() || !IsSwarmEnabled())
 	{
 		return;
 	}
 
 	const int32 DesiredCount = FMath::Max(0, MaxBotCount);
-	if (DesiredCount <= 0)
+	if (DesiredCount < SpawnedBots.Num())
+	{
+		const int32 RemoveCount = SpawnedBots.Num() - DesiredCount;
+		for (int32 RemoveIndex = 0; RemoveIndex < RemoveCount; ++RemoveIndex)
+		{
+			const int32 BotArrayIndex = SpawnedBots.Num() - 1;
+			if (BotArrayIndex < 0)
+			{
+				break;
+			}
+
+			AMiningBotActor* BotToRemove = SpawnedBots[BotArrayIndex];
+			SpawnedBots.RemoveAt(BotArrayIndex);
+			if (IsValid(BotToRemove))
+			{
+				BotToRemove->Destroy();
+			}
+		}
+	}
+
+	if (!bAutoSpawnBots || DesiredCount <= 0 || SpawnedBots.Num() >= DesiredCount)
 	{
 		return;
+	}
+
+	if (TimeUntilNextBotSpawn > 0.0f)
+	{
+		return;
+	}
+
+	const int32 MaxBatchCount = bDespawnBotsOnDock
+		? 1
+		: FMath::Max(1, BotsPerSpawnBatch);
+	int32 SpawnedCount = 0;
+	while (SpawnedCount < MaxBatchCount && SpawnedBots.Num() < DesiredCount)
+	{
+		if (!TrySpawnSingleBot())
+		{
+			break;
+		}
+		++SpawnedCount;
+	}
+
+	if (SpawnedCount > 0)
+	{
+		TimeUntilNextBotSpawn = FMath::Max(0.01f, BotSpawnIntervalSeconds);
+	}
+	else
+	{
+		TimeUntilNextBotSpawn = FMath::Max(0.1f, BotSpawnIntervalSeconds);
+	}
+}
+
+bool AMiningSwarmMachine::TrySpawnSingleBot()
+{
+	if (IsPlacementPreviewInstance() || !IsSwarmEnabled() || !bAutoSpawnBots)
+	{
+		return false;
+	}
+
+	const int32 DesiredCount = FMath::Max(0, MaxBotCount);
+	if (DesiredCount <= 0 || SpawnedBots.Num() >= DesiredCount)
+	{
+		return false;
 	}
 
 	UWorld* World = GetWorld();
 	if (!World)
 	{
-		return;
+		return false;
 	}
 
 	UClass* SpawnClass = MiningBotClass.Get() ? MiningBotClass.Get() : AMiningBotActor::StaticClass();
-	while (SpawnedBots.Num() < DesiredCount)
+	const int32 BotIndex = SpawnedBots.Num();
+	const FVector SpawnLocation = ResolveBotDockPoint(BotIndex);
+	const FRotator SpawnRotation = (BotDockVolume
+		? BotDockVolume->GetComponentRotation()
+		: (BotSpawnRoot ? BotSpawnRoot->GetComponentRotation() : GetActorRotation()));
+
+	FActorSpawnParameters SpawnParams{};
+	SpawnParams.Owner = this;
+	SpawnParams.Instigator = nullptr;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
+
+	AMiningBotActor* SpawnedBot = World->SpawnActor<AMiningBotActor>(
+		SpawnClass,
+		SpawnLocation,
+		SpawnRotation,
+		SpawnParams);
+	if (!SpawnedBot)
 	{
-		const int32 BotIndex = SpawnedBots.Num();
-		const float AngleDegrees = static_cast<float>(BotIndex) * (360.0f / static_cast<float>(DesiredCount));
-		const float AngleRadians = FMath::DegreesToRadians(AngleDegrees);
-		const FVector SpawnOffset(
-			FMath::Cos(AngleRadians) * FMath::Max(0.0f, BotHomeRingRadiusCm),
-			FMath::Sin(AngleRadians) * FMath::Max(0.0f, BotHomeRingRadiusCm),
-			0.0f);
-
-		const FTransform SpawnRootTransform = BotSpawnRoot ? BotSpawnRoot->GetComponentTransform() : GetActorTransform();
-		const FVector SpawnLocation = SpawnRootTransform.TransformPositionNoScale(SpawnOffset);
-		const FRotator SpawnRotation = SpawnRootTransform.GetRotation().Rotator();
-
-		FActorSpawnParameters SpawnParams{};
-		SpawnParams.Owner = this;
-		SpawnParams.Instigator = nullptr;
-		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-
-		AMiningBotActor* SpawnedBot = World->SpawnActor<AMiningBotActor>(
-			SpawnClass,
-			SpawnLocation,
-			SpawnRotation,
-			SpawnParams);
-		if (!SpawnedBot)
-		{
-			break;
-		}
-
-		SpawnedBot->SetOwningSwarmMachine(this);
-		SpawnedBot->SetMiningTuning(
-			DefaultBotMiningCapacityUnits,
-			DefaultBotTravelSpeedCmPerSecond,
-			DefaultBotMiningSpeedMultiplier);
-
-		SpawnedBots.Add(SpawnedBot);
-		OnMiningBotSpawned(SpawnedBot);
+		return false;
 	}
+
+	SpawnedBot->SetOwningSwarmMachine(this);
+	SpawnedBot->SetMiningTuning(
+		DefaultBotMiningCapacityUnits,
+		DefaultBotTravelSpeedCmPerSecond,
+		DefaultBotMiningSpeedMultiplier);
+	SpawnedBot->MiningDurationSeconds = FMath::Max(0.05f, DefaultBotMiningDurationSeconds);
+	SpawnedBot->SurfaceAlignmentInterpSpeed = FMath::Max(0.05f, DefaultBotSurfaceAlignmentInterpSpeed);
+	SpawnedBot->GroundSnapInterpSpeed = FMath::Max(0.05f, DefaultBotGroundSnapInterpSpeed);
+	SpawnedBot->SupportNormalSmoothingSpeed = FMath::Max(0.05f, DefaultBotSupportNormalSmoothingSpeed);
+	SpawnedBot->MaxTraversalStepPerTickCm = FMath::Max(1.0f, DefaultBotMaxTraversalStepPerTickCm);
+	SpawnedBot->ObstacleSlideScale = FMath::Clamp(DefaultBotObstacleSlideScale, 0.0f, 1.0f);
+	SpawnedBot->ObstacleContactPadding = FMath::Max(0.0f, DefaultBotObstacleContactPadding);
+	SpawnedBot->ArrivalToleranceCm = FMath::Max(1.0f, DefaultBotArrivalToleranceCm);
+	SpawnedBot->SurfaceHoverOffsetCm = FMath::Max(0.0f, DefaultBotSurfaceHoverOffsetCm);
+	SpawnedBot->bEnableVisualLag = bDefaultBotVisualLagEnabled;
+	SpawnedBot->VisualLagLocationInterpSpeed = FMath::Max(0.05f, DefaultBotVisualLagLocationInterpSpeed);
+	SpawnedBot->VisualLagRotationInterpSpeed = FMath::Max(0.05f, DefaultBotVisualLagRotationInterpSpeed);
+	SpawnedBot->VisualLagMaxDistanceCm = FMath::Max(0.0f, DefaultBotVisualLagMaxDistanceCm);
+	SpawnedBot->DepositRetryIntervalSeconds = FMath::Max(0.05f, DefaultBotDepositRetryIntervalSeconds);
+	SpawnedBot->SurfaceProbeStartOffsetCm = FMath::Max(0.0f, DefaultBotSurfaceProbeStartOffsetCm);
+	SpawnedBot->SurfaceProbeDepthCm = FMath::Max(25.0f, DefaultBotSurfaceProbeDepthCm);
+	SpawnedBot->SurfaceProbeForwardLookCm = FMath::Max(0.0f, DefaultBotSurfaceProbeForwardLookCm);
+	SpawnedBot->MaxStepUpHeightCm = FMath::Max(0.0f, DefaultBotMaxStepUpHeightCm);
+
+	SpawnedBots.Add(SpawnedBot);
+	OnMiningBotSpawned(SpawnedBot);
+	return true;
 }
 
 bool AMiningSwarmMachine::SampleRandomSurfacePointOnNode(

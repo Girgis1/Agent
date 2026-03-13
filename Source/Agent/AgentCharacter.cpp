@@ -166,7 +166,7 @@ AAgentCharacter::AAgentCharacter(const FObjectInitializer& ObjectInitializer)
 	}
 
 	static ConstructorHelpers::FClassFinder<AMiningSwarmMachine> MiningSwarmBlueprintClass(
-		TEXT("/Game/Factory/BP_MiningSwarm"));
+		TEXT("/Game/Factory/Mining/BP_MiningSwarmMachine"));
 	if (MiningSwarmBlueprintClass.Succeeded())
 	{
 		MiningSwarmClass = MiningSwarmBlueprintClass.Class;
