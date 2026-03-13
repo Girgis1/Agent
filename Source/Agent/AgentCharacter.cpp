@@ -11,6 +11,9 @@
 #include "Factory/ConveyorPlacementPreview.h"
 #include "Factory/ConveyorSurfaceVelocityComponent.h"
 #include "Factory/FactoryPlacementHelpers.h"
+#include "Factory/MaterialNodeActor.h"
+#include "Factory/MinerActor.h"
+#include "Factory/MiningSwarmMachine.h"
 #include "Machine/MachineActor.h"
 #include "Factory/StorageBin.h"
 #include "Vehicle/Components/VehicleInteractionComponent.h"
@@ -154,6 +157,19 @@ AAgentCharacter::AAgentCharacter(const FObjectInitializer& ObjectInitializer)
 	if (DroneCompanionBlueprintClass.Succeeded())
 	{
 		DroneCompanionClass = DroneCompanionBlueprintClass.Class;
+	}
+
+	static ConstructorHelpers::FClassFinder<AMinerActor> MinerBlueprintClass(TEXT("/Game/Factory/BP_Miner"));
+	if (MinerBlueprintClass.Succeeded())
+	{
+		MinerClass = MinerBlueprintClass.Class;
+	}
+
+	static ConstructorHelpers::FClassFinder<AMiningSwarmMachine> MiningSwarmBlueprintClass(
+		TEXT("/Game/Factory/BP_MiningSwarm"));
+	if (MiningSwarmBlueprintClass.Succeeded())
+	{
+		MiningSwarmClass = MiningSwarmBlueprintClass.Class;
 	}
 
 }
@@ -382,6 +398,7 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 	UpdateBackpackDeployButtonHold(DeltaSeconds);
 	UpdateHookJobButtonHold(DeltaSeconds);
 	UpdateRollModeJumpHold(DeltaSeconds);
+	UpdateFactoryPlacementRotationHold(DeltaSeconds);
 	UpdateDronePilotCameraLimits();
 	RefreshPrimaryDroneAvailabilityFromCompanion();
 	if (!bPrimaryDroneAvailable
@@ -730,6 +747,9 @@ void AAgentCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	PlayerInputComponent->BindKey(EKeys::One, IE_Pressed, this, &AAgentCharacter::OnConveyorPlacementModePressed);
 	PlayerInputComponent->BindKey(EKeys::Two, IE_Pressed, this, &AAgentCharacter::OnStorageBinPlacementModePressed);
 	PlayerInputComponent->BindKey(EKeys::Three, IE_Pressed, this, &AAgentCharacter::OnMachinePlacementModePressed);
+	PlayerInputComponent->BindKey(EKeys::Four, IE_Pressed, this, &AAgentCharacter::OnMinerPlacementModePressed);
+	PlayerInputComponent->BindKey(EKeys::Five, IE_Pressed, this, &AAgentCharacter::OnMiningSwarmPlacementModePressed);
+	PlayerInputComponent->BindKey(EKeys::LeftAlt, IE_Pressed, this, &AAgentCharacter::OnFactoryFreePlacementTogglePressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Left, IE_Pressed, this, &AAgentCharacter::OnGamepadFaceButtonLeftPressed);
 	PlayerInputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &AAgentCharacter::OnLeftMouseButtonPressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_RightTrigger, IE_Pressed, this, &AAgentCharacter::OnPickupOrPlacePressed);
@@ -2890,13 +2910,19 @@ void AAgentCharacter::EnterConveyorPlacementMode()
 
 	bConveyorPlacementModeActive = ConveyorPlacementPreview != nullptr;
 	bConveyorPlacementValid = false;
-	ConveyorPlacementRotationSteps = 0;
+	bFactoryFreePlacementEnabled = false;
+	bPlacementRotateLeftHeld = false;
+	bPlacementRotateRightHeld = false;
+	FactoryPlacementRotationYawDegrees = 0.0f;
+	FactoryPlacementRotationHoldTimeRemaining = 0.0f;
+	FactoryPlacementRotationHoldDirection = 0;
 	PendingConveyorPlacementLocation = FVector::ZeroVector;
 	PendingConveyorPlacementRotation = FRotator::ZeroRotator;
 
 	if (ConveyorPlacementPreview)
 	{
 		ConveyorPlacementPreview->SetActorHiddenInGame(true);
+		ConveyorPlacementPreview->SetPreviewActorClass(ResolveFactoryBuildableClass(CurrentFactoryPlacementType));
 	}
 
 	UpdateConveyorPlacementPreview();
@@ -2906,6 +2932,12 @@ void AAgentCharacter::ExitConveyorPlacementMode()
 {
 	bConveyorPlacementModeActive = false;
 	bConveyorPlacementValid = false;
+	bFactoryFreePlacementEnabled = false;
+	bPlacementRotateLeftHeld = false;
+	bPlacementRotateRightHeld = false;
+	FactoryPlacementRotationYawDegrees = 0.0f;
+	FactoryPlacementRotationHoldTimeRemaining = 0.0f;
+	FactoryPlacementRotationHoldDirection = 0;
 	PendingConveyorPlacementLocation = FVector::ZeroVector;
 	PendingConveyorPlacementRotation = FRotator::ZeroRotator;
 
@@ -2999,6 +3031,24 @@ UCameraComponent* AAgentCharacter::GetActivePlacementCamera() const
 	return nullptr;
 }
 
+UClass* AAgentCharacter::ResolveFactoryBuildableClass(EAgentFactoryPlacementType PlacementType) const
+{
+	switch (PlacementType)
+	{
+	case EAgentFactoryPlacementType::StorageBin:
+		return StorageBinClass.Get() ? StorageBinClass.Get() : AStorageBin::StaticClass();
+	case EAgentFactoryPlacementType::Machine:
+		return MachineClass.Get() ? MachineClass.Get() : AMachineActor::StaticClass();
+	case EAgentFactoryPlacementType::Miner:
+		return MinerClass.Get() ? MinerClass.Get() : AMinerActor::StaticClass();
+	case EAgentFactoryPlacementType::MiningSwarm:
+		return MiningSwarmClass.Get() ? MiningSwarmClass.Get() : AMiningSwarmMachine::StaticClass();
+	case EAgentFactoryPlacementType::Conveyor:
+	default:
+		return ConveyorBeltClass.Get() ? ConveyorBeltClass.Get() : AConveyorBeltStraight::StaticClass();
+	}
+}
+
 void AAgentCharacter::TryPlaceConveyor()
 {
 	if (!bConveyorPlacementModeActive)
@@ -3036,20 +3086,7 @@ void AAgentCharacter::TryPlaceConveyor()
 		return;
 	}
 
-	UClass* BuildableClass = nullptr;
-	switch (CurrentFactoryPlacementType)
-	{
-	case EAgentFactoryPlacementType::StorageBin:
-		BuildableClass = StorageBinClass.Get() ? StorageBinClass.Get() : AStorageBin::StaticClass();
-		break;
-	case EAgentFactoryPlacementType::Machine:
-		BuildableClass = MachineClass.Get() ? MachineClass.Get() : AMachineActor::StaticClass();
-		break;
-	case EAgentFactoryPlacementType::Conveyor:
-	default:
-		BuildableClass = ConveyorBeltClass.Get() ? ConveyorBeltClass.Get() : AConveyorBeltStraight::StaticClass();
-		break;
-	}
+	UClass* BuildableClass = ResolveFactoryBuildableClass(CurrentFactoryPlacementType);
 
 	if (!BuildableClass)
 	{
@@ -3061,11 +3098,19 @@ void AAgentCharacter::TryPlaceConveyor()
 	SpawnParameters.Instigator = this;
 	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
-	World->SpawnActor<AActor>(
+	AActor* SpawnedBuildable = World->SpawnActor<AActor>(
 		BuildableClass,
 		SpawnLocation,
 		SpawnRotation,
 		SpawnParameters);
+
+	if (AMinerActor* SpawnedMiner = Cast<AMinerActor>(SpawnedBuildable))
+	{
+		if (AMaterialNodeActor* PlacementNode = ResolveMaterialNodeAtPlacementLocation(SpawnLocation))
+		{
+			SpawnedMiner->SetTargetNode(PlacementNode);
+		}
+	}
 
 	UpdateConveyorPlacementPreview();
 }
@@ -3080,15 +3125,21 @@ void AAgentCharacter::CancelConveyorPlacement()
 
 void AAgentCharacter::RotateConveyorPlacement(int32 Direction)
 {
-	if (!bConveyorPlacementModeActive)
+	if (!bConveyorPlacementModeActive || Direction == 0)
 	{
 		return;
 	}
 
-	ConveyorPlacementRotationSteps = (ConveyorPlacementRotationSteps + Direction) % 4;
-	if (ConveyorPlacementRotationSteps < 0)
+	const bool bUseFineRotation = IsFreeFactoryPlacementActive();
+	const float RotationStepDegrees = bUseFineRotation
+		? FMath::Max(0.1f, FreePlacementRotationStepDegrees)
+		: AgentFactory::QuarterTurnDegrees;
+	FactoryPlacementRotationYawDegrees = FRotator::NormalizeAxis(
+		FactoryPlacementRotationYawDegrees + static_cast<float>(Direction) * RotationStepDegrees);
+
+	if (!bUseFineRotation)
 	{
-		ConveyorPlacementRotationSteps += 4;
+		FactoryPlacementRotationYawDegrees = AgentFactory::SnapYawToGrid(FactoryPlacementRotationYawDegrees).Yaw;
 	}
 
 	UpdateConveyorPlacementPreview();
@@ -3125,7 +3176,11 @@ bool AAgentCharacter::EvaluateConveyorPlacement(FVector& OutLocation, FRotator& 
 		QueryParams.AddIgnoredActor(ConveyorPlacementPreview);
 	}
 
-	OutRotation = AgentFactory::SnapYawToGrid(static_cast<float>(ConveyorPlacementRotationSteps) * AgentFactory::QuarterTurnDegrees);
+	const bool bIsMinerPlacement = CurrentFactoryPlacementType == EAgentFactoryPlacementType::Miner;
+	const bool bUseFreePlacement = IsFreeFactoryPlacementActive();
+	OutRotation = bUseFreePlacement
+		? FRotator(0.0f, FRotator::NormalizeAxis(FactoryPlacementRotationYawDegrees), 0.0f)
+		: AgentFactory::SnapYawToGrid(FactoryPlacementRotationYawDegrees);
 
 	if (!PlacementCamera)
 	{
@@ -3154,37 +3209,53 @@ bool AAgentCharacter::EvaluateConveyorPlacement(FVector& OutLocation, FRotator& 
 		return false;
 	}
 
-	const bool bSnappedToConveyorFace = TryGetFactoryBuildableFaceSnapLocation(AimHit, OutLocation);
-	if (!bSnappedToConveyorFace)
+	AActor* AllowedOverlapActor = nullptr;
+	if (bIsMinerPlacement)
 	{
-		const FVector PlacementProbeLocation = AimHit.ImpactPoint;
-
-		const FVector SurfaceTraceStart = PlacementProbeLocation + FVector(0.0f, 0.0f, FMath::Max(100.0f, ConveyorPlacementSurfaceTraceHeight));
-		const FVector SurfaceTraceEnd = PlacementProbeLocation - FVector(0.0f, 0.0f, FMath::Max(100.0f, ConveyorPlacementSurfaceTraceDepth));
-
-		FHitResult SurfaceHit;
-		bool bHasSurfaceHit = World->LineTraceSingleByChannel(
-			SurfaceHit,
-			SurfaceTraceStart,
-			SurfaceTraceEnd,
-			AgentFactory::BuildPlacementTraceChannel,
-			QueryParams);
-
-		if (!bHasSurfaceHit)
+		AMaterialNodeActor* TargetNode = ResolveMaterialNodeFromPlacementHit(AimHit);
+		if (!TargetNode)
 		{
-			bHasSurfaceHit = World->LineTraceSingleByChannel(SurfaceHit, SurfaceTraceStart, SurfaceTraceEnd, ECC_Visibility, QueryParams);
-		}
-
-		if (!bHasSurfaceHit)
-		{
-			return false;
-		}
-
-		OutLocation = AgentFactory::SnapLocationToGrid(SurfaceHit.ImpactPoint);
-
-		if (SurfaceHit.ImpactNormal.Z < 0.85f)
-		{
+			OutLocation = bUseFreePlacement ? AimHit.ImpactPoint : AgentFactory::SnapLocationToGrid(AimHit.ImpactPoint);
 			return true;
+		}
+
+		AllowedOverlapActor = TargetNode;
+		OutLocation = bUseFreePlacement ? AimHit.ImpactPoint : AgentFactory::SnapLocationToGrid(AimHit.ImpactPoint);
+	}
+	else
+	{
+		const bool bSnappedToConveyorFace = TryGetFactoryBuildableFaceSnapLocation(AimHit, OutLocation);
+		if (!bSnappedToConveyorFace)
+		{
+			const FVector PlacementProbeLocation = AimHit.ImpactPoint;
+
+			const FVector SurfaceTraceStart = PlacementProbeLocation + FVector(0.0f, 0.0f, FMath::Max(100.0f, ConveyorPlacementSurfaceTraceHeight));
+			const FVector SurfaceTraceEnd = PlacementProbeLocation - FVector(0.0f, 0.0f, FMath::Max(100.0f, ConveyorPlacementSurfaceTraceDepth));
+
+			FHitResult SurfaceHit;
+			bool bHasSurfaceHit = World->LineTraceSingleByChannel(
+				SurfaceHit,
+				SurfaceTraceStart,
+				SurfaceTraceEnd,
+				AgentFactory::BuildPlacementTraceChannel,
+				QueryParams);
+
+			if (!bHasSurfaceHit)
+			{
+				bHasSurfaceHit = World->LineTraceSingleByChannel(SurfaceHit, SurfaceTraceStart, SurfaceTraceEnd, ECC_Visibility, QueryParams);
+			}
+
+			if (!bHasSurfaceHit)
+			{
+				return false;
+			}
+
+			OutLocation = bUseFreePlacement ? SurfaceHit.ImpactPoint : AgentFactory::SnapLocationToGrid(SurfaceHit.ImpactPoint);
+
+			if (SurfaceHit.ImpactNormal.Z < 0.85f)
+			{
+				return true;
+			}
 		}
 	}
 
@@ -3222,14 +3293,24 @@ bool AAgentCharacter::EvaluateConveyorPlacement(FVector& OutLocation, FRotator& 
 	{
 		for (const FOverlapResult& OverlapResult : OverlapResults)
 		{
-			if (OverlapResult.GetActor() == nullptr)
+			AActor* OverlapActor = OverlapResult.GetActor();
+			if (!OverlapActor)
 			{
 				continue;
 			}
 
-			if (OverlapResult.GetActor() == this
-				|| OverlapResult.GetActor() == DroneCompanion.Get()
-				|| OverlapResult.GetActor() == ConveyorPlacementPreview.Get())
+			if (OverlapActor == this
+				|| OverlapActor == DroneCompanion.Get()
+				|| OverlapActor == ConveyorPlacementPreview.Get())
+			{
+				continue;
+			}
+
+			if (AllowedOverlapActor
+				&& (OverlapActor == AllowedOverlapActor
+					|| OverlapActor->IsOwnedBy(AllowedOverlapActor)
+					|| OverlapActor->GetOwner() == AllowedOverlapActor
+					|| OverlapActor->GetAttachParentActor() == AllowedOverlapActor))
 			{
 				continue;
 			}
@@ -3252,7 +3333,9 @@ bool AAgentCharacter::TryGetFactoryBuildableFaceSnapLocation(const FHitResult& A
 
 	const bool bIsSupportedBuildable = HitActor->IsA<AConveyorBeltStraight>()
 		|| HitActor->IsA<AStorageBin>()
-		|| HitActor->IsA<AMachineActor>();
+		|| HitActor->IsA<AMachineActor>()
+		|| HitActor->IsA<AMinerActor>()
+		|| HitActor->IsA<AMiningSwarmMachine>();
 	if (!bIsSupportedBuildable)
 	{
 		return false;
@@ -3281,11 +3364,148 @@ bool AAgentCharacter::TryGetFactoryBuildableFaceSnapLocation(const FHitResult& A
 	return true;
 }
 
+AMaterialNodeActor* AAgentCharacter::ResolveMaterialNodeFromPlacementHit(const FHitResult& AimHit) const
+{
+	AActor* HitActor = AimHit.GetActor();
+	if (!HitActor)
+	{
+		return nullptr;
+	}
+
+	if (AMaterialNodeActor* HitNode = Cast<AMaterialNodeActor>(HitActor))
+	{
+		return HitNode;
+	}
+
+	if (AMaterialNodeActor* OwnerNode = Cast<AMaterialNodeActor>(HitActor->GetOwner()))
+	{
+		return OwnerNode;
+	}
+
+	for (AActor* ParentActor = HitActor->GetAttachParentActor(); ParentActor; ParentActor = ParentActor->GetAttachParentActor())
+	{
+		if (AMaterialNodeActor* ParentNode = Cast<AMaterialNodeActor>(ParentActor))
+		{
+			return ParentNode;
+		}
+	}
+
+	return nullptr;
+}
+
+AMaterialNodeActor* AAgentCharacter::ResolveMaterialNodeAtPlacementLocation(const FVector& PlacementLocation) const
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return nullptr;
+	}
+
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(MinerPlacementNodeResolve), false, this);
+	QueryParams.AddIgnoredActor(this);
+	if (DroneCompanion)
+	{
+		QueryParams.AddIgnoredActor(DroneCompanion);
+	}
+	if (ConveyorPlacementPreview)
+	{
+		QueryParams.AddIgnoredActor(ConveyorPlacementPreview);
+	}
+
+	const float VerticalTraceDistance = FMath::Max(200.0f, ConveyorPlacementSurfaceTraceHeight + ConveyorPlacementSurfaceTraceDepth);
+	const FVector TraceStart = PlacementLocation + FVector(0.0f, 0.0f, VerticalTraceDistance * 0.5f);
+	const FVector TraceEnd = PlacementLocation - FVector(0.0f, 0.0f, VerticalTraceDistance * 0.5f);
+
+	FHitResult NodeHit;
+	bool bHasNodeHit = World->LineTraceSingleByChannel(
+		NodeHit,
+		TraceStart,
+		TraceEnd,
+		AgentFactory::BuildPlacementTraceChannel,
+		QueryParams);
+	if (!bHasNodeHit)
+	{
+		bHasNodeHit = World->LineTraceSingleByChannel(NodeHit, TraceStart, TraceEnd, ECC_Visibility, QueryParams);
+	}
+
+	if (bHasNodeHit)
+	{
+		if (AMaterialNodeActor* ResolvedNode = ResolveMaterialNodeFromPlacementHit(NodeHit))
+		{
+			return ResolvedNode;
+		}
+	}
+
+	FCollisionObjectQueryParams ObjectQueryParams;
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_WorldStatic);
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_WorldDynamic);
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_PhysicsBody);
+	ObjectQueryParams.AddObjectTypesToQuery(AgentFactory::FactoryBuildableChannel);
+
+	TArray<FOverlapResult> OverlapResults;
+	const float SearchRadius = FMath::Max3(
+		ConveyorPlacementClearanceExtents.X,
+		ConveyorPlacementClearanceExtents.Y,
+		ConveyorPlacementClearanceExtents.Z) * 2.0f;
+	const bool bHasOverlap = World->OverlapMultiByObjectType(
+		OverlapResults,
+		PlacementLocation,
+		FQuat::Identity,
+		ObjectQueryParams,
+		FCollisionShape::MakeSphere(FMath::Max(50.0f, SearchRadius)),
+		QueryParams);
+
+	if (!bHasOverlap)
+	{
+		return nullptr;
+	}
+
+	for (const FOverlapResult& OverlapResult : OverlapResults)
+	{
+		AActor* OverlapActor = OverlapResult.GetActor();
+		if (!OverlapActor)
+		{
+			continue;
+		}
+
+		if (AMaterialNodeActor* ResolvedNode = Cast<AMaterialNodeActor>(OverlapActor))
+		{
+			return ResolvedNode;
+		}
+
+		if (AMaterialNodeActor* OwnerNode = Cast<AMaterialNodeActor>(OverlapActor->GetOwner()))
+		{
+			return OwnerNode;
+		}
+
+		for (AActor* ParentActor = OverlapActor->GetAttachParentActor(); ParentActor; ParentActor = ParentActor->GetAttachParentActor())
+		{
+			if (AMaterialNodeActor* ParentNode = Cast<AMaterialNodeActor>(ParentActor))
+			{
+				return ParentNode;
+			}
+		}
+	}
+
+	return nullptr;
+}
+
+bool AAgentCharacter::IsFreeFactoryPlacementActive() const
+{
+	return bConveyorPlacementModeActive
+		&& bFactoryFreePlacementEnabled
+		&& CurrentFactoryPlacementType == EAgentFactoryPlacementType::Miner;
+}
+
 void AAgentCharacter::SelectFactoryPlacementType(EAgentFactoryPlacementType NewType, bool bToggleIfAlreadySelected)
 {
 	const bool bWasActive = bConveyorPlacementModeActive;
 	const bool bWasSameType = CurrentFactoryPlacementType == NewType;
 	CurrentFactoryPlacementType = NewType;
+	if (!IsFreeFactoryPlacementActive())
+	{
+		FactoryPlacementRotationYawDegrees = AgentFactory::SnapYawToGrid(FactoryPlacementRotationYawDegrees).Yaw;
+	}
 
 	if (!bWasActive)
 	{
@@ -3297,6 +3517,11 @@ void AAgentCharacter::SelectFactoryPlacementType(EAgentFactoryPlacementType NewT
 	{
 		ExitConveyorPlacementMode();
 		return;
+	}
+
+	if (ConveyorPlacementPreview)
+	{
+		ConveyorPlacementPreview->SetPreviewActorClass(ResolveFactoryBuildableClass(CurrentFactoryPlacementType));
 	}
 
 	UpdateConveyorPlacementPreview();
@@ -4134,6 +4359,46 @@ void AAgentCharacter::UpdateHookJobButtonHold(float DeltaSeconds)
 
 	bHookJobButtonTriggeredHoldRelease = true;
 	TryReleaseAllHookJobDrones();
+}
+
+void AAgentCharacter::UpdateFactoryPlacementRotationHold(float DeltaSeconds)
+{
+	if (!bConveyorPlacementModeActive)
+	{
+		bPlacementRotateLeftHeld = false;
+		bPlacementRotateRightHeld = false;
+		FactoryPlacementRotationHoldDirection = 0;
+		FactoryPlacementRotationHoldTimeRemaining = 0.0f;
+		return;
+	}
+
+	int32 DesiredDirection = 0;
+	if (bPlacementRotateLeftHeld != bPlacementRotateRightHeld)
+	{
+		DesiredDirection = bPlacementRotateRightHeld ? 1 : -1;
+	}
+
+	if (DesiredDirection == 0)
+	{
+		FactoryPlacementRotationHoldDirection = 0;
+		FactoryPlacementRotationHoldTimeRemaining = 0.0f;
+		return;
+	}
+
+	if (FactoryPlacementRotationHoldDirection != DesiredDirection)
+	{
+		FactoryPlacementRotationHoldDirection = DesiredDirection;
+		FactoryPlacementRotationHoldTimeRemaining = FMath::Max(0.0f, FreePlacementRotationHoldDelay);
+		return;
+	}
+
+	FactoryPlacementRotationHoldTimeRemaining -= FMath::Max(0.0f, DeltaSeconds);
+	const float RepeatInterval = FMath::Max(0.01f, FreePlacementRotationHoldInterval);
+	while (FactoryPlacementRotationHoldTimeRemaining <= 0.0f)
+	{
+		RotateConveyorPlacement(DesiredDirection);
+		FactoryPlacementRotationHoldTimeRemaining += RepeatInterval;
+	}
 }
 
 bool AAgentCharacter::CanUseBackpackDeployInput() const
@@ -5635,11 +5900,32 @@ void AAgentCharacter::OnDroneRollRightReleased()
 
 void AAgentCharacter::OnDroneYawLeftPressed()
 {
+	if (bConveyorPlacementModeActive)
+	{
+		bPlacementRotateLeftHeld = true;
+		bPlacementRotateRightHeld = false;
+		FactoryPlacementRotationHoldDirection = -1;
+		FactoryPlacementRotationHoldTimeRemaining = FMath::Max(0.0f, FreePlacementRotationHoldDelay);
+		RotateConveyorPlacement(-1);
+		return;
+	}
+
 	bDroneYawLeftHeld = true;
 }
 
 void AAgentCharacter::OnDroneYawLeftReleased()
 {
+	if (bConveyorPlacementModeActive)
+	{
+		bPlacementRotateLeftHeld = false;
+		if (!bPlacementRotateRightHeld)
+		{
+			FactoryPlacementRotationHoldDirection = 0;
+			FactoryPlacementRotationHoldTimeRemaining = 0.0f;
+		}
+		return;
+	}
+
 	bDroneYawLeftHeld = false;
 }
 
@@ -6015,9 +6301,38 @@ void AAgentCharacter::OnMachinePlacementModePressed()
 	SelectFactoryPlacementType(EAgentFactoryPlacementType::Machine, true);
 }
 
+void AAgentCharacter::OnMinerPlacementModePressed()
+{
+	SelectFactoryPlacementType(EAgentFactoryPlacementType::Miner, true);
+}
+
+void AAgentCharacter::OnMiningSwarmPlacementModePressed()
+{
+	SelectFactoryPlacementType(EAgentFactoryPlacementType::MiningSwarm, true);
+}
+
 void AAgentCharacter::OnFactoryPlacementTogglePressed()
 {
 	ToggleConveyorPlacementMode();
+}
+
+void AAgentCharacter::OnFactoryFreePlacementTogglePressed()
+{
+	if (!bConveyorPlacementModeActive || CurrentFactoryPlacementType != EAgentFactoryPlacementType::Miner)
+	{
+		return;
+	}
+
+	bFactoryFreePlacementEnabled = !bFactoryFreePlacementEnabled;
+	FactoryPlacementRotationHoldDirection = 0;
+	FactoryPlacementRotationHoldTimeRemaining = 0.0f;
+
+	if (!IsFreeFactoryPlacementActive())
+	{
+		FactoryPlacementRotationYawDegrees = AgentFactory::SnapYawToGrid(FactoryPlacementRotationYawDegrees).Yaw;
+	}
+
+	UpdateConveyorPlacementPreview();
 }
 
 void AAgentCharacter::OnConveyorPlacePressed()
@@ -6078,6 +6393,16 @@ void AAgentCharacter::OnPickupOrDroneYawRightPressed()
 		return;
 	}
 
+	if (bConveyorPlacementModeActive)
+	{
+		bPlacementRotateRightHeld = true;
+		bPlacementRotateLeftHeld = false;
+		FactoryPlacementRotationHoldDirection = 1;
+		FactoryPlacementRotationHoldTimeRemaining = FMath::Max(0.0f, FreePlacementRotationHoldDelay);
+		RotateConveyorPlacement(1);
+		return;
+	}
+
 	if (bMapModeActive && !bConveyorPlacementModeActive)
 	{
 		if (CanUsePickupInteraction() && TryBeginPickup())
@@ -6113,6 +6438,17 @@ void AAgentCharacter::OnPickupOrDroneYawRightPressed()
 
 void AAgentCharacter::OnPickupOrDroneYawRightReleased()
 {
+	if (bConveyorPlacementModeActive)
+	{
+		bPlacementRotateRightHeld = false;
+		if (!bPlacementRotateLeftHeld)
+		{
+			FactoryPlacementRotationHoldDirection = 0;
+			FactoryPlacementRotationHoldTimeRemaining = 0.0f;
+		}
+		return;
+	}
+
 	if (bKeyboardPickupHeld)
 	{
 		bKeyboardPickupHeld = false;

@@ -88,6 +88,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field", meta=(ClampMin="1.0", UIMin="1.0"))
 	float CaptureRange = 100.0f;
 
+	/** Pull toward MagLock volume center (when available) instead of anchor to improve approach reliability. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field")
+	bool bUseMagLockZoneCenterAsAttractTarget = true;
+
 	/** Shapes distance response (higher values pull harder only when close). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Field", meta=(ClampMin="0.1", UIMin="0.1"))
 	float DistanceStrengthExponent = 1.35f;
@@ -259,6 +263,22 @@ public:
 	/** Keep MagLock'd items held after entering the zone, even if they drift outside briefly. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Hold")
 	bool bStickyLockInZone = true;
+
+	/** Time an item must remain inside MagLock volume before it becomes anchored/locked. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Hold", meta=(ClampMin="0.0", UIMin="0.0"))
+	float MagLockVolumeAnchorDelay = 0.5f;
+
+	/** Allow immediate lock when object speed is already low enough inside the lock volume. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Hold")
+	bool bAllowLowVelocityLockInsideMagLockVolume = true;
+
+	/** Velocity threshold (cm/s) for low-speed lock inside volume. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Hold", meta=(ClampMin="0.0", UIMin="0.0"))
+	float MagLockLowVelocityThreshold = 80.0f;
+
+	/** When true, locked items anchor directly to target transform (no drift) once lock is acquired. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Hold")
+	bool bDirectAnchorLockedItems = true;
 
 	/** Torque gain for orienting item attach points toward the magnet anchor. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="PlayerMagnet|Hold", meta=(ClampMin="0.0", UIMin="0.0"))

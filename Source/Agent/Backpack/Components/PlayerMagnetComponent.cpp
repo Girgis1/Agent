@@ -126,6 +126,9 @@ bool UPlayerMagnetComponent::ResolveTaggedShapeComponent(FName ComponentTag, USh
 
 	TArray<const AActor*> SearchActors;
 	GatherOwnerAndAttachedActors(SearchActors);
+	const FString TagString = ComponentTag.ToString();
+	const bool bTagLooksMagnetRelated = TagString.Contains(TEXT("MagLock"), ESearchCase::IgnoreCase)
+		|| TagString.Contains(TEXT("Magnet"), ESearchCase::IgnoreCase);
 
 	for (const AActor* CandidateActor : SearchActors)
 	{
@@ -145,6 +148,59 @@ bool UPlayerMagnetComponent::ResolveTaggedShapeComponent(FName ComponentTag, USh
 
 			OutShapeComponent = ShapeComponent;
 			return true;
+		}
+
+		if (CandidateActor->ActorHasTag(ComponentTag))
+		{
+			for (UShapeComponent* ShapeComponent : ShapeComponents)
+			{
+				if (!ShapeComponent || ShapeComponent->GetCollisionEnabled() == ECollisionEnabled::NoCollision)
+				{
+					continue;
+				}
+
+				OutShapeComponent = ShapeComponent;
+				return true;
+			}
+		}
+
+		for (UShapeComponent* ShapeComponent : ShapeComponents)
+		{
+			if (!ShapeComponent)
+			{
+				continue;
+			}
+
+			const FString ShapeName = ShapeComponent->GetName();
+			const bool bNameMatchesTag = !TagString.IsEmpty() && ShapeName.Contains(TagString, ESearchCase::IgnoreCase);
+			const bool bNameLooksMagnetRelated = bTagLooksMagnetRelated
+				&& (ShapeName.Contains(TEXT("MagLock"), ESearchCase::IgnoreCase)
+					|| ShapeName.Contains(TEXT("Magnet"), ESearchCase::IgnoreCase));
+			if (bNameMatchesTag || bNameLooksMagnetRelated)
+			{
+				OutShapeComponent = ShapeComponent;
+				return true;
+			}
+		}
+
+		if (bTagLooksMagnetRelated)
+		{
+			const FString ActorName = CandidateActor->GetName();
+			const bool bActorLooksMagnetRelated = ActorName.Contains(TEXT("MagLock"), ESearchCase::IgnoreCase)
+				|| ActorName.Contains(TEXT("Magnet"), ESearchCase::IgnoreCase);
+			if (bActorLooksMagnetRelated)
+			{
+				for (UShapeComponent* ShapeComponent : ShapeComponents)
+				{
+					if (!ShapeComponent || ShapeComponent->GetCollisionEnabled() == ECollisionEnabled::NoCollision)
+					{
+						continue;
+					}
+
+					OutShapeComponent = ShapeComponent;
+					return true;
+				}
+			}
 		}
 	}
 
@@ -287,6 +343,14 @@ bool UPlayerMagnetComponent::ResolveMagLockAnchor(USceneComponent*& OutAnchorCom
 	if (ResolveTaggedSceneComponent(MagLockAnchorComponentTag, TaggedAnchorComponent) && TaggedAnchorComponent)
 	{
 		OutAnchorComponent = TaggedAnchorComponent;
+		return true;
+	}
+
+	UShapeComponent* ZoneComponent = nullptr;
+	if (ResolveTaggedShapeComponent(MagLockZoneComponentTag, ZoneComponent) && ZoneComponent)
+	{
+		OutAnchorComponent = ZoneComponent;
+		OutAnchorSocketName = NAME_None;
 		return true;
 	}
 
