@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "AgentCharacter.h"
+#include "AgentBeamToolComponent.h"
 #include "Backpack/Actors/BlackHoleBackpackActor.h"
 #include "Backpack/Components/BackAttachmentComponent.h"
 #include "Backpack/Components/PlayerMagnetComponent.h"
@@ -45,6 +46,58 @@
 
 namespace
 {
+	USceneComponent* ResolveTaggedSceneComponent(AActor* SourceActor, FName RequiredTag)
+	{
+		if (!SourceActor || RequiredTag.IsNone())
+		{
+			return nullptr;
+		}
+
+		TArray<USceneComponent*> SceneComponents;
+		SourceActor->GetComponents<USceneComponent>(SceneComponents);
+		for (USceneComponent* SceneComponent : SceneComponents)
+		{
+			if (SceneComponent && SceneComponent->ComponentHasTag(RequiredTag))
+			{
+				return SceneComponent;
+			}
+		}
+
+		if (SourceActor->ActorHasTag(RequiredTag))
+		{
+			return Cast<USceneComponent>(SourceActor->GetRootComponent());
+		}
+
+		TArray<AActor*> AttachedActors;
+		SourceActor->GetAttachedActors(AttachedActors, true, true);
+		for (AActor* AttachedActor : AttachedActors)
+		{
+			if (!AttachedActor)
+			{
+				continue;
+			}
+
+			AttachedActor->GetComponents<USceneComponent>(SceneComponents);
+			for (USceneComponent* SceneComponent : SceneComponents)
+			{
+				if (SceneComponent && SceneComponent->ComponentHasTag(RequiredTag))
+				{
+					return SceneComponent;
+				}
+			}
+
+			if (AttachedActor->ActorHasTag(RequiredTag))
+			{
+				if (USceneComponent* RootSceneComponent = Cast<USceneComponent>(AttachedActor->GetRootComponent()))
+				{
+					return RootSceneComponent;
+				}
+			}
+		}
+
+		return nullptr;
+	}
+
 	const TCHAR* ToRagdollStateString(EAgentRagdollState State)
 	{
 		switch (State)
@@ -132,6 +185,16 @@ AAgentCharacter::AAgentCharacter(const FObjectInitializer& ObjectInitializer)
 	VehicleInteractionComponent = CreateDefaultSubobject<UVehicleInteractionComponent>(TEXT("VehicleInteractionComponent"));
 	BackAttachmentComponent = CreateDefaultSubobject<UBackAttachmentComponent>(TEXT("BackAttachmentComponent"));
 	PlayerMagnetComponent = CreateDefaultSubobject<UPlayerMagnetComponent>(TEXT("PlayerMagnetComponent"));
+	PlayerBeamOrigin = CreateDefaultSubobject<USceneComponent>(TEXT("PlayerBeamOrigin"));
+	PlayerBeamOrigin->bEditableWhenInherited = true;
+	PlayerBeamOrigin->SetupAttachment(GetMesh());
+	PlayerBeamOrigin->SetRelativeLocation(FVector(35.0f, 16.0f, 58.0f));
+	PlayerBeamToolComponent = CreateDefaultSubobject<UAgentBeamToolComponent>(TEXT("PlayerBeamToolComponent"));
+	PlayerBeamToolComponent->BeamSourceName = FName(TEXT("PlayerBeam"));
+	PlayerBeamToolComponent->DamagePerSecond = 20.0f;
+	PlayerBeamToolComponent->HealingPerSecond = 16.0f;
+	PlayerBeamToolComponent->BaseTraceRadius = 6.0f;
+	PlayerBeamToolComponent->BeamRange = 3000.0f;
 	DroneSwarmComponent = CreateDefaultSubobject<UDroneSwarmComponent>(TEXT("DroneSwarmComponent"));
 
 	ThirdPersonDroneProxyMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ThirdPersonDroneProxyMesh"));
@@ -179,6 +242,7 @@ void AAgentCharacter::OnConstruction(const FTransform& Transform)
 {
 	Super::OnConstruction(Transform);
 	RefreshFirstPersonCameraAttachment();
+	RefreshPlayerBeamOriginAttachment();
 }
 
 void AAgentCharacter::RefreshFirstPersonCameraReference()
@@ -258,6 +322,30 @@ void AAgentCharacter::RefreshFirstPersonCameraAttachment()
 		FirstPersonCameraSocketName);
 }
 
+void AAgentCharacter::RefreshPlayerBeamOriginAttachment()
+{
+	if (!PlayerBeamOrigin || !GetMesh())
+	{
+		return;
+	}
+
+	// Native inherited components can't be reparented in BP hierarchy; expose socket-based attachment instead.
+	PlayerBeamOrigin->AttachToComponent(
+		GetMesh(),
+		FAttachmentTransformRules::KeepRelativeTransform,
+		PlayerBeamOriginSocketName);
+}
+
+USceneComponent* AAgentCharacter::ResolveConfiguredPlayerBeamOriginComponent() const
+{
+	if (USceneComponent* TaggedBeamOrigin = ResolveTaggedSceneComponent(const_cast<AAgentCharacter*>(this), PlayerBeamOriginTag))
+	{
+		return TaggedBeamOrigin;
+	}
+
+	return PlayerBeamOrigin;
+}
+
 void AAgentCharacter::RefreshFirstPersonCameraControlRotation()
 {
 	UCameraComponent* const ActiveFirstPersonCamera = ResolveFirstPersonCamera();
@@ -276,6 +364,7 @@ void AAgentCharacter::BeginPlay()
 {
 	Super::BeginPlay();
 	RefreshFirstPersonCameraAttachment();
+	RefreshPlayerBeamOriginAttachment();
 
 	ClumsinessMinValue = FMath::Max(1.0f, ClumsinessMinValue);
 	ClumsinessMaxValue = FMath::Max(ClumsinessMinValue, ClumsinessMaxValue);
@@ -370,6 +459,7 @@ void AAgentCharacter::BeginPlay()
 	}
 
 	UpdateMovementSpeedState(0.0f);
+	ApplyBeamModeToEmitters();
 }
 
 void AAgentCharacter::Tick(float DeltaSeconds)
@@ -402,6 +492,8 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 	UpdateFactoryPlacementRotationHold(DeltaSeconds);
 	UpdateDronePilotCameraLimits();
 	RefreshPrimaryDroneAvailabilityFromCompanion();
+	UpdateBeamSystems(DeltaSeconds);
+	UpdateBeamAimZoom(DeltaSeconds);
 	if (!bPrimaryDroneAvailable
 		&& bForceFirstPersonWhenDroneUnavailable
 		&& (CurrentViewMode != EAgentViewMode::FirstPerson || bMapModeActive || bMiniMapModeActive))
@@ -753,9 +845,13 @@ void AAgentCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	PlayerInputComponent->BindKey(EKeys::LeftAlt, IE_Pressed, this, &AAgentCharacter::OnFactoryFreePlacementTogglePressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Left, IE_Pressed, this, &AAgentCharacter::OnGamepadFaceButtonLeftPressed);
 	PlayerInputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &AAgentCharacter::OnLeftMouseButtonPressed);
+	PlayerInputComponent->BindKey(EKeys::LeftMouseButton, IE_Released, this, &AAgentCharacter::OnLeftMouseButtonReleased);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_RightTrigger, IE_Pressed, this, &AAgentCharacter::OnPickupOrPlacePressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_RightTrigger, IE_Released, this, &AAgentCharacter::OnPickupOrPlaceReleased);
-	PlayerInputComponent->BindKey(EKeys::RightMouseButton, IE_Pressed, this, &AAgentCharacter::OnConveyorCancelPressed);
+	PlayerInputComponent->BindKey(EKeys::RightMouseButton, IE_Pressed, this, &AAgentCharacter::OnRightMouseButtonPressed);
+	PlayerInputComponent->BindKey(EKeys::RightMouseButton, IE_Released, this, &AAgentCharacter::OnRightMouseButtonReleased);
+	PlayerInputComponent->BindKey(EKeys::MouseScrollUp, IE_Pressed, this, &AAgentCharacter::OnMouseScrollUpPressed);
+	PlayerInputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this, &AAgentCharacter::OnMouseScrollDownPressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Right, IE_Pressed, this, &AAgentCharacter::OnGamepadFaceButtonRightPressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_LeftShoulder, IE_Pressed, this, &AAgentCharacter::OnGamepadLeftShoulderPressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_RightShoulder, IE_Pressed, this, &AAgentCharacter::OnHookJobButtonPressed);
@@ -1410,8 +1506,286 @@ void AAgentCharacter::OnDroneTorchTogglePressed()
 	UpdateDroneTorchTarget();
 }
 
+void AAgentCharacter::CycleBeamMode(int32 Direction)
+{
+	const int32 ModeCount = 2;
+	const int32 CurrentIndex = static_cast<int32>(CurrentBeamMode);
+	const int32 Step = Direction >= 0 ? 1 : -1;
+	const int32 WrappedIndex = (CurrentIndex + Step + ModeCount) % ModeCount;
+	CurrentBeamMode = static_cast<EAgentBeamMode>(WrappedIndex);
+	ApplyBeamModeToEmitters();
+}
+
+void AAgentCharacter::ApplyBeamModeToEmitters()
+{
+	if (PlayerBeamToolComponent)
+	{
+		PlayerBeamToolComponent->SetBeamMode(CurrentBeamMode);
+	}
+
+	for (ADroneCompanion* CandidateDrone : DroneCompanions)
+	{
+		if (!IsValid(CandidateDrone))
+		{
+			continue;
+		}
+
+		if (UAgentBeamToolComponent* DroneBeamToolComponent = CandidateDrone->GetBeamToolComponent())
+		{
+			DroneBeamToolComponent->SetBeamMode(CurrentBeamMode);
+		}
+	}
+}
+
+void AAgentCharacter::StopAllBeamTools()
+{
+	if (PlayerBeamToolComponent)
+	{
+		PlayerBeamToolComponent->StopBeam();
+	}
+
+	for (ADroneCompanion* CandidateDrone : DroneCompanions)
+	{
+		if (!IsValid(CandidateDrone))
+		{
+			continue;
+		}
+
+		if (UAgentBeamToolComponent* DroneBeamToolComponent = CandidateDrone->GetBeamToolComponent())
+		{
+			DroneBeamToolComponent->StopBeam();
+		}
+	}
+}
+
+bool AAgentCharacter::IsRawMouseBeamAimModifierHeld() const
+{
+	return bRightMouseBeamAimHeld;
+}
+
+bool AAgentCharacter::IsRawControllerBeamAimModifierHeld() const
+{
+	return DroneGamepadLeftTriggerInput >= FMath::Clamp(ControllerBeamAimTriggerThreshold, 0.0f, 1.0f);
+}
+
+bool AAgentCharacter::IsBeamAimModifierActive() const
+{
+	return CanUseBeamTool() && (IsRawMouseBeamAimModifierHeld() || IsRawControllerBeamAimModifierHeld());
+}
+
+bool AAgentCharacter::IsBeamFireInputHeld() const
+{
+	return bMouseBeamFireHeld || bControllerBeamFireHeld;
+}
+
+bool AAgentCharacter::CanUseBeamTool() const
+{
+	if (IsRagdolling())
+	{
+		return false;
+	}
+
+	if (bConveyorPlacementModeActive || bMiniMapModeActive)
+	{
+		return false;
+	}
+
+	if (VehicleInteractionComponent && VehicleInteractionComponent->IsControllingVehicle())
+	{
+		return false;
+	}
+
+	if (HeldPickupComponent.IsValid() || bKeyboardPickupHeld || bControllerPickupHeld || bPickupRotationModeActive)
+	{
+		return false;
+	}
+
+	if (bMapModeActive)
+	{
+		return bAllowBeamInMapMode && bPrimaryDroneAvailable && DroneCompanion && DroneCompanion->GetBeamToolComponent();
+	}
+
+	if (CurrentViewMode == EAgentViewMode::DronePilot)
+	{
+		return bAllowBeamInDronePilotMode && bPrimaryDroneAvailable && DroneCompanion && DroneCompanion->GetBeamToolComponent();
+	}
+
+	return (CurrentViewMode == EAgentViewMode::FirstPerson || CurrentViewMode == EAgentViewMode::ThirdPerson)
+		&& PlayerBeamToolComponent != nullptr;
+}
+
+UAgentBeamToolComponent* AAgentCharacter::ResolveActiveBeamToolComponent() const
+{
+	if ((bMapModeActive || CurrentViewMode == EAgentViewMode::DronePilot) && DroneCompanion)
+	{
+		return DroneCompanion->GetBeamToolComponent();
+	}
+
+	return PlayerBeamToolComponent;
+}
+
+USceneComponent* AAgentCharacter::ResolveActiveBeamOriginComponent() const
+{
+	if ((bMapModeActive || CurrentViewMode == EAgentViewMode::DronePilot) && DroneCompanion)
+	{
+		return DroneCompanion->GetBeamOriginComponent();
+	}
+
+	return ResolveConfiguredPlayerBeamOriginComponent();
+}
+
+bool AAgentCharacter::ResolveActiveBeamPose(
+	FVector& OutViewOrigin,
+	FVector& OutViewDirection,
+	FVector& OutVisualOrigin) const
+{
+	OutViewOrigin = FVector::ZeroVector;
+	OutViewDirection = FVector::ForwardVector;
+	OutVisualOrigin = FVector::ZeroVector;
+
+	FRotator ViewRotation = FRotator::ZeroRotator;
+	if ((bMapModeActive || CurrentViewMode == EAgentViewMode::DronePilot) && DroneCompanion)
+	{
+		if (!DroneCompanion->GetDroneCameraTransform(OutViewOrigin, ViewRotation))
+		{
+			return false;
+		}
+	}
+	else if (!GetCharacterPickupView(OutViewOrigin, ViewRotation))
+	{
+		return false;
+	}
+
+	OutViewDirection = ViewRotation.Vector().GetSafeNormal();
+	if (OutViewDirection.IsNearlyZero())
+	{
+		return false;
+	}
+
+	if (const USceneComponent* BeamOriginComponent = ResolveActiveBeamOriginComponent())
+	{
+		OutVisualOrigin = BeamOriginComponent->GetComponentLocation();
+	}
+	else
+	{
+		OutVisualOrigin = OutViewOrigin;
+	}
+
+	return true;
+}
+
+void AAgentCharacter::UpdateBeamSystems(float DeltaSeconds)
+{
+	(void)DeltaSeconds;
+
+	const bool bShouldFireBeam = IsBeamAimModifierActive() && IsBeamFireInputHeld();
+	if (!bShouldFireBeam)
+	{
+		StopAllBeamTools();
+		return;
+	}
+
+	UAgentBeamToolComponent* ActiveBeamToolComponent = ResolveActiveBeamToolComponent();
+	if (!ActiveBeamToolComponent)
+	{
+		StopAllBeamTools();
+		return;
+	}
+
+	FVector ViewOrigin = FVector::ZeroVector;
+	FVector ViewDirection = FVector::ForwardVector;
+	FVector VisualOrigin = FVector::ZeroVector;
+	if (!ResolveActiveBeamPose(ViewOrigin, ViewDirection, VisualOrigin))
+	{
+		StopAllBeamTools();
+		return;
+	}
+
+	if (PlayerBeamToolComponent && PlayerBeamToolComponent != ActiveBeamToolComponent)
+	{
+		PlayerBeamToolComponent->StopBeam();
+	}
+
+	for (ADroneCompanion* CandidateDrone : DroneCompanions)
+	{
+		if (!IsValid(CandidateDrone))
+		{
+			continue;
+		}
+
+		if (UAgentBeamToolComponent* DroneBeamToolComponent = CandidateDrone->GetBeamToolComponent())
+		{
+			if (DroneBeamToolComponent != ActiveBeamToolComponent)
+			{
+				DroneBeamToolComponent->StopBeam();
+			}
+		}
+	}
+
+	ActiveBeamToolComponent->SetBeamMode(CurrentBeamMode);
+	ActiveBeamToolComponent->SetBeamPose(ViewOrigin, ViewDirection, VisualOrigin);
+	ActiveBeamToolComponent->StartBeam();
+}
+
+void AAgentCharacter::UpdateBeamAimZoom(float DeltaSeconds)
+{
+	APlayerController* PlayerController = Cast<APlayerController>(GetController());
+	APlayerCameraManager* CameraManager = PlayerController ? PlayerController->PlayerCameraManager : nullptr;
+	if (!CameraManager)
+	{
+		bBeamAimZoomLocked = false;
+		BeamAimZoomViewTarget.Reset();
+		return;
+	}
+
+	const bool bShouldZoom = IsBeamAimModifierActive();
+	AActor* CurrentViewTarget = PlayerController->GetViewTarget();
+	const bool bViewTargetChanged = BeamAimZoomViewTarget.Get() != CurrentViewTarget;
+	if (bShouldZoom && (!bBeamAimZoomLocked || bViewTargetChanged))
+	{
+		if (bViewTargetChanged && bBeamAimZoomLocked)
+		{
+			CameraManager->UnlockFOV();
+		}
+
+		BeamAimBaseFov = CameraManager->GetFOVAngle();
+		BeamAimCurrentFov = BeamAimBaseFov;
+		BeamAimZoomViewTarget = CurrentViewTarget;
+		bBeamAimZoomLocked = true;
+	}
+
+	if (!bBeamAimZoomLocked)
+	{
+		return;
+	}
+
+	const float TargetFov = bShouldZoom
+		? FMath::Max(5.0f, BeamAimBaseFov - FMath::Max(0.0f, BeamAimZoomFovReduction))
+		: BeamAimBaseFov;
+	const float InterpSpeed = bShouldZoom
+		? FMath::Max(0.0f, BeamAimZoomInInterpSpeed)
+		: FMath::Max(0.0f, BeamAimZoomOutInterpSpeed);
+	BeamAimCurrentFov = InterpSpeed > KINDA_SMALL_NUMBER
+		? FMath::FInterpTo(BeamAimCurrentFov, TargetFov, DeltaSeconds, InterpSpeed)
+		: TargetFov;
+	CameraManager->SetFOV(BeamAimCurrentFov);
+
+	if (!bShouldZoom && FMath::IsNearlyEqual(BeamAimCurrentFov, BeamAimBaseFov, 0.05f))
+	{
+		CameraManager->UnlockFOV();
+		bBeamAimZoomLocked = false;
+		BeamAimZoomViewTarget.Reset();
+	}
+}
+
 void AAgentCharacter::OnLeftMouseButtonPressed()
 {
+	if (IsRawMouseBeamAimModifierHeld() && CanUseBeamTool())
+	{
+		bMouseBeamFireHeld = true;
+		return;
+	}
+
 	if (TryToggleHeldBackpackPortalFromPickup())
 	{
 		return;
@@ -1423,6 +1797,46 @@ void AAgentCharacter::OnLeftMouseButtonPressed()
 	}
 
 	OnConveyorPlacePressed();
+}
+
+void AAgentCharacter::OnLeftMouseButtonReleased()
+{
+	bMouseBeamFireHeld = false;
+	StopAllBeamTools();
+}
+
+void AAgentCharacter::OnRightMouseButtonPressed()
+{
+	if (bConveyorPlacementModeActive)
+	{
+		OnConveyorCancelPressed();
+		return;
+	}
+
+	bRightMouseBeamAimHeld = true;
+}
+
+void AAgentCharacter::OnRightMouseButtonReleased()
+{
+	bRightMouseBeamAimHeld = false;
+	bMouseBeamFireHeld = false;
+	StopAllBeamTools();
+}
+
+void AAgentCharacter::OnMouseScrollUpPressed()
+{
+	if (IsRawMouseBeamAimModifierHeld() && CanUseBeamTool())
+	{
+		CycleBeamMode(1);
+	}
+}
+
+void AAgentCharacter::OnMouseScrollDownPressed()
+{
+	if (IsRawMouseBeamAimModifierHeld() && CanUseBeamTool())
+	{
+		CycleBeamMode(-1);
+	}
 }
 
 void AAgentCharacter::OnGamepadFaceButtonLeftPressed()
@@ -1458,6 +1872,12 @@ void AAgentCharacter::OnGamepadFaceButtonRightPressed()
 
 void AAgentCharacter::OnGamepadLeftShoulderPressed()
 {
+	if (IsRawControllerBeamAimModifierHeld() && CanUseBeamTool())
+	{
+		CycleBeamMode(1);
+		return;
+	}
+
 	if (bConveyorPlacementModeActive)
 	{
 		OnConveyorRotateLeftPressed();
@@ -1522,6 +1942,17 @@ void AAgentCharacter::CycleViewMode()
 
 void AAgentCharacter::ApplyViewMode(EAgentViewMode NewMode, bool bBlend)
 {
+	StopAllBeamTools();
+	bBeamAimZoomLocked = false;
+	BeamAimZoomViewTarget.Reset();
+	if (APlayerController* PlayerController = Cast<APlayerController>(GetController()))
+	{
+		if (APlayerCameraManager* CameraManager = PlayerController->PlayerCameraManager)
+		{
+			CameraManager->UnlockFOV();
+		}
+	}
+
 	if (bConveyorPlacementModeActive && NewMode != CurrentViewMode)
 	{
 		ExitConveyorPlacementMode();
@@ -6492,6 +6923,13 @@ void AAgentCharacter::OnPickupOrDroneYawRightReleased()
 
 void AAgentCharacter::OnPickupOrPlacePressed()
 {
+	const bool bWantsBeamFire = IsRawControllerBeamAimModifierHeld() && CanUseBeamTool();
+	bControllerBeamFireHeld = bWantsBeamFire;
+	if (bWantsBeamFire)
+	{
+		return;
+	}
+
 	if (bConveyorPlacementModeActive)
 	{
 		OnConveyorPlacePressed();
@@ -6548,6 +6986,25 @@ void AAgentCharacter::OnPickupOrPlacePressed()
 
 void AAgentCharacter::OnPickupOrPlaceReleased()
 {
+	bControllerBeamFireHeld = false;
+	if (PlayerBeamToolComponent && PlayerBeamToolComponent->IsBeamActive())
+	{
+		StopAllBeamTools();
+		return;
+	}
+
+	if (DroneCompanion)
+	{
+		if (UAgentBeamToolComponent* DroneBeamToolComponent = DroneCompanion->GetBeamToolComponent())
+		{
+			if (DroneBeamToolComponent->IsBeamActive())
+			{
+				StopAllBeamTools();
+				return;
+			}
+		}
+	}
+
 	if (!bControllerPickupHeld)
 	{
 		return;

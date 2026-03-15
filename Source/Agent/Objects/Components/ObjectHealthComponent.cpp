@@ -232,11 +232,6 @@ float UObjectHealthComponent::ComputeMaxHealthFromPrimitive(UPrimitiveComponent*
 
 float UObjectHealthComponent::GetMaterialRecoveryScalar() const
 {
-	if (!bHealthEnabled)
-	{
-		return 1.0f;
-	}
-
 	return 1.0f - FMath::Clamp(TotalDamagedPenaltyPercent, 0.0f, 100.0f) / 100.0f;
 }
 
@@ -626,7 +621,7 @@ void UObjectHealthComponent::UpdateDamagedPenaltyCache()
 	if (!bHealthEnabled)
 	{
 		CurrentPhaseDamagedPenaltyPercent = 0.0f;
-		TotalDamagedPenaltyPercent = 0.0f;
+		TotalDamagedPenaltyPercent = FMath::Clamp(InheritedDamagedPenaltyPercent, 0.0f, 100.0f);
 		return;
 	}
 

@@ -7,6 +7,7 @@
 #include "DroneCompanion.generated.h"
 
 class UCameraComponent;
+class UAgentBeamToolComponent;
 class UConveyorSurfaceVelocityComponent;
 class UDroneBatteryComponent;
 class UMaterialInstanceDynamic;
@@ -249,6 +250,15 @@ public:
 
 	UFUNCTION(BlueprintPure, Category="Drone|Pickup")
 	UPrimitiveComponent* GetPickupPhysicsComponent() const { return DroneBody; }
+
+	UFUNCTION(BlueprintPure, Category="Drone|Beam")
+	USceneComponent* GetBeamOriginComponent() const;
+
+	UFUNCTION(BlueprintPure, Category="Drone|Beam")
+	UAgentBeamToolComponent* GetBeamToolComponent() const { return BeamToolComponent; }
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Beam")
+	FName BeamOriginTag = NAME_None;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Physics")
 	float DroneMassKg = 3.0f;
@@ -973,6 +983,9 @@ protected:
 	USceneComponent* CameraMount;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	USceneComponent* BeamOrigin;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UCameraComponent* DroneCamera;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
@@ -980,6 +993,9 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UDroneBatteryComponent* BatteryComponent;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	UAgentBeamToolComponent* BeamToolComponent;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Conveyor", meta=(AllowPrivateAccess="true"))
 	UConveyorSurfaceVelocityComponent* ConveyorSurfaceVelocity;

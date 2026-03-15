@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "AgentBeamToolComponent.h"
 #include "Engine/EngineTypes.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -129,6 +130,14 @@ class AAgentCharacter : public ACharacter
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UPlayerMagnetComponent* PlayerMagnetComponent;
 
+	/** Configurable start point for the player beam visual. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	USceneComponent* PlayerBeamOrigin;
+
+	/** Reusable beam tool for player-held drain/heal interactions. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	UAgentBeamToolComponent* PlayerBeamToolComponent;
+
 	/** Swarm registry and role-slot coordinator for all known drones */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UDroneSwarmComponent* DroneSwarmComponent;
@@ -167,6 +176,8 @@ protected:
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 	void RefreshFirstPersonCameraReference();
 	void RefreshFirstPersonCameraAttachment();
+	void RefreshPlayerBeamOriginAttachment();
+	USceneComponent* ResolveConfiguredPlayerBeamOriginComponent() const;
 	void RefreshFirstPersonCameraControlRotation();
 	UCameraComponent* ResolveFirstPersonCamera();
 	UCameraComponent* ResolveFirstPersonCamera() const;
@@ -199,9 +210,27 @@ protected:
 	void OnCycleActiveDronePressed();
 	void OnDroneTorchTogglePressed();
 	void OnLeftMouseButtonPressed();
+	void OnLeftMouseButtonReleased();
+	void OnRightMouseButtonPressed();
+	void OnRightMouseButtonReleased();
+	void OnMouseScrollUpPressed();
+	void OnMouseScrollDownPressed();
 	void OnGamepadFaceButtonLeftPressed();
 	void OnGamepadFaceButtonRightPressed();
 	void OnGamepadLeftShoulderPressed();
+	void CycleBeamMode(int32 Direction = 1);
+	void ApplyBeamModeToEmitters();
+	void StopAllBeamTools();
+	void UpdateBeamSystems(float DeltaSeconds);
+	void UpdateBeamAimZoom(float DeltaSeconds);
+	bool IsRawMouseBeamAimModifierHeld() const;
+	bool IsRawControllerBeamAimModifierHeld() const;
+	bool IsBeamAimModifierActive() const;
+	bool IsBeamFireInputHeld() const;
+	bool CanUseBeamTool() const;
+	UAgentBeamToolComponent* ResolveActiveBeamToolComponent() const;
+	USceneComponent* ResolveActiveBeamOriginComponent() const;
+	bool ResolveActiveBeamPose(FVector& OutViewOrigin, FVector& OutViewDirection, FVector& OutVisualOrigin) const;
 	void UpdateViewModeButtonHold(float DeltaSeconds);
 	void UpdateRollModeJumpHold(float DeltaSeconds);
 	void CycleViewMode();
@@ -475,6 +504,33 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Torch", meta=(ClampMin="100.0", UIMin="100.0"))
 	float DroneTorchAimTraceDistance = 8000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam")
+	EAgentBeamMode CurrentBeamMode = EAgentBeamMode::Damage;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam")
+	bool bAllowBeamInDronePilotMode = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam")
+	bool bAllowBeamInMapMode = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam", meta=(ClampMin="0.0", UIMin="0.0", ClampMax="1.0", UIMax="1.0"))
+	float ControllerBeamAimTriggerThreshold = 0.35f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Zoom", meta=(ClampMin="0.0", UIMin="0.0"))
+	float BeamAimZoomFovReduction = 10.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Zoom", meta=(ClampMin="0.0", UIMin="0.0"))
+	float BeamAimZoomInInterpSpeed = 10.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Zoom", meta=(ClampMin="0.0", UIMin="0.0"))
+	float BeamAimZoomOutInterpSpeed = 8.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Player")
+	FName PlayerBeamOriginSocketName = NAME_None;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Player")
+	FName PlayerBeamOriginTag = NAME_None;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Crash")
 	bool bUseCrashRollRecovery = true;
@@ -1217,6 +1273,10 @@ protected:
 	bool bPickupCandidateValid = false;
 	bool bKeyboardPickupHeld = false;
 	bool bControllerPickupHeld = false;
+	bool bMouseBeamFireHeld = false;
+	bool bControllerBeamFireHeld = false;
+	bool bRightMouseBeamAimHeld = false;
+	bool bBeamAimZoomLocked = false;
 
 	float DroneGamepadThrottleInput = 0.0f;
 	float DroneGamepadYawInput = 0.0f;
@@ -1244,6 +1304,9 @@ protected:
 	EMovementMode CachedMovementMode = MOVE_Walking;
 	uint8 CachedCustomMovementMode = 0;
 	EAgentViewMode PreRagdollViewMode = EAgentViewMode::ThirdPerson;
+	float BeamAimBaseFov = 0.0f;
+	float BeamAimCurrentFov = 0.0f;
+	TWeakObjectPtr<AActor> BeamAimZoomViewTarget;
 
 public:
 	UFUNCTION(BlueprintPure, Category="Clumsiness")

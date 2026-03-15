@@ -556,7 +556,7 @@ UObjectFractureDefinitionAsset* UObjectFractureComponent::BuildSimpleStaticMeshD
 
 	InlineDefinition->bTransferSourceVelocity = bTransferVelocityToSpawnedActor;
 	InlineDefinition->bTransferSourceAngularVelocity = bTransferAngularVelocityToSpawnedActor;
-	InlineDefinition->bInitializeFragmentHealthFromMass = bInitializeSpawnedActorHealthFromMass;
+	InlineDefinition->bInitializeFragmentHealthFromMass = false;
 	InlineDefinition->bPropagateDamagedPenaltyToFragments = bPropagateDamagedPenaltyToSpawnedActor;
 	InlineDefinition->OutwardImpulseStrength = SpawnedActorOutwardImpulseStrength;
 	InlineDefinition->RandomImpulseStrength = SpawnedActorRandomImpulseStrength;
@@ -601,7 +601,7 @@ UObjectFractureDefinitionAsset* UObjectFractureComponent::BuildInlineFragmentDef
 	InlineDefinition->Fragments = SelectedOption.InlineFragments;
 	InlineDefinition->bTransferSourceVelocity = bTransferVelocityToSpawnedActor;
 	InlineDefinition->bTransferSourceAngularVelocity = bTransferAngularVelocityToSpawnedActor;
-	InlineDefinition->bInitializeFragmentHealthFromMass = bInitializeSpawnedActorHealthFromMass;
+	InlineDefinition->bInitializeFragmentHealthFromMass = false;
 	InlineDefinition->bPropagateDamagedPenaltyToFragments = bPropagateDamagedPenaltyToSpawnedActor;
 	InlineDefinition->OutwardImpulseStrength = SpawnedActorOutwardImpulseStrength;
 	InlineDefinition->RandomImpulseStrength = SpawnedActorRandomImpulseStrength;
@@ -702,7 +702,7 @@ bool UObjectFractureComponent::TriggerFractureDefinition(UObjectFractureDefiniti
 
 		if (UObjectHealthComponent* FragmentHealthComponent = SpawnedFragment->FindComponentByClass<UObjectHealthComponent>())
 		{
-			FragmentHealthComponent->bHealthEnabled = true;
+			FragmentHealthComponent->bHealthEnabled = SelectedDefinition->bInitializeFragmentHealthFromMass;
 
 			if (SelectedDefinition->bPropagateDamagedPenaltyToFragments)
 			{
@@ -714,6 +714,11 @@ bool UObjectFractureComponent::TriggerFractureDefinition(UObjectFractureDefiniti
 				FragmentHealthComponent->InitializationMode = EObjectHealthInitializationMode::FromCurrentMass;
 				FragmentHealthComponent->bAutoInitializeOnBeginPlay = true;
 				FragmentHealthComponent->bDeferMassInitializationToNextTick = true;
+			}
+			else
+			{
+				FragmentHealthComponent->bAutoInitializeOnBeginPlay = false;
+				FragmentHealthComponent->bDeferMassInitializationToNextTick = false;
 			}
 		}
 

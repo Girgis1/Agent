@@ -2,6 +2,7 @@
 
 #include "DroneCompanion.h"
 #include "Agent.h"
+#include "AgentBeamToolComponent.h"
 #include "Camera/CameraComponent.h"
 #include "Components/MeshComponent.h"
 #include "Components/PrimitiveComponent.h"
@@ -21,6 +22,61 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "PhysicalMaterials/PhysicalMaterial.h"
 #include "UObject/ConstructorHelpers.h"
+
+namespace
+{
+	USceneComponent* ResolveTaggedSceneComponent(AActor* SourceActor, FName RequiredTag)
+	{
+		if (!SourceActor || RequiredTag.IsNone())
+		{
+			return nullptr;
+		}
+
+		TArray<USceneComponent*> SceneComponents;
+		SourceActor->GetComponents<USceneComponent>(SceneComponents);
+		for (USceneComponent* SceneComponent : SceneComponents)
+		{
+			if (SceneComponent && SceneComponent->ComponentHasTag(RequiredTag))
+			{
+				return SceneComponent;
+			}
+		}
+
+		if (SourceActor->ActorHasTag(RequiredTag))
+		{
+			return Cast<USceneComponent>(SourceActor->GetRootComponent());
+		}
+
+		TArray<AActor*> AttachedActors;
+		SourceActor->GetAttachedActors(AttachedActors, true, true);
+		for (AActor* AttachedActor : AttachedActors)
+		{
+			if (!AttachedActor)
+			{
+				continue;
+			}
+
+			AttachedActor->GetComponents<USceneComponent>(SceneComponents);
+			for (USceneComponent* SceneComponent : SceneComponents)
+			{
+				if (SceneComponent && SceneComponent->ComponentHasTag(RequiredTag))
+				{
+					return SceneComponent;
+				}
+			}
+
+			if (AttachedActor->ActorHasTag(RequiredTag))
+			{
+				if (USceneComponent* RootSceneComponent = Cast<USceneComponent>(AttachedActor->GetRootComponent()))
+				{
+					return RootSceneComponent;
+				}
+			}
+		}
+
+		return nullptr;
+	}
+}
 
 ADroneCompanion::ADroneCompanion()
 {
@@ -59,6 +115,10 @@ ADroneCompanion::ADroneCompanion()
 	CameraMount = CreateDefaultSubobject<USceneComponent>(TEXT("CameraMount"));
 	CameraMount->SetupAttachment(DroneBody);
 
+	BeamOrigin = CreateDefaultSubobject<USceneComponent>(TEXT("BeamOrigin"));
+	BeamOrigin->SetupAttachment(DroneBody);
+	BeamOrigin->SetRelativeLocation(FVector(55.0f, 0.0f, 0.0f));
+
 	DroneCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("DroneCamera"));
 	DroneCamera->SetupAttachment(CameraMount);
 	DroneCamera->bUsePawnControlRotation = false;
@@ -78,8 +138,25 @@ ADroneCompanion::ADroneCompanion()
 	DroneStatusLight->SetCanEverAffectNavigation(false);
 
 	BatteryComponent = CreateDefaultSubobject<UDroneBatteryComponent>(TEXT("BatteryComponent"));
+	BeamToolComponent = CreateDefaultSubobject<UAgentBeamToolComponent>(TEXT("BeamToolComponent"));
+	BeamToolComponent->BeamSourceName = FName(TEXT("DroneBeam"));
+	BeamToolComponent->DamagePerSecond = 24.0f;
+	BeamToolComponent->HealingPerSecond = 18.0f;
+	BeamToolComponent->BaseTraceRadius = 7.0f;
+	BeamToolComponent->BeamRange = 3200.0f;
+	BeamToolComponent->BeamScale = 1.0f;
 
 	ConveyorSurfaceVelocity = CreateDefaultSubobject<UConveyorSurfaceVelocityComponent>(TEXT("ConveyorSurfaceVelocity"));
+}
+
+USceneComponent* ADroneCompanion::GetBeamOriginComponent() const
+{
+	if (USceneComponent* TaggedBeamOrigin = ResolveTaggedSceneComponent(const_cast<ADroneCompanion*>(this), BeamOriginTag))
+	{
+		return TaggedBeamOrigin;
+	}
+
+	return BeamOrigin;
 }
 
 void ADroneCompanion::BeginPlay()
