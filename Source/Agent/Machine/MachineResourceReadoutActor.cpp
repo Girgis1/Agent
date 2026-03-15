@@ -6,13 +6,42 @@
 #include "Components/TextRenderComponent.h"
 #include "Factory/FactoryResourceBankSubsystem.h"
 #include "Factory/MachineInputVolumeComponent.h"
+#include "Factory/MachineOutputVolumeComponent.h"
+#include "Factory/ShredderVolumeComponent.h"
 #include "Factory/StorageVolumeComponent.h"
+#include "Machine/OutputVolume.h"
 #include "Machine/MachineComponent.h"
 #include "Machine/AtomiserVolume.h"
 #include "Material/AgentResourceTypes.h"
 #include "Material/MaterialDefinitionAsset.h"
 #include "UObject/ConstructorHelpers.h"
 #include "UObject/UObjectIterator.h"
+
+namespace
+{
+void AccumulateScaledResourceMap(const TMap<FName, int32>& SourceMap, TMap<FName, int32>& InOutCombinedMap)
+{
+	for (const TPair<FName, int32>& Pair : SourceMap)
+	{
+		const FName ResourceId = Pair.Key;
+		const int32 QuantityScaled = FMath::Max(0, Pair.Value);
+		if (ResourceId.IsNone() || QuantityScaled <= 0)
+		{
+			continue;
+		}
+
+		InOutCombinedMap.FindOrAdd(ResourceId) += QuantityScaled;
+	}
+}
+
+FText FormatReadoutUnits(const double Value, const int32 DecimalPlaces)
+{
+	FNumberFormattingOptions FormattingOptions;
+	FormattingOptions.MinimumFractionalDigits = FMath::Clamp(DecimalPlaces, 0, 4);
+	FormattingOptions.MaximumFractionalDigits = FMath::Clamp(DecimalPlaces, 0, 4);
+	return FText::AsNumber(Value, &FormattingOptions);
+}
+}
 
 AMachineResourceReadoutActor::AMachineResourceReadoutActor()
 {
@@ -435,31 +464,42 @@ void AMachineResourceReadoutActor::BuildEntriesFromCurrentMachine(TArray<FMachin
 			continue;
 		}
 
+		TMap<FName, int32> CombinedResourceQuantitiesScaled;
+
 		if (const UMachineComponent* MachineComponent = CandidateActor->FindComponentByClass<UMachineComponent>())
 		{
-			BuildEntriesFromScaledResourceMap(MachineComponent->StoredResourcesScaled, OutEntries);
-			if (OutEntries.Num() > 0)
-			{
-				return;
-			}
+			AccumulateScaledResourceMap(MachineComponent->StoredResourcesScaled, CombinedResourceQuantitiesScaled);
 		}
 
 		if (const UMachineInputVolumeComponent* MachineInputVolume = CandidateActor->FindComponentByClass<UMachineInputVolumeComponent>())
 		{
-			BuildEntriesFromScaledResourceMap(MachineInputVolume->InputBufferScaled, OutEntries);
-			if (OutEntries.Num() > 0)
-			{
-				return;
-			}
+			AccumulateScaledResourceMap(MachineInputVolume->InputBufferScaled, CombinedResourceQuantitiesScaled);
+		}
+
+		if (const UShredderVolumeComponent* ShredderVolume = CandidateActor->FindComponentByClass<UShredderVolumeComponent>())
+		{
+			AccumulateScaledResourceMap(ShredderVolume->InternalResourceBufferScaled, CombinedResourceQuantitiesScaled);
+		}
+
+		if (const UMachineOutputVolumeComponent* MachineOutputVolume = CandidateActor->FindComponentByClass<UMachineOutputVolumeComponent>())
+		{
+			AccumulateScaledResourceMap(MachineOutputVolume->PendingOutputQuantitiesScaled, CombinedResourceQuantitiesScaled);
+		}
+
+		if (const UOutputVolume* OutputVolume = CandidateActor->FindComponentByClass<UOutputVolume>())
+		{
+			AccumulateScaledResourceMap(OutputVolume->PendingOutputScaled, CombinedResourceQuantitiesScaled);
 		}
 
 		if (const UStorageVolumeComponent* StorageVolume = CandidateActor->FindComponentByClass<UStorageVolumeComponent>())
 		{
-			BuildEntriesFromScaledResourceMap(StorageVolume->StoredResourceQuantitiesScaled, OutEntries);
-			if (OutEntries.Num() > 0)
-			{
-				return;
-			}
+			AccumulateScaledResourceMap(StorageVolume->StoredResourceQuantitiesScaled, CombinedResourceQuantitiesScaled);
+		}
+
+		BuildEntriesFromScaledResourceMap(CombinedResourceQuantitiesScaled, OutEntries);
+		if (OutEntries.Num() > 0)
+		{
+			return;
 		}
 	}
 }
@@ -608,13 +648,18 @@ void AMachineResourceReadoutActor::ConfigureRowVisual(int32 RowIndex, const FMac
 	const FVector RowDirection = GetRowDirectionVector();
 	RowVisual.RowRoot->SetRelativeLocation(RowDirection * (FMath::Max(1.0f, RowSpacing) * static_cast<float>(RowIndex)));
 
-	const FString LabelString = Entry.Label.IsEmpty()
-		? (Entry.ResourceId.IsNone() ? TEXT("Unknown") : Entry.ResourceId.ToString())
-		: Entry.Label.ToString();
 	const float SafeReferenceUnits = FMath::Max(1.0f, ReferenceUnits);
+	const int32 SafeDecimalPlaces = FMath::Clamp(UnitDisplayDecimalPlaces, 0, 4);
+	const FText DisplayLabel = Entry.Label.IsEmpty()
+		? FText::FromString(Entry.ResourceId.IsNone() ? TEXT("Unknown") : Entry.ResourceId.ToString())
+		: Entry.Label;
 	RowVisual.LabelText->SetWorldSize(FMath::Max(1.0f, TextWorldSize));
 	RowVisual.LabelText->SetTextRenderColor(TextColor);
-	RowVisual.LabelText->SetText(FText::FromString(FString::Printf(TEXT("%s  %.1f/%.0f"), *LabelString, Entry.Units, SafeReferenceUnits)));
+	RowVisual.LabelText->SetText(FText::Format(
+		NSLOCTEXT("MachineReadout", "RowLabelFormat", "{0}  {1}/{2}"),
+		DisplayLabel,
+		FormatReadoutUnits(Entry.Units, SafeDecimalPlaces),
+		FormatReadoutUnits(SafeReferenceUnits, SafeDecimalPlaces)));
 
 	if (BarMesh && RowVisual.FillBar->GetStaticMesh() != BarMesh)
 	{

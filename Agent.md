@@ -15,6 +15,49 @@
 ## Current Gameplay Systems
 - `AAgentCharacter` in `Source/Agent/AgentCharacter.*` now coordinates player movement, camera mode switching, and spawning the persistent companion drone.
 - `ADroneCompanion` in `Source/Agent/DroneCompanion.*` is now the drone "vehicle" actor. It always exists in the world once spawned and owns its own physics body and drone camera.
+- foundational object damage/health code now lives under `Source/Agent/Objects/`
+  - `UObjectHealthComponent` is the reusable state owner for item/object health
+  - `UObjectHealthComponent` is now opt-in on `AMaterialActor`-based objects via `bHealthEnabled`; material actors still carry the component for convenience, but they do not participate in damage, impact, machine health checks, or fracture-by-health unless that toggle is enabled
+  - Blueprint gameplay should usually call `UObjectHealthComponent.ApplyDamage(...)` directly or route through `UObjectDamageSourceComponent`
+  - `FObjectDamageSpec` still exists as the internal transport struct behind the health API
+  - damage application returns `FObjectDamageResult`
+  - health can be manual or derived from the owner's current primitive mass, which is the path intended for impact damage, shredder damage, and future fracture chains
+  - impact fragility is authored per object on `UObjectHealthComponent` using:
+    - `Impact Damage Velocity`
+    - `Max Impact Damage Velocity`
+    - `Max Impact Damage`
+    - `Impact Damage Cooldown`
+  - `DamagedPenaltyPercent` is the authored max material penalty at `0` health for the current health phase
+  - machines should consume `TotalDamagedPenaltyPercent` through `UObjectHealthComponent::GetActorMaterialRecoveryScalar(...)` or `ApplyDamagedPenaltyToResourceQuantitiesScaled(...)`
+  - `UObjectDamageSourceComponent` is the Blueprint-friendly reusable damage sender for tools, hazards, and machine volumes:
+    - assign a source kind such as `Tool`, `Shredder`, or `Hazard`
+    - set `DamageAmount`
+    - choose `Instant` or `Per Second`
+    - optionally point it at a target overlap volume and enable auto-apply
+  - `UShredderVolumeComponent` now waits for health-enabled actors to fully deplete before consuming them, so it can pair cleanly with a sibling `UObjectDamageSourceComponent`
+  - `UObjectHealthComponent` now also has a simple tuning/debug section:
+    - `bEnableImpactDamage` must be enabled per object if dropped impacts should hurt it
+    - `bShowDamageDebug` prints the source kind, health, impact velocity, applied damage, and damaged penalty while tuning
+  - fracture now lives beside health instead of inside it:
+    - `AMaterialActor` now owns `ObjectHealth` and `ObjectFracture` by default, so every material-based object can opt into fracture directly from the actor details panel
+    - `UObjectFractureComponent` listens to `OnDepleted` and automatically swaps to the configured fracture stage
+    - the primary Blueprint workflow is now the simple fracture path on `UObjectFractureComponent`:
+      - `StaticMeshFragmentActorClass` defaults to `AObjectFragmentActor`
+      - `StaticMeshFragments` is the main baked-shard array; if populated, fracture spawns all listed shard meshes
+      - `GeometryCollection` is now an optional simple fallback used only when no baked shard meshes are assigned
+      - multi-select drag/drop from the Content Browser into `StaticMeshFragments` is the intended authoring path for baked shard sets
+    - older `FractureOptions` / definition-driven paths still exist under legacy/advanced fields for special cases, but they are no longer the main authoring surface
+    - `UObjectFractureDefinitionAsset` defines one fracture stage, including optional `GeometryCollectionReference` for authoring/reference plus the real fragment actor list used for gameplay
+    - `AObjectFragmentActor` is the reusable fragment base actor with `UMaterialComponent`, `UObjectHealthComponent`, and `UObjectFractureComponent`
+    - `AObjectGeometryCollectionActor` is the default runtime wrapper used when a fracture option directly spawns a geometry collection; it carries `UMaterialComponent`, `UObjectHealthComponent`, and `UObjectFractureComponent`
+    - fragment material quantities are split exactly by normalized fragment mass ratio with largest-remainder rounding so totals stay conserved
+    - direct actor/geometry-collection replacements inherit the source actor's full material payload, total mass, velocity, and damaged penalty so machine recovery stays consistent
+    - fragment damaged penalty is inherited from the parent health phase, but physical mass is not reduced by the penalty
+    - fragment health defaults to mass-derived so multi-stage fracture chains keep getting smaller/lighter health pools from their true carried mass
+    - for Blueprint setup, the intended pattern is now:
+      - intact actor BP: derive from `AMaterialActor`, enable `ObjectFracture.bFractureEnabled`, and add baked shard meshes directly to `ObjectFracture.StaticMeshFragments`
+      - optional glass/simple-chaos flow: leave `StaticMeshFragments` empty and assign `ObjectFracture.GeometryCollection`
+      - staged / highly custom flow: use the legacy advanced fracture-definition path only when the simple shard array is not enough
 - Press `V` to cycle camera modes in this order:
   - `Third Person`: the actual camera is always the character's normal `FollowCamera` on the spring arm, but the handoff is now faked. From `First Person`, the view instantly jumps to the drone camera's last transform (only if the drone is within `800` uu / 8 meters of the spring target), the real drone is despawned, and then a temporary character-owned transition camera lerps into the normal spring-arm camera position. A hidden-shadow-only proxy mesh rides with that camera path for aesthetics.
   - `Drone Pilot`: entering from `Third Person` now respawns the real drone exactly at the current third-person camera transform and instantly switches to it, then the drone camera itself performs a short internal camera mount / FOV transition into the pilot view so the handoff feels more like the map-mode camera transition instead of a hard snap.
@@ -638,6 +681,15 @@
   - controller `LB` / `RB` rotate the placement preview
 
 ## Build Status
+- Last confirmed successful build on 2026-03-15:
+  - `AgentEditor Win64 Development` using `D:\UnrealEngine\UE_5.7\Engine\Build\BatchFiles\Build.bat`
+  - validated after moving fracture authoring onto `AMaterialActor`, adding top-level fracture-option random selection, and introducing `AObjectGeometryCollectionActor` for direct geometry collection fracture results
+- Last confirmed successful build on 2026-03-15:
+  - `AgentEditor Win64 Development` using `D:\UnrealEngine\UE_5.7\Engine\Build\BatchFiles\Build.bat`
+  - validated after adding the reusable fracture slice (`UObjectFractureComponent`, `UObjectFractureDefinitionAsset`, `AObjectFragmentActor`) and the material base-mass override support used to preserve exact fragment mass shares
+- Last confirmed successful build on 2026-03-15:
+  - `AgentEditor Win64 Development` using `D:\UnrealEngine\UE_5.7\Engine\Build\BatchFiles\Build.bat`
+  - validated after the `Objects` health refactor, new `UObjectDamageSourceComponent`, shredder health-gating, damaged-penalty machine integration, and teleport mass-preservation update
 - Last confirmed successful build on 2026-03-05:
   - `AgentEditor Win64 Development` using `D:\UnrealEngine\UE_5.7\Engine\Build\BatchFiles\Build.bat`
   - validated after resource-authoring refactor (`AResourceActor`, `UResourceComponent.Materials` randomization path, and world-config mass formula update)

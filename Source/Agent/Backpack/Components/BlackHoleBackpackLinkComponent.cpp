@@ -14,6 +14,7 @@
 #include "Material/AgentResourceTypes.h"
 #include "Material/MaterialComponent.h"
 #include "Material/MaterialDefinitionAsset.h"
+#include "Objects/Components/ObjectHealthComponent.h"
 #include "PhysicsEngine/BodyInstance.h"
 #include "UObject/UObjectIterator.h"
 #include <limits>
@@ -424,6 +425,8 @@ bool UBlackHoleBackpackLinkComponent::BuildTeleportItemFromActor(AActor* SourceA
 	{
 		TMap<FName, int32> ResourceQuantitiesScaled;
 		MaterialComponent->BuildResolvedResourceQuantitiesScaled(ResolveResourceSourcePrimitive(SourceActor), ResourceQuantitiesScaled);
+		OutQueuedItem.TotalMassKg = ComputeResourceMassKg(ResourceQuantitiesScaled);
+		UObjectHealthComponent::ApplyDamagedPenaltyToResourceQuantitiesScaled(SourceActor, ResourceQuantitiesScaled);
 		for (const TPair<FName, int32>& Pair : ResourceQuantitiesScaled)
 		{
 			const FName ResourceId = Pair.Key;
@@ -454,7 +457,6 @@ bool UBlackHoleBackpackLinkComponent::BuildTeleportItemFromActor(AActor* SourceA
 		}
 	}
 
-	OutQueuedItem.TotalMassKg = ComputeResourceMassKg(OutQueuedItem.ResourceQuantitiesScaled);
 	if (OutQueuedItem.TotalMassKg <= KINDA_SMALL_NUMBER)
 	{
 		OutQueuedItem.TotalMassKg = ResolvePrimitiveMassKgWithoutPhysicsWarning(SourcePrimitive);

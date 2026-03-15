@@ -7,8 +7,11 @@
 #include "MaterialActor.generated.h"
 
 class UMaterialComponent;
+class UObjectFractureComponent;
+class UObjectHealthComponent;
 class UStaticMesh;
 class UStaticMeshComponent;
+class UPrimitiveComponent;
 
 UCLASS()
 class AMaterialActor : public AActor
@@ -23,6 +26,12 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|MaterialActor")
 	TObjectPtr<UMaterialComponent> MaterialData = nullptr;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Objects|MaterialActor")
+	TObjectPtr<UObjectHealthComponent> ObjectHealth = nullptr;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Objects|MaterialActor")
+	TObjectPtr<UObjectFractureComponent> ObjectFracture = nullptr;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MaterialActor")
 	bool bRandomizeMeshOnSpawn = false;
@@ -41,6 +50,8 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	virtual UPrimitiveComponent* ResolveMaterialRuntimePrimitive() const;
+	virtual void HandlePostItemMeshConfiguration();
 
 	void ApplyMeshVariant();
 	void ApplyRandomizedScale();

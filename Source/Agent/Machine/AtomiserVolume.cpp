@@ -7,6 +7,7 @@
 #include "Factory/FactoryResourceBankSubsystem.h"
 #include "Material/AgentResourceTypes.h"
 #include "Material/MaterialComponent.h"
+#include "Objects/Components/ObjectHealthComponent.h"
 #include <limits>
 
 UAtomiserVolume::UAtomiserVolume()
@@ -512,6 +513,13 @@ bool UAtomiserVolume::TryConsumeOverlappingActor(AActor* OverlappingActor)
 	TMap<FName, int32> ResolvedResourcesScaled;
 	if (!TryBuildActorResourceMap(OverlappingActor, ResolvedResourcesScaled))
 	{
+		if (OverlappingActor->FindComponentByClass<UMaterialComponent>()
+			&& UObjectHealthComponent::GetActorMaterialRecoveryScalar(OverlappingActor) <= KINDA_SMALL_NUMBER)
+		{
+			OverlappingActor->Destroy();
+			return true;
+		}
+
 		ShowDebugMessage(TEXT("Rejected actor with no valid material contents"), FColor::Red);
 		return false;
 	}
@@ -545,6 +553,8 @@ bool UAtomiserVolume::TryBuildActorResourceMap(const AActor* SourceActor, TMap<F
 	{
 		return false;
 	}
+
+	UObjectHealthComponent::ApplyDamagedPenaltyToResourceQuantitiesScaled(SourceActor, OutResourceQuantitiesScaled);
 
 	for (auto It = OutResourceQuantitiesScaled.CreateIterator(); It; ++It)
 	{

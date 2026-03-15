@@ -53,6 +53,12 @@ public:
 	UFUNCTION(BlueprintPure, Category="Factory|Materials")
 	float ResolveEffectiveMassKg(const UPrimitiveComponent* SourcePrimitive) const;
 
+	UFUNCTION(BlueprintPure, Category="Factory|Materials")
+	float GetResolvedMaterialWeightKg(UPrimitiveComponent* SourcePrimitive);
+
+	UFUNCTION(BlueprintPure, Category="Factory|Materials")
+	float GetResolvedGlobalMassMultiplier() const;
+
 	UFUNCTION(BlueprintCallable, Category="Factory|Materials")
 	void InitializeRuntimeResourceState(UPrimitiveComponent* SourcePrimitive);
 
@@ -66,10 +72,22 @@ public:
 	bool ConfigureSingleResourceById(FName ResourceId, int32 QuantityScaled);
 
 	UFUNCTION(BlueprintCallable, Category="Factory|Materials")
+	void ClearConfiguredResources();
+
+	UFUNCTION(BlueprintCallable, Category="Factory|Materials")
 	float CalculateAndApplyFinalMassKg(UPrimitiveComponent* SourcePrimitive);
 
 	UFUNCTION(BlueprintCallable, Category="Factory|Materials")
 	void ResetGeneratedContents();
+
+	UFUNCTION(BlueprintCallable, Category="Factory|Materials")
+	void SetExplicitBaseMassKgOverride(float NewBaseMassKg);
+
+	UFUNCTION(BlueprintCallable, Category="Factory|Materials")
+	void ClearExplicitBaseMassKgOverride();
+
+	UFUNCTION(BlueprintPure, Category="Factory|Materials")
+	bool HasExplicitBaseMassKgOverride() const { return bUseExplicitBaseMassKgOverride; }
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Materials")
 	TArray<FMaterialEntry> Materials;
@@ -114,5 +132,11 @@ protected:
 
 	UPROPERTY(Transient)
 	float CachedBaseMassKg = 0.0f;
+
+	UPROPERTY(Transient)
+	bool bUseExplicitBaseMassKgOverride = false;
+
+	UPROPERTY(Transient)
+	float ExplicitBaseMassKgOverride = 0.0f;
 };
 

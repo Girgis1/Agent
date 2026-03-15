@@ -3,6 +3,9 @@
 #include "Material/MaterialActor.h"
 #include "Components/StaticMeshComponent.h"
 #include "Material/MaterialComponent.h"
+#include "Objects/Components/ObjectFractureComponent.h"
+#include "Objects/Components/ObjectHealthComponent.h"
+#include "Objects/Types/ObjectHealthTypes.h"
 #include "UObject/ConstructorHelpers.h"
 
 AMaterialActor::AMaterialActor()
@@ -21,6 +24,14 @@ AMaterialActor::AMaterialActor()
 	ItemMesh->SetAngularDamping(1.2f);
 
 	MaterialData = CreateDefaultSubobject<UMaterialComponent>(TEXT("MaterialData"));
+	ObjectHealth = CreateDefaultSubobject<UObjectHealthComponent>(TEXT("ObjectHealth"));
+	ObjectHealth->bHealthEnabled = false;
+	ObjectHealth->InitializationMode = EObjectHealthInitializationMode::FromCurrentMass;
+	ObjectHealth->bAutoInitializeOnBeginPlay = true;
+	ObjectHealth->bDeferMassInitializationToNextTick = true;
+	ObjectHealth->bDestroyOwnerWhenDepleted = true;
+
+	ObjectFracture = CreateDefaultSubobject<UObjectFractureComponent>(TEXT("ObjectFracture"));
 
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> DefaultMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
 	if (DefaultMesh.Succeeded())
@@ -35,12 +46,25 @@ void AMaterialActor::BeginPlay()
 
 	ApplyMeshVariant();
 	ApplyRandomizedScale();
+	HandlePostItemMeshConfiguration();
 
-	if (MaterialData && ItemMesh)
+	if (MaterialData)
 	{
 		MaterialData->ResetGeneratedContents();
-		MaterialData->InitializeRuntimeResourceState(ItemMesh);
+		if (UPrimitiveComponent* RuntimePrimitive = ResolveMaterialRuntimePrimitive())
+		{
+			MaterialData->InitializeRuntimeResourceState(RuntimePrimitive);
+		}
 	}
+}
+
+UPrimitiveComponent* AMaterialActor::ResolveMaterialRuntimePrimitive() const
+{
+	return ItemMesh;
+}
+
+void AMaterialActor::HandlePostItemMeshConfiguration()
+{
 }
 
 void AMaterialActor::ApplyMeshVariant()

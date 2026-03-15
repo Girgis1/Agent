@@ -165,6 +165,17 @@ float UMaterialComponent::ResolveEffectiveMassKg(const UPrimitiveComponent* Sour
 	return ResolvePrimitiveMassKgWithoutPhysicsWarningForMaterial(SourcePrimitive);
 }
 
+float UMaterialComponent::GetResolvedMaterialWeightKg(UPrimitiveComponent* SourcePrimitive)
+{
+	ResolveGeneratedContents(SourcePrimitive);
+	return FMath::Max(0.0f, CachedTotalMaterialWeightKg);
+}
+
+float UMaterialComponent::GetResolvedGlobalMassMultiplier() const
+{
+	return ResolveGlobalMassMultiplier(GetWorld());
+}
+
 void UMaterialComponent::InitializeRuntimeResourceState(UPrimitiveComponent* SourcePrimitive)
 {
 	ResolveGeneratedContents(SourcePrimitive);
@@ -309,6 +320,22 @@ bool UMaterialComponent::ConfigureResourcesById(const TMap<FName, int32>& Resour
 	return true;
 }
 
+void UMaterialComponent::ClearConfiguredResources()
+{
+	Materials.Reset();
+	bUseRandomizedContents = false;
+	ChosenMaterialCountMin = 1;
+	ChosenMaterialCountMax = 1;
+	TotalUnitsMin = 0.0f;
+	TotalUnitsMax = 0.0f;
+
+	ResetGeneratedContents();
+	if (UPrimitiveComponent* SourcePrimitive = ResolveOwnerSourcePrimitive(GetOwner()))
+	{
+		InitializeRuntimeResourceState(SourcePrimitive);
+	}
+}
+
 float UMaterialComponent::CalculateAndApplyFinalMassKg(UPrimitiveComponent* SourcePrimitive)
 {
 	if (!SourcePrimitive)
@@ -331,6 +358,22 @@ void UMaterialComponent::ResetGeneratedContents()
 	bGeneratedContentsResolved = false;
 	GeneratedResourceAmounts.Reset();
 	CachedTotalMaterialWeightKg = 0.0f;
+	bBaseMassResolved = false;
+	CachedBaseMassKg = 0.0f;
+}
+
+void UMaterialComponent::SetExplicitBaseMassKgOverride(float NewBaseMassKg)
+{
+	bUseExplicitBaseMassKgOverride = true;
+	ExplicitBaseMassKgOverride = FMath::Max(0.0f, NewBaseMassKg);
+	bBaseMassResolved = false;
+	CachedBaseMassKg = 0.0f;
+}
+
+void UMaterialComponent::ClearExplicitBaseMassKgOverride()
+{
+	bUseExplicitBaseMassKgOverride = false;
+	ExplicitBaseMassKgOverride = 0.0f;
 	bBaseMassResolved = false;
 	CachedBaseMassKg = 0.0f;
 }
@@ -529,6 +572,11 @@ float UMaterialComponent::ResolveLinearScaleFactor(const UPrimitiveComponent* So
 
 float UMaterialComponent::ResolveBaseMassKgForFormula(UPrimitiveComponent* SourcePrimitive)
 {
+	if (bUseExplicitBaseMassKgOverride)
+	{
+		return FMath::Max(0.0f, ExplicitBaseMassKgOverride);
+	}
+
 	if (!SourcePrimitive)
 	{
 		return 0.0f;

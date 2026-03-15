@@ -6,6 +6,7 @@
 #include "Material/MaterialComponent.h"
 #include "Material/AgentResourceTypes.h"
 #include "Machine/MachineComponent.h"
+#include "Objects/Components/ObjectHealthComponent.h"
 
 namespace
 {
@@ -200,6 +201,7 @@ bool UInputVolume::TryConsumeOverlappingActor(AActor* OverlappingActor)
 	{
 		UPrimitiveComponent* SourcePrimitive = ResolveResourceSourcePrimitive(OverlappingActor);
 		ResourceComponent->BuildResolvedResourceQuantitiesScaled(SourcePrimitive, ActorResourcesScaled);
+		UObjectHealthComponent::ApplyDamagedPenaltyToResourceQuantitiesScaled(OverlappingActor, ActorResourcesScaled);
 	}
 
 	if (ActorResourcesScaled.Num() > 0)

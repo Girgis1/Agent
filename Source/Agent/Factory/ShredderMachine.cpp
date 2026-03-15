@@ -50,6 +50,7 @@ AShredderMachine::AShredderMachine()
 	BottomIntakeVolume->ShredDelayMinSeconds = 0.0f;
 	BottomIntakeVolume->ShredDelayMaxSeconds = 0.0f;
 	BottomIntakeVolume->ProcessingInterval = 0.0f;
+	BottomIntakeVolume->bConsumeOverlapsImmediately = true;
 
 	OutputVolume = CreateDefaultSubobject<UMachineOutputVolumeComponent>(TEXT("OutputVolume"));
 	OutputVolume->SetupAttachment(SceneRoot);

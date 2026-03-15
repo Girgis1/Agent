@@ -174,6 +174,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Readout|Text")
 	FColor TextColor = FColor::White;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Readout|Text", meta=(ClampMin="0", ClampMax="4", UIMin="0", UIMax="4"))
+	int32 UnitDisplayDecimalPlaces = 2;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Machine|Readout|Refresh")
 	bool bAutoRefresh = true;
 

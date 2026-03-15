@@ -8,6 +8,7 @@
 #include "GameFramework/Pawn.h"
 #include "Material/MaterialComponent.h"
 #include "Material/AgentResourceTypes.h"
+#include "Objects/Components/ObjectHealthComponent.h"
 
 namespace
 {
@@ -83,14 +84,31 @@ float UShredderVolumeComponent::GetBufferedUnits(FName ResourceId) const
 bool UShredderVolumeComponent::TryProcessOverlappingActor(AActor* OverlappingActor)
 {
 	UPrimitiveComponent* SourcePrimitive = FindBestShredSourcePrimitive(OverlappingActor);
+	UMaterialComponent* ResourceData = OverlappingActor ? OverlappingActor->FindComponentByClass<UMaterialComponent>() : nullptr;
 	const TWeakObjectPtr<AActor> ActorKey(OverlappingActor);
 	if (!IsActorEligibleForShredding(OverlappingActor, SourcePrimitive))
 	{
-		PendingReadyTimeByActor.Remove(ActorKey);
+		ClearTrackedActorState(ActorKey);
 		return false;
 	}
 
-	if (!IsActorReadyForShredding(OverlappingActor))
+	const bool bShouldForceCleanup = ShouldForceCleanupActor(OverlappingActor);
+	const bool bShouldConsumeImmediately = bConsumeOverlapsImmediately && (ResourceData != nullptr || bDestroyWithoutResourceComponent);
+	if (bRequireHealthDepletionBeforeShredding)
+	{
+		if (!bShouldConsumeImmediately)
+		{
+			if (UObjectHealthComponent* ObjectHealth = UObjectHealthComponent::FindObjectHealthComponent(OverlappingActor))
+			{
+				if (!ObjectHealth->IsDepleted() && !bShouldForceCleanup)
+				{
+					return false;
+				}
+			}
+		}
+	}
+
+	if (!bShouldForceCleanup && !bShouldConsumeImmediately && !IsActorReadyForShredding(OverlappingActor))
 	{
 		return false;
 	}
@@ -111,22 +129,28 @@ bool UShredderVolumeComponent::TryProcessOverlappingActor(AActor* OverlappingAct
 		InternalResourceBufferScaled.FindOrAdd(PayloadAmount.ResourceId) += PayloadAmount.GetScaledQuantity();
 		FlushBufferedResourcesToOutput();
 		PayloadActor->Destroy();
-		PendingReadyTimeByActor.Remove(ActorKey);
+		ClearTrackedActorState(ActorKey);
 		return true;
 	}
 
 	if (!SourcePrimitive)
 	{
+		if (bShouldForceCleanup)
+		{
+			OverlappingActor->Destroy();
+			ClearTrackedActorState(ActorKey);
+			return true;
+		}
+
 		return false;
 	}
 
-	UMaterialComponent* ResourceData = OverlappingActor->FindComponentByClass<UMaterialComponent>();
 	if (!ResourceData)
 	{
-		if (bDestroyWithoutResourceComponent)
+		if (bDestroyWithoutResourceComponent || bShouldForceCleanup)
 		{
 			OverlappingActor->Destroy();
-			PendingReadyTimeByActor.Remove(ActorKey);
+			ClearTrackedActorState(ActorKey);
 			return true;
 		}
 
@@ -134,8 +158,15 @@ bool UShredderVolumeComponent::TryProcessOverlappingActor(AActor* OverlappingAct
 	}
 
 	TArray<FResourceAmount> RecoveredResources;
-	if (!TryBuildRecoveredResources(ResourceData, SourcePrimitive, RecoveredResources))
+	if (!TryBuildRecoveredResources(OverlappingActor, ResourceData, SourcePrimitive, RecoveredResources))
 	{
+		if (bDestroyIfNoRecoverableResources || bShouldForceCleanup)
+		{
+			OverlappingActor->Destroy();
+			ClearTrackedActorState(ActorKey);
+			return true;
+		}
+
 		return false;
 	}
 
@@ -145,7 +176,20 @@ bool UShredderVolumeComponent::TryProcessOverlappingActor(AActor* OverlappingAct
 		TotalRecoveredScaled += RecoveredAmount.GetScaledQuantity();
 	}
 
-	if (TotalRecoveredScaled <= 0 || !HasCapacityForAdditionalQuantity(TotalRecoveredScaled))
+	if (TotalRecoveredScaled <= 0)
+	{
+		const float MaterialRecoveryScalar = UObjectHealthComponent::GetActorMaterialRecoveryScalar(OverlappingActor);
+		if (MaterialRecoveryScalar <= KINDA_SMALL_NUMBER || bDestroyIfNoRecoverableResources || bShouldForceCleanup)
+		{
+			OverlappingActor->Destroy();
+			ClearTrackedActorState(ActorKey);
+			return true;
+		}
+
+		return false;
+	}
+
+	if (!HasCapacityForAdditionalQuantity(TotalRecoveredScaled))
 	{
 		return false;
 	}
@@ -153,7 +197,7 @@ bool UShredderVolumeComponent::TryProcessOverlappingActor(AActor* OverlappingAct
 	CommitRecoveredResources(RecoveredResources);
 	FlushBufferedResourcesToOutput();
 	OverlappingActor->Destroy();
-	PendingReadyTimeByActor.Remove(ActorKey);
+	ClearTrackedActorState(ActorKey);
 	return true;
 }
 
@@ -168,7 +212,11 @@ int32 UShredderVolumeComponent::GetCurrentStoredQuantityScaled() const
 	return TotalQuantityScaled;
 }
 
-bool UShredderVolumeComponent::TryBuildRecoveredResources(UMaterialComponent* ResourceData, UPrimitiveComponent* SourcePrimitive, TArray<FResourceAmount>& OutRecoveredResources) const
+bool UShredderVolumeComponent::TryBuildRecoveredResources(
+	const AActor* SourceActor,
+	UMaterialComponent* ResourceData,
+	UPrimitiveComponent* SourcePrimitive,
+	TArray<FResourceAmount>& OutRecoveredResources) const
 {
 	OutRecoveredResources.Reset();
 	if (!ResourceData || !SourcePrimitive)
@@ -176,11 +224,17 @@ bool UShredderVolumeComponent::TryBuildRecoveredResources(UMaterialComponent* Re
 		return false;
 	}
 
-	const float RecoveryScalar = FMath::Max(0.0f, BaseRecoveryScalar);
-	if (RecoveryScalar <= 0.0f)
+	const float BaseScalar = FMath::Max(0.0f, BaseRecoveryScalar);
+	if (BaseScalar <= 0.0f)
 	{
 		return false;
 	}
+
+	const float DamagedPenaltyRecoveryScalar = FMath::Clamp(
+		UObjectHealthComponent::GetActorMaterialRecoveryScalar(SourceActor),
+		0.0f,
+		1.0f);
+	const float EffectiveRecoveryScalar = BaseScalar * DamagedPenaltyRecoveryScalar;
 
 	TMap<FName, int32> ResolvedQuantitiesScaled;
 	if (!ResourceData->BuildResolvedResourceQuantitiesScaled(SourcePrimitive, ResolvedQuantitiesScaled))
@@ -199,7 +253,7 @@ bool UShredderVolumeComponent::TryBuildRecoveredResources(UMaterialComponent* Re
 
 		FResourceAmount RecoveredAmount;
 		RecoveredAmount.ResourceId = ResourceId;
-		RecoveredAmount.SetScaledQuantity(FMath::Max(0, FMath::RoundToInt(static_cast<float>(QuantityScaled) * RecoveryScalar)));
+		RecoveredAmount.SetScaledQuantity(FMath::Max(0, FMath::RoundToInt(static_cast<float>(QuantityScaled) * EffectiveRecoveryScalar)));
 		if (RecoveredAmount.HasQuantity())
 		{
 			OutRecoveredResources.Add(RecoveredAmount);
@@ -327,14 +381,59 @@ bool UShredderVolumeComponent::IsActorReadyForShredding(AActor* OverlappingActor
 	return false;
 }
 
+bool UShredderVolumeComponent::ShouldForceCleanupActor(AActor* OverlappingActor)
+{
+	if (!IsValid(OverlappingActor))
+	{
+		return false;
+	}
+
+	const TWeakObjectPtr<AActor> ActorKey(OverlappingActor);
+	if (!bForceCleanupActorsStuckInVolume)
+	{
+		ForceCleanupReadyTimeByActor.Remove(ActorKey);
+		return false;
+	}
+
+	const float SafeDelaySeconds = FMath::Max(0.0f, ForceCleanupDelaySeconds);
+	if (SafeDelaySeconds <= KINDA_SMALL_NUMBER)
+	{
+		return true;
+	}
+
+	const float NowSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
+	if (const float* FoundReadyTime = ForceCleanupReadyTimeByActor.Find(ActorKey))
+	{
+		return NowSeconds >= *FoundReadyTime;
+	}
+
+	ForceCleanupReadyTimeByActor.Add(ActorKey, NowSeconds + SafeDelaySeconds);
+	return false;
+}
+
+void UShredderVolumeComponent::ClearTrackedActorState(const TWeakObjectPtr<AActor>& ActorKey)
+{
+	PendingReadyTimeByActor.Remove(ActorKey);
+	ForceCleanupReadyTimeByActor.Remove(ActorKey);
+}
+
 void UShredderVolumeComponent::CleanupTrackedActors()
 {
-	if (PendingReadyTimeByActor.Num() == 0)
+	if (PendingReadyTimeByActor.Num() == 0 && ForceCleanupReadyTimeByActor.Num() == 0)
 	{
 		return;
 	}
 
 	for (auto It = PendingReadyTimeByActor.CreateIterator(); It; ++It)
+	{
+		AActor* TrackedActor = It.Key().Get();
+		if (!IsValid(TrackedActor) || !IsOverlappingActor(TrackedActor))
+		{
+			It.RemoveCurrent();
+		}
+	}
+
+	for (auto It = ForceCleanupReadyTimeByActor.CreateIterator(); It; ++It)
 	{
 		AActor* TrackedActor = It.Key().Get();
 		if (!IsValid(TrackedActor) || !IsOverlappingActor(TrackedActor))

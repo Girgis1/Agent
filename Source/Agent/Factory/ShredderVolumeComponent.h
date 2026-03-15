@@ -27,12 +27,14 @@ protected:
 	virtual bool TryProcessOverlappingActor(AActor* OverlappingActor) override;
 	virtual int32 GetCurrentStoredQuantityScaled() const override;
 
-	bool TryBuildRecoveredResources(UMaterialComponent* ResourceData, UPrimitiveComponent* SourcePrimitive, TArray<FResourceAmount>& OutRecoveredResources) const;
+	bool TryBuildRecoveredResources(const AActor* SourceActor, UMaterialComponent* ResourceData, UPrimitiveComponent* SourcePrimitive, TArray<FResourceAmount>& OutRecoveredResources) const;
 	void CommitRecoveredResources(const TArray<FResourceAmount>& RecoveredResources);
 	void FlushBufferedResourcesToOutput();
 	UMachineOutputVolumeComponent* FindOutputVolume() const;
 	bool IsActorEligibleForShredding(const AActor* OverlappingActor, const UPrimitiveComponent* SourcePrimitive) const;
 	bool IsActorReadyForShredding(AActor* OverlappingActor);
+	bool ShouldForceCleanupActor(AActor* OverlappingActor);
+	void ClearTrackedActorState(const TWeakObjectPtr<AActor>& ActorKey);
 	void CleanupTrackedActors();
 
 public:
@@ -54,13 +56,38 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Shredder|Processing")
 	bool bIgnorePawns = true;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Shredder|Processing")
+	bool bRequireHealthDepletionBeforeShredding = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Shredder|Processing")
+	bool bConsumeOverlapsImmediately = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Shredder|Processing|Pawn")
+	bool bRagdollAgentCharactersOnOverlap = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Shredder|Processing|Pawn")
+	bool bConsumeRagdolledAgentCharacters = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Shredder|Processing|Pawn")
+	bool bUnpossessPawnsBeforeDestroy = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Shredder|Processing")
+	bool bForceCleanupActorsStuckInVolume = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Shredder|Processing", meta=(ClampMin="0.0", UIMin="0.0", EditCondition="bForceCleanupActorsStuckInVolume", Units="s"))
+	float ForceCleanupDelaySeconds = 2.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Shredder")
 	bool bDestroyWithoutResourceComponent = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|Shredder")
+	bool bDestroyIfNoRecoverableResources = true;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Shredder")
 	TMap<FName, int32> InternalResourceBufferScaled;
 
 protected:
 	TMap<TWeakObjectPtr<AActor>, float> PendingReadyTimeByActor;
+	TMap<TWeakObjectPtr<AActor>, float> ForceCleanupReadyTimeByActor;
 };
 

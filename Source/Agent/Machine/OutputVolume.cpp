@@ -500,6 +500,11 @@ bool UOutputVolume::TryEmitOneTeleportItem()
 
 	if (UPrimitiveComponent* PayloadPrimitive = Cast<UPrimitiveComponent>(SpawnedActor->GetRootComponent()))
 	{
+		if (TeleportRequest.StoredMassKg > KINDA_SMALL_NUMBER)
+		{
+			PayloadPrimitive->SetMassOverrideInKg(NAME_None, TeleportRequest.StoredMassKg, true);
+		}
+
 		PayloadPrimitive->AddImpulse(GetSpawnRotation().Vector() * FMath::Max(0.0f, SpawnImpulse), NAME_None, true);
 	}
 
