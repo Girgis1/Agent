@@ -6,7 +6,8 @@
 #include "Components/StaticMeshComponent.h"
 #include "Factory/FactoryPlacementHelpers.h"
 #include "Factory/MachineOutputVolumeComponent.h"
-#include "Factory/ShredderVolumeComponent.h"
+#include "Factory/ShredderBottomVolumeComponent.h"
+#include "Factory/ShredderTopVolumeComponent.h"
 #include "UObject/ConstructorHelpers.h"
 
 AShredderMachine::AShredderMachine()
@@ -34,23 +35,15 @@ AShredderMachine::AShredderMachine()
 	MachineMesh->SetGenerateOverlapEvents(false);
 	MachineMesh->SetCanEverAffectNavigation(false);
 
-	IntakeVolume = CreateDefaultSubobject<UShredderVolumeComponent>(TEXT("IntakeVolume"));
+	IntakeVolume = CreateDefaultSubobject<UShredderTopVolumeComponent>(TEXT("IntakeVolume"));
 	IntakeVolume->SetupAttachment(SceneRoot);
 	IntakeVolume->SetBoxExtent(FVector(48.0f, 48.0f, 42.0f));
 	IntakeVolume->SetRelativeLocation(FVector(-55.0f, 0.0f, 55.0f));
-	IntakeVolume->bUseShredDelay = true;
-	IntakeVolume->ShredDelayMinSeconds = 1.0f;
-	IntakeVolume->ShredDelayMaxSeconds = 5.0f;
 
-	BottomIntakeVolume = CreateDefaultSubobject<UShredderVolumeComponent>(TEXT("BottomIntakeVolume"));
+	BottomIntakeVolume = CreateDefaultSubobject<UShredderBottomVolumeComponent>(TEXT("BottomIntakeVolume"));
 	BottomIntakeVolume->SetupAttachment(SceneRoot);
 	BottomIntakeVolume->SetBoxExtent(FVector(48.0f, 48.0f, 10.0f));
 	BottomIntakeVolume->SetRelativeLocation(FVector(-55.0f, 0.0f, 2.0f));
-	BottomIntakeVolume->bUseShredDelay = false;
-	BottomIntakeVolume->ShredDelayMinSeconds = 0.0f;
-	BottomIntakeVolume->ShredDelayMaxSeconds = 0.0f;
-	BottomIntakeVolume->ProcessingInterval = 0.0f;
-	BottomIntakeVolume->bConsumeOverlapsImmediately = true;
 
 	OutputVolume = CreateDefaultSubobject<UMachineOutputVolumeComponent>(TEXT("OutputVolume"));
 	OutputVolume->SetupAttachment(SceneRoot);

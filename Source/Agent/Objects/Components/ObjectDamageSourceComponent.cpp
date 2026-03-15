@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Objects/Components/ObjectDamageSourceComponent.h"
+#include "AgentCharacter.h"
 #include "Components/PrimitiveComponent.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
@@ -34,11 +35,27 @@ void UObjectDamageSourceComponent::BeginPlay()
 {
 	Super::BeginPlay();
 	AutoApplyAccumulatorSeconds = 0.0f;
+	RefreshOverlapBinding();
+}
+
+void UObjectDamageSourceComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	UnbindFromTargetPrimitiveOverlap();
+	Super::EndPlay(EndPlayReason);
 }
 
 void UObjectDamageSourceComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	if (bRagdollAgentCharactersOnOverlap)
+	{
+		RefreshOverlapBinding();
+	}
+	else
+	{
+		UnbindFromTargetPrimitiveOverlap();
+	}
 
 	if (!bEnabled || !bAutoApplyToOverlaps)
 	{
@@ -166,6 +183,8 @@ int32 UObjectDamageSourceComponent::ApplyConfiguredDamageToCurrentOverlaps(float
 			continue;
 		}
 
+		TryTriggerConfiguredRagdoll(OverlappingActor);
+
 		if (bOnlyAffectActorsWithHealth && !UObjectHealthComponent::FindObjectHealthComponent(OverlappingActor))
 		{
 			continue;
@@ -184,6 +203,75 @@ int32 UObjectDamageSourceComponent::ApplyConfiguredDamageToCurrentOverlaps(float
 	}
 
 	return DamagedActorCount;
+}
+
+void UObjectDamageSourceComponent::HandleTargetPrimitiveBeginOverlap(
+	UPrimitiveComponent* OverlappedComponent,
+	AActor* OtherActor,
+	UPrimitiveComponent* OtherComp,
+	int32 OtherBodyIndex,
+	bool bFromSweep,
+	const FHitResult& SweepResult)
+{
+	TryTriggerConfiguredRagdoll(OtherActor);
+}
+
+void UObjectDamageSourceComponent::RefreshOverlapBinding()
+{
+	if (!bRagdollAgentCharactersOnOverlap)
+	{
+		UnbindFromTargetPrimitiveOverlap();
+		return;
+	}
+
+	UPrimitiveComponent* ResolvedPrimitive = ResolveTargetPrimitive();
+	if (BoundTargetOverlapPrimitive == ResolvedPrimitive)
+	{
+		return;
+	}
+
+	UnbindFromTargetPrimitiveOverlap();
+	BoundTargetOverlapPrimitive = ResolvedPrimitive;
+	if (BoundTargetOverlapPrimitive)
+	{
+		BoundTargetOverlapPrimitive->OnComponentBeginOverlap.AddUniqueDynamic(
+			this,
+			&UObjectDamageSourceComponent::HandleTargetPrimitiveBeginOverlap);
+	}
+}
+
+void UObjectDamageSourceComponent::UnbindFromTargetPrimitiveOverlap()
+{
+	if (!BoundTargetOverlapPrimitive)
+	{
+		return;
+	}
+
+	BoundTargetOverlapPrimitive->OnComponentBeginOverlap.RemoveDynamic(
+		this,
+		&UObjectDamageSourceComponent::HandleTargetPrimitiveBeginOverlap);
+	BoundTargetOverlapPrimitive = nullptr;
+}
+
+bool UObjectDamageSourceComponent::TryTriggerConfiguredRagdoll(AActor* TargetActor) const
+{
+	if (!bEnabled || !bRagdollAgentCharactersOnOverlap || !IsValid(TargetActor))
+	{
+		return false;
+	}
+
+	if (bIgnoreOwner && TargetActor == GetOwner())
+	{
+		return false;
+	}
+
+	AAgentCharacter* AgentCharacter = Cast<AAgentCharacter>(TargetActor);
+	if (!AgentCharacter)
+	{
+		return false;
+	}
+
+	return AgentCharacter->RequestEnterRagdoll(EAgentRagdollReason::Scripted);
 }
 
 UPrimitiveComponent* UObjectDamageSourceComponent::ResolveTargetPrimitive() const

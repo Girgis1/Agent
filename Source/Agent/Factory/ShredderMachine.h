@@ -9,7 +9,8 @@
 class UBoxComponent;
 class UMachineOutputVolumeComponent;
 class USceneComponent;
-class UShredderVolumeComponent;
+class UShredderBottomVolumeComponent;
+class UShredderTopVolumeComponent;
 class UStaticMeshComponent;
 
 UCLASS()
@@ -30,10 +31,10 @@ public:
 	TObjectPtr<UStaticMeshComponent> MachineMesh = nullptr;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Machine")
-	TObjectPtr<UShredderVolumeComponent> IntakeVolume = nullptr;
+	TObjectPtr<UShredderTopVolumeComponent> IntakeVolume = nullptr;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Machine")
-	TObjectPtr<UShredderVolumeComponent> BottomIntakeVolume = nullptr;
+	TObjectPtr<UShredderBottomVolumeComponent> BottomIntakeVolume = nullptr;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|Machine")
 	TObjectPtr<UMachineOutputVolumeComponent> OutputVolume = nullptr;

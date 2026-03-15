@@ -10,7 +10,7 @@
 
 namespace
 {
-UPrimitiveComponent* ResolveOwnerSourcePrimitive(AActor* OwnerActor)
+UPrimitiveComponent* ResolveOwnerHealthSourcePrimitive(AActor* OwnerActor)
 {
 	if (!OwnerActor)
 	{
@@ -710,7 +710,7 @@ void UObjectHealthComponent::BroadcastHealthChangedIfNeeded(
 
 UPrimitiveComponent* UObjectHealthComponent::ResolveSourcePrimitive() const
 {
-	return ResolveOwnerSourcePrimitive(GetOwner());
+	return ResolveOwnerHealthSourcePrimitive(GetOwner());
 }
 
 UPrimitiveComponent* UObjectHealthComponent::ResolveImpactPrimitive() const

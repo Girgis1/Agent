@@ -22,6 +22,7 @@ public:
 	UObjectDamageSourceComponent();
 
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void TickComponent(float DeltaTime, enum ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
 	UFUNCTION(BlueprintPure, Category="Objects|Damage Source")
@@ -76,14 +77,32 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Damage Source|Overlap")
 	bool bOnlyAffectActorsWithHealth = true;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Damage Source|Overlap", meta=(ToolTip="If enabled, overlapping AgentCharacter pawns are forced into ragdoll as soon as they enter the target overlap volume."))
+	bool bRagdollAgentCharactersOnOverlap = false;
+
 	UPROPERTY(BlueprintAssignable, Category="Objects|Damage Source")
 	FOnObjectDamageSourceAppliedSignature OnConfiguredDamageApplied;
 
 protected:
+	UFUNCTION()
+	void HandleTargetPrimitiveBeginOverlap(
+		UPrimitiveComponent* OverlappedComponent,
+		AActor* OtherActor,
+		UPrimitiveComponent* OtherComp,
+		int32 OtherBodyIndex,
+		bool bFromSweep,
+		const FHitResult& SweepResult);
+
+	void RefreshOverlapBinding();
+	void UnbindFromTargetPrimitiveOverlap();
+	bool TryTriggerConfiguredRagdoll(AActor* TargetActor) const;
 	UPrimitiveComponent* ResolveTargetPrimitive() const;
 	float ResolveEffectiveDeltaTime(float RequestedDeltaTime) const;
 	FName ResolveEffectiveSourceName() const;
 
 	UPROPERTY(Transient)
 	float AutoApplyAccumulatorSeconds = 0.0f;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UPrimitiveComponent> BoundTargetOverlapPrimitive = nullptr;
 };
