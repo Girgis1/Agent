@@ -343,6 +343,19 @@ bool AMiningSwarmMachine::HandleBotDocking(
 
 FVector AMiningSwarmMachine::GetBotHomeLocation(const AMiningBotActor* Bot) const
 {
+	if (BotDockVolume && IsValid(Bot))
+	{
+		const FTransform DockTransform = BotDockVolume->GetComponentTransform();
+		const FVector DockExtent = BotDockVolume->GetScaledBoxExtent()
+			* FMath::Clamp(BotDockAreaFill, 0.1f, 1.0f);
+
+		FVector LocalBotLocation = DockTransform.InverseTransformPositionNoScale(Bot->GetActorLocation());
+		LocalBotLocation.X = FMath::Clamp(LocalBotLocation.X, -DockExtent.X, DockExtent.X);
+		LocalBotLocation.Y = FMath::Clamp(LocalBotLocation.Y, -DockExtent.Y, DockExtent.Y);
+		LocalBotLocation.Z = FMath::Clamp(LocalBotLocation.Z, -DockExtent.Z, DockExtent.Z);
+		return DockTransform.TransformPositionNoScale(LocalBotLocation);
+	}
+
 	return ResolveBotDockPoint(ResolveBotIndex(Bot));
 }
 
@@ -352,6 +365,27 @@ FVector AMiningSwarmMachine::GetBotHomeNormal() const
 		? BotDockVolume->GetUpVector()
 		: (BotSpawnRoot ? BotSpawnRoot->GetUpVector() : GetActorUpVector());
 	return PreferredNormal.GetSafeNormal(UE_SMALL_NUMBER, FVector::UpVector);
+}
+
+bool AMiningSwarmMachine::IsBotInsideDockVolume(
+	const AMiningBotActor* Bot,
+	float ExtraPlanarToleranceCm,
+	float ExtraVerticalToleranceCm) const
+{
+	if (!BotDockVolume || !IsValid(Bot))
+	{
+		return false;
+	}
+
+	const FTransform DockTransform = BotDockVolume->GetComponentTransform();
+	const FVector DockExtent = BotDockVolume->GetScaledBoxExtent()
+		* FMath::Clamp(BotDockAreaFill, 0.1f, 1.0f);
+	const float PlanarTolerance = FMath::Max(0.0f, ExtraPlanarToleranceCm);
+	const float VerticalTolerance = FMath::Max(0.0f, ExtraVerticalToleranceCm);
+	const FVector LocalBotLocation = DockTransform.InverseTransformPositionNoScale(Bot->GetActorLocation());
+	return FMath::Abs(LocalBotLocation.X) <= (DockExtent.X + PlanarTolerance)
+		&& FMath::Abs(LocalBotLocation.Y) <= (DockExtent.Y + PlanarTolerance)
+		&& FMath::Abs(LocalBotLocation.Z) <= (DockExtent.Z + VerticalTolerance);
 }
 
 void AMiningSwarmMachine::StartActivationWarmup()
@@ -652,7 +686,24 @@ bool AMiningSwarmMachine::TrySpawnSingleBot()
 		return false;
 	}
 
-	UClass* SpawnClass = MiningBotClass.Get() ? MiningBotClass.Get() : AMiningBotActor::StaticClass();
+	UClass* SpawnClass = nullptr;
+	static UClass* CachedMiningBotBlueprintClass = nullptr;
+	if (!CachedMiningBotBlueprintClass)
+	{
+		CachedMiningBotBlueprintClass = LoadClass<AMiningBotActor>(
+			nullptr,
+			TEXT("/Game/Factory/Mining/BP_MiningBot.BP_MiningBot_C"));
+	}
+
+	if (CachedMiningBotBlueprintClass && CachedMiningBotBlueprintClass->IsChildOf(AMiningBotActor::StaticClass()))
+	{
+		SpawnClass = CachedMiningBotBlueprintClass;
+	}
+
+	if (!SpawnClass)
+	{
+		SpawnClass = MiningBotClass.Get() ? MiningBotClass.Get() : AMiningBotActor::StaticClass();
+	}
 	const int32 BotIndex = SpawnedBots.Num();
 	const FVector SpawnLocation = ResolveBotDockPoint(BotIndex);
 	const FRotator SpawnRotation = (BotDockVolume

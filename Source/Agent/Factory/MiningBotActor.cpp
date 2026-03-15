@@ -67,8 +67,9 @@ AMiningBotActor::AMiningBotActor()
 
 	BotMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BotMesh"));
 	BotMesh->SetupAttachment(SceneRoot);
-	BotMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	BotMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
+	BotMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	BotMesh->SetCollisionResponseToAllChannels(ECR_Block);
+	BotMesh->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
 	BotMesh->SetGenerateOverlapEvents(false);
 	BotMesh->SetCanEverAffectNavigation(false);
 	BotMesh->SetSimulatePhysics(false);
@@ -147,6 +148,12 @@ void AMiningBotActor::Tick(float DeltaSeconds)
 		return;
 	}
 
+	if (RuntimeState == EMiningBotRuntimeState::PhysicsRagdoll)
+	{
+		HandlePhysicsRagdoll(DeltaSeconds);
+		return;
+	}
+
 	if (!OwningSwarmMachine->IsSwarmEnabled())
 	{
 		CurrentTargetNode = nullptr;
@@ -189,6 +196,10 @@ void AMiningBotActor::Tick(float DeltaSeconds)
 		HandleMining(DeltaSeconds);
 		break;
 
+	case EMiningBotRuntimeState::PhysicsRagdoll:
+		HandlePhysicsRagdoll(DeltaSeconds);
+		break;
+
 	case EMiningBotRuntimeState::ReturningToSwarm:
 	case EMiningBotRuntimeState::WaitingForOutput:
 		HandleReturnToSwarm(DeltaSeconds);
@@ -221,6 +232,28 @@ void AMiningBotActor::SetMiningTuning(int32 InCapacityUnits, float InTravelSpeed
 	MiningCapacityUnits = FMath::Max(1, InCapacityUnits);
 	TravelSpeedCmPerSecond = FMath::Clamp(InTravelSpeedCmPerSecond, 1.0f, 100.0f);
 	MiningSpeedMultiplier = FMath::Max(0.1f, InMiningSpeedMultiplier);
+}
+
+UPrimitiveComponent* AMiningBotActor::GetPickupPhysicsComponent() const
+{
+	return GetActiveCollisionBody();
+}
+
+void AMiningBotActor::NotifyPickedUpByPhysicsHandle(bool bIsPickedUp)
+{
+	bHeldByPhysicsHandle = bIsPickedUp;
+	if (bHeldByPhysicsHandle)
+	{
+		EnterPhysicsRagdollMode(TEXT("Grabbed"), false);
+	}
+	else
+	{
+		PhysicsRecoveryRestTime = 0.0f;
+		if (RuntimeState == EMiningBotRuntimeState::PhysicsRagdoll)
+		{
+			SetRuntimeState(EMiningBotRuntimeState::PhysicsRagdoll, TEXT("Thrown"));
+		}
+	}
 }
 
 int32 AMiningBotActor::GetCarriedTotalQuantityScaled() const
@@ -552,8 +585,14 @@ void AMiningBotActor::HandleTravelToNode(float DeltaSeconds)
 	}
 
 	const bool bReachedTarget = MoveTowardsPoint(CurrentTargetLocation, CurrentTargetSurfaceNormal, DeltaSeconds);
+	if (RuntimeState == EMiningBotRuntimeState::PhysicsRagdoll)
+	{
+		return;
+	}
+
 	if (bReachedTarget)
 	{
+		ResetMovementFailures();
 		StartMiningCycle();
 	}
 }
@@ -561,6 +600,10 @@ void AMiningBotActor::HandleTravelToNode(float DeltaSeconds)
 void AMiningBotActor::HandleMining(float DeltaSeconds)
 {
 	MoveTowardsPoint(CurrentTargetLocation, CurrentTargetSurfaceNormal, DeltaSeconds);
+	if (RuntimeState == EMiningBotRuntimeState::PhysicsRagdoll)
+	{
+		return;
+	}
 
 	MiningTimeRemaining = FMath::Max(0.0f, MiningTimeRemaining - FMath::Max(0.0f, DeltaSeconds));
 	if (MiningTimeRemaining > 0.0f)
@@ -580,9 +623,27 @@ void AMiningBotActor::HandleReturnToSwarm(float DeltaSeconds)
 		return;
 	}
 
-	const FVector HomeLocation = OwningSwarmMachine->GetBotHomeLocation(this);
-	const FVector HomeNormal = OwningSwarmMachine->GetBotHomeNormal();
-	const bool bAtHome = MoveTowardsPoint(HomeLocation, HomeNormal, DeltaSeconds);
+	const float DockPlanarTolerance = FMath::Max(ArrivalToleranceCm, 80.0f);
+	const float DockVerticalTolerance = FMath::Max(
+		ArrivalToleranceCm,
+		OwningSwarmMachine->BotDockVerticalAcceptanceCm);
+	const bool bInsideDockVolume = OwningSwarmMachine->IsBotInsideDockVolume(
+		this,
+		DockPlanarTolerance,
+		DockVerticalTolerance);
+	bool bAtHome = bInsideDockVolume;
+	if (!bAtHome)
+	{
+		const FVector HomeLocation = OwningSwarmMachine->GetBotHomeLocation(this);
+		const FVector HomeNormal = OwningSwarmMachine->GetBotHomeNormal();
+		bAtHome = MoveTowardsPoint(HomeLocation, HomeNormal, DeltaSeconds);
+	}
+
+	if (RuntimeState == EMiningBotRuntimeState::PhysicsRagdoll)
+	{
+		return;
+	}
+
 	if (!bAtHome)
 	{
 		SetRuntimeState(EMiningBotRuntimeState::ReturningToSwarm, TEXT("Returning"));
@@ -630,6 +691,7 @@ bool AMiningBotActor::MoveTowardsPoint(const FVector& TargetLocation, const FVec
 	const float MaxStepDistance = FMath::Min(RequestedStepDistance, FMath::Max(1.0f, MaxTraversalStepPerTickCm));
 
 	const FVector CurrentLocation = GetActorLocation();
+	const FVector StartMoveLocation = CurrentLocation;
 	FVector ActiveSurfaceNormal = RequestedSurfaceNormal;
 	FHitResult CurrentSurfaceHit;
 	if (ResolveSupportSurface(CurrentLocation, RequestedSurfaceNormal, CurrentSurfaceHit))
@@ -734,6 +796,8 @@ bool AMiningBotActor::MoveTowardsPoint(const FVector& TargetLocation, const FVec
 
 	if (bHasFinalSurface)
 	{
+		ConsecutiveNoSurfaceFailureCount = 0;
+		NoSurfaceAirborneTimeSeconds = 0.0f;
 		NewSurfaceNormal = FinalSurfaceHit.ImpactNormal.GetSafeNormal(UE_SMALL_NUMBER, NewSurfaceNormal);
 		SmoothedSupportNormal = FMath::Lerp(SmoothedSupportNormal, NewSurfaceNormal, NormalSmoothingAlpha)
 			.GetSafeNormal(UE_SMALL_NUMBER, NewSurfaceNormal);
@@ -748,10 +812,27 @@ bool AMiningBotActor::MoveTowardsPoint(const FVector& TargetLocation, const FVec
 			FMath::Max(0.05f, GroundSnapInterpSpeed));
 		SetActorLocation(SmoothedSnapLocation, false, nullptr, ETeleportType::None);
 	}
+	else
+	{
+		NoSurfaceAirborneTimeSeconds += FMath::Max(0.0f, DeltaSeconds);
+	}
 
 	UpdateSurfaceAlignment(MoveDirection, NewSurfaceNormal, DeltaSeconds);
 	UpdateVisualLag(DeltaSeconds);
-	return FVector::DistSquared(GetActorLocation(), DesiredTargetLocation) <= FMath::Square(ArrivalTolerance);
+
+	const bool bReachedTarget = FVector::DistSquared(GetActorLocation(), DesiredTargetLocation) <= FMath::Square(ArrivalTolerance);
+	if (bReachedTarget)
+	{
+		ResetMovementFailures();
+		return true;
+	}
+
+	const float MoveProgress = FVector::Dist(StartMoveLocation, GetActorLocation());
+	ConsecutiveMoveFailureCount = (MoveProgress < FMath::Max(0.1f, MinimumMoveProgressBeforeFailureCm))
+		? (ConsecutiveMoveFailureCount + 1)
+		: 0;
+
+	return false;
 }
 
 bool AMiningBotActor::ResolveSupportSurface(
@@ -843,6 +924,246 @@ void AMiningBotActor::UpdateSurfaceAlignment(const FVector& DesiredDirection, co
 	const float InterpSpeed = FMath::Max(0.05f, SurfaceAlignmentInterpSpeed);
 	const FQuat SmoothedRotation = FMath::QInterpTo(GetActorQuat(), DesiredRotation, FMath::Max(0.0f, DeltaSeconds), InterpSpeed);
 	SetActorRotation(SmoothedRotation);
+}
+
+void AMiningBotActor::EnterPhysicsRagdollMode(const FString& Reason, bool bReturnHomeAfterRecover)
+{
+	UPrimitiveComponent* CollisionBody = GetActiveCollisionBody();
+	if (!CollisionBody)
+	{
+		return;
+	}
+
+	if (RuntimeState != EMiningBotRuntimeState::PhysicsRagdoll)
+	{
+		PrePhysicsRuntimeState = RuntimeState;
+	}
+
+	bReturnHomeAfterPhysicsRecovery = bReturnHomeAfterPhysicsRecovery || bReturnHomeAfterRecover;
+	if (bReturnHomeAfterRecover)
+	{
+		CurrentTargetNode = nullptr;
+		MiningTimeRemaining = 0.0f;
+	}
+
+	if (!bHasCachedPrePhysicsDamping)
+	{
+		CachedPrePhysicsLinearDamping = CollisionBody->GetLinearDamping();
+		CachedPrePhysicsAngularDamping = CollisionBody->GetAngularDamping();
+		bHasCachedPrePhysicsDamping = true;
+	}
+
+	CollisionBody->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	CollisionBody->SetCollisionResponseToAllChannels(ECR_Block);
+	CollisionBody->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
+	CollisionBody->SetLinearDamping(FMath::Max(0.0f, PhysicsRagdollLinearDamping));
+	CollisionBody->SetAngularDamping(FMath::Max(0.0f, PhysicsRagdollAngularDamping));
+	CollisionBody->SetPhysicsMaxAngularVelocityInDegrees(
+		FMath::Max(0.0f, PhysicsRagdollMaxAngularVelocityDegPerSec),
+		false);
+	CollisionBody->SetSimulatePhysics(true);
+	CollisionBody->SetEnableGravity(true);
+	CollisionBody->WakeAllRigidBodies();
+
+	if (BotMesh)
+	{
+		BotMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+		BotMesh->SetCollisionResponseToAllChannels(ECR_Block);
+		BotMesh->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
+	}
+
+	PhysicsRecoveryRestTime = 0.0f;
+	PhysicsSupportedRecoveryTime = 0.0f;
+	ConsecutiveMoveFailureCount = 0;
+	ConsecutiveNoSurfaceFailureCount = 0;
+	NoSurfaceAirborneTimeSeconds = 0.0f;
+
+	const FString StatusMessage = Reason.IsEmpty()
+		? TEXT("Physics ragdoll")
+		: FString::Printf(TEXT("Physics: %s"), *Reason);
+	SetRuntimeState(EMiningBotRuntimeState::PhysicsRagdoll, StatusMessage);
+}
+
+void AMiningBotActor::HandlePhysicsRagdoll(float DeltaSeconds)
+{
+	UPrimitiveComponent* CollisionBody = GetActiveCollisionBody();
+	if (!CollisionBody)
+	{
+		SetRuntimeState(EMiningBotRuntimeState::Idle, TEXT("Recovery failed"));
+		return;
+	}
+
+	if (!CollisionBody->IsSimulatingPhysics())
+	{
+		CollisionBody->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+		CollisionBody->SetCollisionResponseToAllChannels(ECR_Block);
+		CollisionBody->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
+		CollisionBody->SetSimulatePhysics(true);
+		CollisionBody->SetEnableGravity(true);
+		CollisionBody->WakeAllRigidBodies();
+	}
+
+	UpdateVisualLag(DeltaSeconds);
+
+	if (bHeldByPhysicsHandle)
+	{
+		PhysicsRecoveryRestTime = 0.0f;
+		PhysicsSupportedRecoveryTime = 0.0f;
+		SetRuntimeState(EMiningBotRuntimeState::PhysicsRagdoll, TEXT("Grabbed"));
+		return;
+	}
+
+	const float SafeDeltaSeconds = FMath::Max(0.0f, DeltaSeconds);
+	FHitResult SupportHit;
+	const FVector ProbeNormal = GetActorUpVector().GetSafeNormal(UE_SMALL_NUMBER, FVector::UpVector);
+	const bool bHasSupport = ResolveSupportSurface(GetActorLocation(), ProbeNormal, SupportHit);
+	FVector SupportNormal = ProbeNormal;
+	if (bHasSupport)
+	{
+		SupportNormal = SupportHit.ImpactNormal.GetSafeNormal(UE_SMALL_NUMBER, ProbeNormal);
+		const FVector CurrentLinearVelocity = CollisionBody->GetPhysicsLinearVelocity();
+		const FVector SurfaceLinearVelocity = FVector::VectorPlaneProject(CurrentLinearVelocity, SupportNormal);
+		const FVector NormalLinearVelocity = CurrentLinearVelocity - SurfaceLinearVelocity;
+		const float DragAlpha = FMath::Clamp(
+			FMath::Max(0.0f, PhysicsRagdollSurfaceDragPerSecond) * SafeDeltaSeconds,
+			0.0f,
+			1.0f);
+		const FVector DampedSurfaceVelocity = FMath::Lerp(SurfaceLinearVelocity, FVector::ZeroVector, DragAlpha);
+		CollisionBody->SetPhysicsLinearVelocity(NormalLinearVelocity + DampedSurfaceVelocity, false);
+	}
+
+	const float LinearSpeed = CollisionBody->GetPhysicsLinearVelocity().Size();
+	const float AngularSpeed = CollisionBody->GetPhysicsAngularVelocityInDegrees().Size();
+	const bool bAtRest = LinearSpeed <= FMath::Max(0.0f, PhysicsRecoveryRestLinearSpeedThresholdCmPerSec)
+		&& AngularSpeed <= FMath::Max(0.0f, PhysicsRecoveryRestAngularSpeedThresholdDegPerSec);
+
+	if (bAtRest)
+	{
+		PhysicsRecoveryRestTime += SafeDeltaSeconds;
+	}
+	else
+	{
+		PhysicsRecoveryRestTime = 0.0f;
+	}
+
+	if (bHasSupport)
+	{
+		const float SurfaceClearance = FMath::Max(0.0f, GetSurfaceSupportDistance(SupportNormal) + FMath::Max(0.0f, SurfaceHoverOffsetCm));
+		const FVector SupportedLocation = SupportHit.ImpactPoint + SupportNormal * SurfaceClearance;
+		const float SupportDistance = FVector::Dist(GetActorLocation(), SupportedLocation);
+		const bool bSupportedCloseEnough = SupportDistance <= FMath::Max(1.0f, PhysicsRagdollSupportSnapDistanceCm);
+		const bool bRecoverableSlideSpeed = LinearSpeed <= FMath::Max(
+			0.0f,
+			PhysicsRagdollForceRecoverLinearSpeedThresholdCmPerSec);
+		if (bSupportedCloseEnough && bRecoverableSlideSpeed)
+		{
+			PhysicsSupportedRecoveryTime += SafeDeltaSeconds;
+		}
+		else
+		{
+			PhysicsSupportedRecoveryTime = 0.0f;
+		}
+	}
+	else
+	{
+		PhysicsSupportedRecoveryTime = 0.0f;
+	}
+
+	const bool bReachedSupportedRecovery = PhysicsSupportedRecoveryTime >= FMath::Max(
+		0.05f,
+		PhysicsRagdollSupportedRecoveryDelaySeconds);
+	const bool bReachedRestRecovery = PhysicsRecoveryRestTime >= FMath::Max(0.05f, PhysicsRecoveryRestDurationSeconds);
+	if (!bReachedSupportedRecovery && !bReachedRestRecovery)
+	{
+		return;
+	}
+
+	CollisionBody->SetAllPhysicsLinearVelocity(FVector::ZeroVector);
+	CollisionBody->SetAllPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+	ExitPhysicsRagdollMode();
+}
+
+void AMiningBotActor::ExitPhysicsRagdollMode()
+{
+	if (UPrimitiveComponent* CollisionBody = GetActiveCollisionBody())
+	{
+		CollisionBody->SetSimulatePhysics(false);
+		CollisionBody->SetEnableGravity(false);
+		CollisionBody->SetAllPhysicsLinearVelocity(FVector::ZeroVector);
+		CollisionBody->SetAllPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+		if (bHasCachedPrePhysicsDamping)
+		{
+			CollisionBody->SetLinearDamping(CachedPrePhysicsLinearDamping);
+			CollisionBody->SetAngularDamping(CachedPrePhysicsAngularDamping);
+		}
+		CollisionBody->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+		CollisionBody->SetCollisionResponseToAllChannels(ECR_Block);
+		CollisionBody->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
+	}
+
+	if (BotMesh)
+	{
+		BotMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+		BotMesh->SetCollisionResponseToAllChannels(ECR_Block);
+		BotMesh->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
+	}
+
+	bHasCachedPrePhysicsDamping = false;
+	PhysicsRecoveryRestTime = 0.0f;
+	PhysicsSupportedRecoveryTime = 0.0f;
+	bHeldByPhysicsHandle = false;
+
+	const FVector ProbeNormal = GetActorUpVector().GetSafeNormal(UE_SMALL_NUMBER, FVector::UpVector);
+	FHitResult RecoverySurfaceHit;
+	if (ResolveSupportSurface(GetActorLocation(), ProbeNormal, RecoverySurfaceHit))
+	{
+		const FVector SurfaceNormal = RecoverySurfaceHit.ImpactNormal.GetSafeNormal(UE_SMALL_NUMBER, ProbeNormal);
+		const float SurfaceClearance = FMath::Max(0.0f, GetSurfaceSupportDistance(SurfaceNormal) + FMath::Max(0.0f, SurfaceHoverOffsetCm));
+		const FVector RecoveredLocation = RecoverySurfaceHit.ImpactPoint + SurfaceNormal * SurfaceClearance;
+		SetActorLocation(RecoveredLocation, false, nullptr, ETeleportType::None);
+	}
+
+	ResetMovementFailures();
+
+	if (bReturnHomeAfterPhysicsRecovery || GetCarriedTotalQuantityScaled() > 0)
+	{
+		bReturnHomeAfterPhysicsRecovery = false;
+		SetRuntimeState(EMiningBotRuntimeState::ReturningToSwarm, TEXT("Recovered, returning"));
+		return;
+	}
+
+	if (CurrentTargetNode && !CurrentTargetNode->IsDepleted())
+	{
+		if (PrePhysicsRuntimeState == EMiningBotRuntimeState::Mining)
+		{
+			SetRuntimeState(EMiningBotRuntimeState::Mining, TEXT("Recovered, mining"));
+			return;
+		}
+
+		SetRuntimeState(EMiningBotRuntimeState::TravelingToNode, TEXT("Recovered, resuming"));
+		return;
+	}
+
+	SetRuntimeState(EMiningBotRuntimeState::Idle, TEXT("Recovered"));
+}
+
+void AMiningBotActor::RegisterMovementFailure(const FString& Reason, bool bReturnHomeAfterRecover)
+{
+	++ConsecutiveMoveFailureCount;
+	if (ConsecutiveMoveFailureCount < FMath::Max(1, MaxMoveFailuresBeforeRecovery))
+	{
+		return;
+	}
+
+	EnterPhysicsRagdollMode(Reason, bReturnHomeAfterRecover);
+}
+
+void AMiningBotActor::ResetMovementFailures()
+{
+	ConsecutiveMoveFailureCount = 0;
+	ConsecutiveNoSurfaceFailureCount = 0;
+	NoSurfaceAirborneTimeSeconds = 0.0f;
+	PhysicsSupportedRecoveryTime = 0.0f;
 }
 
 float AMiningBotActor::GetEffectiveMiningDurationSeconds() const

@@ -13,6 +13,7 @@
 #include "Factory/FactoryPlacementHelpers.h"
 #include "Factory/MaterialNodeActor.h"
 #include "Factory/MinerActor.h"
+#include "Factory/MiningBotActor.h"
 #include "Factory/MiningSwarmMachine.h"
 #include "Machine/MachineActor.h"
 #include "Factory/StorageBin.h"
@@ -3846,6 +3847,18 @@ UPrimitiveComponent* AAgentCharacter::ResolvePickupPhysicsComponent(UPrimitiveCo
 		return PrimitiveComponent;
 	}
 
+	AMiningBotActor* MiningBotOwner = Cast<AMiningBotActor>(PrimitiveComponent->GetOwner());
+	if (MiningBotOwner)
+	{
+		if (UPrimitiveComponent* BotPickupPhysicsComponent = MiningBotOwner->GetPickupPhysicsComponent())
+		{
+			if (BotPickupPhysicsComponent->GetCollisionEnabled() != ECollisionEnabled::NoCollision)
+			{
+				return BotPickupPhysicsComponent;
+			}
+		}
+	}
+
 	ADroneCompanion* DroneOwner = Cast<ADroneCompanion>(PrimitiveComponent->GetOwner());
 	if (!DroneOwner)
 	{
@@ -3886,6 +3899,20 @@ bool AAgentCharacter::TryBeginPickup()
 		return false;
 	}
 
+	if (AMiningBotActor* MiningBotOwner = Cast<AMiningBotActor>(PrimitiveComponent->GetOwner()))
+	{
+		MiningBotOwner->NotifyPickedUpByPhysicsHandle(true);
+		if (UPrimitiveComponent* BotPickupPhysicsComponent = MiningBotOwner->GetPickupPhysicsComponent())
+		{
+			PrimitiveComponent = BotPickupPhysicsComponent;
+		}
+	}
+
+	if (!PrimitiveComponent->IsSimulatingPhysics())
+	{
+		PrimitiveComponent->SetSimulatePhysics(true);
+	}
+
 	FVector ViewLocation = FVector::ZeroVector;
 	FRotator ViewRotation = FRotator::ZeroRotator;
 	if (!GetActivePickupView(ViewLocation, ViewRotation))
@@ -3918,6 +3945,10 @@ void AAgentCharacter::EndPickup()
 {
 	if (UPrimitiveComponent* HeldComponent = HeldPickupComponent.Get())
 	{
+		if (AMiningBotActor* MiningBotOwner = Cast<AMiningBotActor>(HeldComponent->GetOwner()))
+		{
+			MiningBotOwner->NotifyPickedUpByPhysicsHandle(false);
+		}
 		HeldComponent->SetLinearDamping(HeldPickupOriginalLinearDamping);
 		HeldComponent->SetAngularDamping(HeldPickupOriginalAngularDamping);
 	}

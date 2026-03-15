@@ -25,6 +25,7 @@ enum class EMiningBotRuntimeState : uint8
 	NoNodeAvailable UMETA(DisplayName="No Node Available"),
 	TravelingToNode UMETA(DisplayName="Traveling To Node"),
 	Mining UMETA(DisplayName="Mining"),
+	PhysicsRagdoll UMETA(DisplayName="Physics Ragdoll"),
 	ReturningToSwarm UMETA(DisplayName="Returning To Swarm"),
 	WaitingForOutput UMETA(DisplayName="Waiting For Output")
 };
@@ -58,6 +59,12 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category="Factory|MiningBot")
 	void SetMiningTuning(int32 InCapacityUnits, float InTravelSpeedCmPerSecond, float InMiningSpeedMultiplier);
+
+	UFUNCTION(BlueprintPure, Category="Factory|MiningBot")
+	UPrimitiveComponent* GetPickupPhysicsComponent() const;
+
+	UFUNCTION(BlueprintCallable, Category="Factory|MiningBot")
+	void NotifyPickedUpByPhysicsHandle(bool bIsPickedUp);
 
 	UFUNCTION(BlueprintPure, Category="Factory|MiningBot")
 	EMiningBotRuntimeState GetRuntimeState() const { return RuntimeState; }
@@ -164,6 +171,48 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MiningBot|Output", meta=(ClampMin="0.05", UIMin="0.05"))
 	float DepositRetryIntervalSeconds = 0.25f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MiningBot|Recovery", meta=(ClampMin="1", UIMin="1"))
+	int32 MaxMoveFailuresBeforeRecovery = 3;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MiningBot|Recovery", meta=(ClampMin="0.1", UIMin="0.1"))
+	float MinimumMoveProgressBeforeFailureCm = 3.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MiningBot|Recovery", meta=(ClampMin="1", UIMin="1"))
+	int32 MaxNoSurfaceFailuresBeforeRecovery = 2;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MiningBot|Recovery", meta=(ClampMin="0.0", UIMin="0.0"))
+	float NoSurfaceGraceSecondsBeforeRecovery = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MiningBot|Recovery", meta=(ClampMin="0.0", UIMin="0.0"))
+	float PhysicsRagdollLinearDamping = 1.8f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MiningBot|Recovery", meta=(ClampMin="0.0", UIMin="0.0"))
+	float PhysicsRagdollAngularDamping = 6.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MiningBot|Recovery", meta=(ClampMin="0.0", UIMin="0.0"))
+	float PhysicsRagdollMaxAngularVelocityDegPerSec = 220.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MiningBot|Recovery", meta=(ClampMin="0.0", UIMin="0.0"))
+	float PhysicsRagdollSurfaceDragPerSecond = 10.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MiningBot|Recovery", meta=(ClampMin="0.05", UIMin="0.05"))
+	float PhysicsRagdollSupportedRecoveryDelaySeconds = 0.35f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MiningBot|Recovery", meta=(ClampMin="0.0", UIMin="0.0"))
+	float PhysicsRagdollForceRecoverLinearSpeedThresholdCmPerSec = 45.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MiningBot|Recovery", meta=(ClampMin="1.0", UIMin="1.0"))
+	float PhysicsRagdollSupportSnapDistanceCm = 60.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MiningBot|Recovery", meta=(ClampMin="0.0", UIMin="0.0"))
+	float PhysicsRecoveryRestLinearSpeedThresholdCmPerSec = 8.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MiningBot|Recovery", meta=(ClampMin="0.0", UIMin="0.0"))
+	float PhysicsRecoveryRestAngularSpeedThresholdDegPerSec = 20.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MiningBot|Recovery", meta=(ClampMin="0.05", UIMin="0.05"))
+	float PhysicsRecoveryRestDurationSeconds = 0.5f;
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|MiningBot")
 	EMiningBotRuntimeState RuntimeState = EMiningBotRuntimeState::MissingSwarm;
 
@@ -201,6 +250,11 @@ protected:
 	bool ResolveSupportSurface(const FVector& ProbeOrigin, const FVector& PreferredSurfaceNormal, FHitResult& OutSurfaceHit) const;
 	bool TraceSurface(const FVector& ProbeOrigin, const FVector& DownDirection, FHitResult& OutSurfaceHit) const;
 	float GetEffectiveMiningDurationSeconds() const;
+	void EnterPhysicsRagdollMode(const FString& Reason, bool bReturnHomeAfterRecover);
+	void HandlePhysicsRagdoll(float DeltaSeconds);
+	void ExitPhysicsRagdollMode();
+	void RegisterMovementFailure(const FString& Reason, bool bReturnHomeAfterRecover);
+	void ResetMovementFailures();
 
 	float MiningTimeRemaining = 0.0f;
 	float TimeUntilNextDepositAttempt = 0.0f;
@@ -208,4 +262,15 @@ protected:
 	FVector SmoothedSupportNormal = FVector::UpVector;
 	bool bHasSmoothedSupportNormal = false;
 	bool bVisualLagInitialized = false;
+	EMiningBotRuntimeState PrePhysicsRuntimeState = EMiningBotRuntimeState::Idle;
+	int32 ConsecutiveMoveFailureCount = 0;
+	int32 ConsecutiveNoSurfaceFailureCount = 0;
+	float NoSurfaceAirborneTimeSeconds = 0.0f;
+	bool bHeldByPhysicsHandle = false;
+	bool bReturnHomeAfterPhysicsRecovery = false;
+	float PhysicsRecoveryRestTime = 0.0f;
+	float PhysicsSupportedRecoveryTime = 0.0f;
+	float CachedPrePhysicsLinearDamping = 0.0f;
+	float CachedPrePhysicsAngularDamping = 0.0f;
+	bool bHasCachedPrePhysicsDamping = false;
 };

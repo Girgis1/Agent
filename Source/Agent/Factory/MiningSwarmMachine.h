@@ -66,6 +66,12 @@ public:
 	UFUNCTION(BlueprintPure, Category="Factory|MiningSwarm")
 	FVector GetBotHomeNormal() const;
 
+	UFUNCTION(BlueprintPure, Category="Factory|MiningSwarm")
+	bool IsBotInsideDockVolume(
+		const AMiningBotActor* Bot,
+		float ExtraPlanarToleranceCm = 0.0f,
+		float ExtraVerticalToleranceCm = 0.0f) const;
+
 	UFUNCTION(BlueprintImplementableEvent, Category="Factory|MiningSwarm")
 	void OnMiningBotSpawned(AMiningBotActor* SpawnedBot);
 
@@ -200,6 +206,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MiningSwarm|Bots", meta=(ClampMin="0.1", ClampMax="1.0", UIMin="0.1", UIMax="1.0"))
 	float BotDockAreaFill = 0.8f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MiningSwarm|Bots", meta=(ClampMin="0.0", UIMin="0.0"))
+	float BotDockVerticalAcceptanceCm = 300.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MiningSwarm|Bots", meta=(ClampMin="0.0", UIMin="0.0"))
 	float InitialBotSpawnDelaySeconds = 0.25f;
