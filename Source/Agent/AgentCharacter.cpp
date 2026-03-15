@@ -46,6 +46,8 @@
 
 namespace
 {
+	const FName BeamStartTagName(TEXT("BeamStart"));
+
 	USceneComponent* ResolveTaggedSceneComponent(AActor* SourceActor, FName RequiredTag)
 	{
 		if (!SourceActor || RequiredTag.IsNone())
@@ -185,10 +187,6 @@ AAgentCharacter::AAgentCharacter(const FObjectInitializer& ObjectInitializer)
 	VehicleInteractionComponent = CreateDefaultSubobject<UVehicleInteractionComponent>(TEXT("VehicleInteractionComponent"));
 	BackAttachmentComponent = CreateDefaultSubobject<UBackAttachmentComponent>(TEXT("BackAttachmentComponent"));
 	PlayerMagnetComponent = CreateDefaultSubobject<UPlayerMagnetComponent>(TEXT("PlayerMagnetComponent"));
-	PlayerBeamOrigin = CreateDefaultSubobject<USceneComponent>(TEXT("PlayerBeamOrigin"));
-	PlayerBeamOrigin->bEditableWhenInherited = true;
-	PlayerBeamOrigin->SetupAttachment(GetMesh());
-	PlayerBeamOrigin->SetRelativeLocation(FVector(35.0f, 16.0f, 58.0f));
 	PlayerBeamToolComponent = CreateDefaultSubobject<UAgentBeamToolComponent>(TEXT("PlayerBeamToolComponent"));
 	PlayerBeamToolComponent->BeamSourceName = FName(TEXT("PlayerBeam"));
 	PlayerBeamToolComponent->DamagePerSecond = 20.0f;
@@ -242,7 +240,6 @@ void AAgentCharacter::OnConstruction(const FTransform& Transform)
 {
 	Super::OnConstruction(Transform);
 	RefreshFirstPersonCameraAttachment();
-	RefreshPlayerBeamOriginAttachment();
 }
 
 void AAgentCharacter::RefreshFirstPersonCameraReference()
@@ -322,30 +319,6 @@ void AAgentCharacter::RefreshFirstPersonCameraAttachment()
 		FirstPersonCameraSocketName);
 }
 
-void AAgentCharacter::RefreshPlayerBeamOriginAttachment()
-{
-	if (!PlayerBeamOrigin || !GetMesh())
-	{
-		return;
-	}
-
-	// Native inherited components can't be reparented in BP hierarchy; expose socket-based attachment instead.
-	PlayerBeamOrigin->AttachToComponent(
-		GetMesh(),
-		FAttachmentTransformRules::KeepRelativeTransform,
-		PlayerBeamOriginSocketName);
-}
-
-USceneComponent* AAgentCharacter::ResolveConfiguredPlayerBeamOriginComponent() const
-{
-	if (USceneComponent* TaggedBeamOrigin = ResolveTaggedSceneComponent(const_cast<AAgentCharacter*>(this), PlayerBeamOriginTag))
-	{
-		return TaggedBeamOrigin;
-	}
-
-	return PlayerBeamOrigin;
-}
-
 void AAgentCharacter::RefreshFirstPersonCameraControlRotation()
 {
 	UCameraComponent* const ActiveFirstPersonCamera = ResolveFirstPersonCamera();
@@ -364,7 +337,6 @@ void AAgentCharacter::BeginPlay()
 {
 	Super::BeginPlay();
 	RefreshFirstPersonCameraAttachment();
-	RefreshPlayerBeamOriginAttachment();
 
 	ClumsinessMinValue = FMath::Max(1.0f, ClumsinessMinValue);
 	ClumsinessMaxValue = FMath::Max(ClumsinessMinValue, ClumsinessMaxValue);
@@ -1631,7 +1603,7 @@ USceneComponent* AAgentCharacter::ResolveActiveBeamOriginComponent() const
 		return DroneCompanion->GetBeamOriginComponent();
 	}
 
-	return ResolveConfiguredPlayerBeamOriginComponent();
+	return ResolveTaggedSceneComponent(const_cast<AAgentCharacter*>(this), BeamStartTagName);
 }
 
 bool AAgentCharacter::ResolveActiveBeamPose(

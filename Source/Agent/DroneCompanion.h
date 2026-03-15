@@ -257,9 +257,6 @@ public:
 	UFUNCTION(BlueprintPure, Category="Drone|Beam")
 	UAgentBeamToolComponent* GetBeamToolComponent() const { return BeamToolComponent; }
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Beam")
-	FName BeamOriginTag = NAME_None;
-
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Physics")
 	float DroneMassKg = 3.0f;
 
@@ -981,9 +978,6 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	USceneComponent* CameraMount;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
-	USceneComponent* BeamOrigin;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UCameraComponent* DroneCamera;

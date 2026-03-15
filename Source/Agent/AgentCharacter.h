@@ -130,10 +130,6 @@ class AAgentCharacter : public ACharacter
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UPlayerMagnetComponent* PlayerMagnetComponent;
 
-	/** Configurable start point for the player beam visual. */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
-	USceneComponent* PlayerBeamOrigin;
-
 	/** Reusable beam tool for player-held drain/heal interactions. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UAgentBeamToolComponent* PlayerBeamToolComponent;
@@ -176,8 +172,6 @@ protected:
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 	void RefreshFirstPersonCameraReference();
 	void RefreshFirstPersonCameraAttachment();
-	void RefreshPlayerBeamOriginAttachment();
-	USceneComponent* ResolveConfiguredPlayerBeamOriginComponent() const;
 	void RefreshFirstPersonCameraControlRotation();
 	UCameraComponent* ResolveFirstPersonCamera();
 	UCameraComponent* ResolveFirstPersonCamera() const;
@@ -525,12 +519,6 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Zoom", meta=(ClampMin="0.0", UIMin="0.0"))
 	float BeamAimZoomOutInterpSpeed = 8.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Player")
-	FName PlayerBeamOriginSocketName = NAME_None;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Player")
-	FName PlayerBeamOriginTag = NAME_None;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Crash")
 	bool bUseCrashRollRecovery = true;

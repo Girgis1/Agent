@@ -25,6 +25,8 @@
 
 namespace
 {
+	const FName BeamStartTagName(TEXT("BeamStart"));
+
 	USceneComponent* ResolveTaggedSceneComponent(AActor* SourceActor, FName RequiredTag)
 	{
 		if (!SourceActor || RequiredTag.IsNone())
@@ -115,10 +117,6 @@ ADroneCompanion::ADroneCompanion()
 	CameraMount = CreateDefaultSubobject<USceneComponent>(TEXT("CameraMount"));
 	CameraMount->SetupAttachment(DroneBody);
 
-	BeamOrigin = CreateDefaultSubobject<USceneComponent>(TEXT("BeamOrigin"));
-	BeamOrigin->SetupAttachment(DroneBody);
-	BeamOrigin->SetRelativeLocation(FVector(55.0f, 0.0f, 0.0f));
-
 	DroneCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("DroneCamera"));
 	DroneCamera->SetupAttachment(CameraMount);
 	DroneCamera->bUsePawnControlRotation = false;
@@ -151,12 +149,7 @@ ADroneCompanion::ADroneCompanion()
 
 USceneComponent* ADroneCompanion::GetBeamOriginComponent() const
 {
-	if (USceneComponent* TaggedBeamOrigin = ResolveTaggedSceneComponent(const_cast<ADroneCompanion*>(this), BeamOriginTag))
-	{
-		return TaggedBeamOrigin;
-	}
-
-	return BeamOrigin;
+	return ResolveTaggedSceneComponent(const_cast<ADroneCompanion*>(this), BeamStartTagName);
 }
 
 void ADroneCompanion::BeginPlay()
