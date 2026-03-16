@@ -1,6 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "AgentBeamToolComponent.h"
+#include "Dirty/DirtDecalSubsystem.h"
+#include "Dirty/DirtySurfaceComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
@@ -174,6 +176,14 @@ void UAgentBeamToolComponent::UpdateBeamTrace(float DeltaTime)
 	TraceState.HitActor = bHasHit ? HitResult.GetActor() : nullptr;
 	TraceState.HitComponent = bHasHit ? HitResult.GetComponent() : nullptr;
 
+	if (bHasHit && bAffectDirtySurfaces)
+	{
+		if (UDirtDecalSubsystem* DirtDecalSubsystem = World->GetSubsystem<UDirtDecalSubsystem>())
+		{
+			DirtDecalSubsystem->ApplyBrushAtHit(HitResult, BuildDirtyBrushStamp(), DeltaTime);
+		}
+	}
+
 	if (TraceState.HitActor)
 	{
 		if (UObjectHealthComponent* HealthComponent = UObjectHealthComponent::FindObjectHealthComponent(TraceState.HitActor))
@@ -196,6 +206,16 @@ void UAgentBeamToolComponent::UpdateBeamTrace(float DeltaTime)
 					FVector::ZeroVector,
 					ResolveEffectiveSourceName());
 				TraceState.LastAppliedAmount = DamageResult.AppliedDamage;
+			}
+		}
+
+		if (bAffectDirtySurfaces)
+		{
+			if (UDirtySurfaceComponent* DirtySurfaceComponent = UDirtySurfaceComponent::FindDirtySurfaceComponent(
+					TraceState.HitActor,
+					TraceState.HitComponent))
+			{
+				DirtySurfaceComponent->ApplyBrushHit(HitResult, BuildDirtyBrushStamp(), DeltaTime);
 			}
 		}
 	}
@@ -262,4 +282,15 @@ FName UAgentBeamToolComponent::ResolveEffectiveSourceName() const
 	}
 
 	return NAME_None;
+}
+
+FDirtBrushStamp UAgentBeamToolComponent::BuildDirtyBrushStamp() const
+{
+	FDirtBrushStamp BrushStamp;
+	BrushStamp.Mode = DirtyBrushMode;
+	BrushStamp.BrushTexture = DirtyBrushTexture;
+	BrushStamp.BrushSizeCm = DirtyBrushSizeCm;
+	BrushStamp.BrushStrengthPerSecond = DirtyBrushStrengthPerSecond;
+	BrushStamp.BrushHardness = DirtyBrushHardness;
+	return BrushStamp;
 }

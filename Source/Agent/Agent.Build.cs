@@ -43,6 +43,7 @@ public class Agent : ModuleRules
 			"Agent/Backpack",
 			"Agent/Backpack/Actors",
 			"Agent/Backpack/Components",
+			"Agent/Dirty",
 			"Agent/Factory",
 			"Agent/Material",
 			"Agent/Machine",

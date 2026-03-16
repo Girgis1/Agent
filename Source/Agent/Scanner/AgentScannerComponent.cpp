@@ -18,7 +18,7 @@
 
 namespace
 {
-UPrimitiveComponent* ResolveBestPrimitiveOnActor(AActor* Actor)
+UPrimitiveComponent* ResolveBestPrimitiveOnActorForScanner(AActor* Actor)
 {
 	if (!Actor)
 	{
@@ -55,7 +55,7 @@ UPrimitiveComponent* ResolveBestPrimitiveOnActor(AActor* Actor)
 	return FirstUsablePrimitive;
 }
 
-float ResolvePrimitiveMassKgWithoutWarning(const UPrimitiveComponent* PrimitiveComponent)
+float ResolvePrimitiveMassKgWithoutWarningForScanner(const UPrimitiveComponent* PrimitiveComponent)
 {
 	if (!PrimitiveComponent)
 	{
@@ -79,7 +79,7 @@ float ResolvePrimitiveMassKgWithoutWarning(const UPrimitiveComponent* PrimitiveC
 	return 0.0f;
 }
 
-UMaterialDefinitionAsset* FindMaterialDefinitionById(FName ResourceId)
+UMaterialDefinitionAsset* FindMaterialDefinitionByIdForScanner(FName ResourceId)
 {
 	static TMap<FName, TWeakObjectPtr<UMaterialDefinitionAsset>> DefinitionCache;
 
@@ -131,11 +131,55 @@ FText FormatMassText(float MassKg)
 		FormatFloatText(MassKg, MassKg >= 10.0f ? 0 : 1));
 }
 
+bool IsMeaningfulScannerText(const FText& Text)
+{
+	return !Text.ToString().TrimStartAndEnd().IsEmpty();
+}
+
+float ComputeScannerColorLuminance(const FLinearColor& Color)
+{
+	return (0.2126f * Color.R) + (0.7152f * Color.G) + (0.0722f * Color.B);
+}
+
+FLinearColor EnsureReadableScannerTint(const FLinearColor& CandidateColor, const FLinearColor& FallbackColor)
+{
+	FLinearColor SafeColor = CandidateColor;
+	SafeColor.R = FMath::Clamp(SafeColor.R, 0.0f, 1.0f);
+	SafeColor.G = FMath::Clamp(SafeColor.G, 0.0f, 1.0f);
+	SafeColor.B = FMath::Clamp(SafeColor.B, 0.0f, 1.0f);
+	SafeColor.A = SafeColor.A > KINDA_SMALL_NUMBER ? SafeColor.A : 1.0f;
+
+	constexpr float MinReadableLuminance = 0.22f;
+	const float CurrentLuminance = ComputeScannerColorLuminance(SafeColor);
+	if (CurrentLuminance >= MinReadableLuminance)
+	{
+		return SafeColor;
+	}
+
+	FLinearColor LiftTarget = FallbackColor;
+	LiftTarget.R = FMath::Clamp(LiftTarget.R, 0.0f, 1.0f);
+	LiftTarget.G = FMath::Clamp(LiftTarget.G, 0.0f, 1.0f);
+	LiftTarget.B = FMath::Clamp(LiftTarget.B, 0.0f, 1.0f);
+	LiftTarget.A = SafeColor.A;
+	if (ComputeScannerColorLuminance(LiftTarget) < MinReadableLuminance)
+	{
+		LiftTarget = FLinearColor(0.85f, 0.88f, 0.92f, SafeColor.A);
+	}
+
+	const float LiftAlpha = FMath::Clamp(
+		(MinReadableLuminance - CurrentLuminance) / FMath::Max(KINDA_SMALL_NUMBER, 1.0f - CurrentLuminance),
+		0.0f,
+		0.85f);
+	FLinearColor AdjustedColor = FLinearColor::LerpUsingHSV(SafeColor, LiftTarget, LiftAlpha);
+	AdjustedColor.A = SafeColor.A;
+	return AdjustedColor;
+}
+
 FText ResolveMaterialLabel(FName ResourceId)
 {
-	if (UMaterialDefinitionAsset* Definition = FindMaterialDefinitionById(ResourceId))
+	if (UMaterialDefinitionAsset* Definition = FindMaterialDefinitionByIdForScanner(ResourceId))
 	{
-		if (!Definition->DisplayName.IsEmpty())
+		if (IsMeaningfulScannerText(Definition->DisplayName))
 		{
 			return Definition->DisplayName;
 		}
@@ -146,21 +190,21 @@ FText ResolveMaterialLabel(FName ResourceId)
 
 FLinearColor ResolveMaterialTint(FName ResourceId, const FLinearColor& FallbackColor)
 {
-	if (UMaterialDefinitionAsset* Definition = FindMaterialDefinitionById(ResourceId))
+	if (UMaterialDefinitionAsset* Definition = FindMaterialDefinitionByIdForScanner(ResourceId))
 	{
 		const FLinearColor VisualColor = Definition->GetResolvedVisualColor();
 		if (VisualColor.A > KINDA_SMALL_NUMBER)
 		{
-			return VisualColor;
+			return EnsureReadableScannerTint(VisualColor, FallbackColor);
 		}
 
 		if (Definition->DebugColor.A > 0)
 		{
-			return Definition->DebugColor;
+			return EnsureReadableScannerTint(Definition->DebugColor, FallbackColor);
 		}
 	}
 
-	return FallbackColor;
+	return EnsureReadableScannerTint(FallbackColor, FallbackColor);
 }
 
 FText ResolveTargetTitle(AActor* TargetActor)
@@ -543,7 +587,7 @@ bool UAgentScannerComponent::BuildMaterialRows(
 		return false;
 	}
 
-	UPrimitiveComponent* SourcePrimitive = HitPrimitive ? HitPrimitive : ResolveBestPrimitiveOnActor(TargetActor);
+	UPrimitiveComponent* SourcePrimitive = HitPrimitive ? HitPrimitive : ResolveBestPrimitiveOnActorForScanner(TargetActor);
 	TMap<FName, int32> ResourceQuantitiesScaled;
 	if (!MaterialComponent->BuildResolvedResourceQuantitiesScaled(SourcePrimitive, ResourceQuantitiesScaled))
 	{
@@ -722,7 +766,7 @@ void UAgentScannerComponent::AddMassRow(
 
 	if (MassKg <= KINDA_SMALL_NUMBER)
 	{
-		MassKg = ResolvePrimitiveMassKgWithoutWarning(HitPrimitive ? HitPrimitive : ResolveBestPrimitiveOnActor(TargetActor));
+		MassKg = ResolvePrimitiveMassKgWithoutWarningForScanner(HitPrimitive ? HitPrimitive : ResolveBestPrimitiveOnActorForScanner(TargetActor));
 	}
 
 	if (MassKg <= KINDA_SMALL_NUMBER)

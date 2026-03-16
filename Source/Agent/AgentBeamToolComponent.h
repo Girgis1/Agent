@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "Dirty/DirtyTypes.h"
 #include "Objects/Types/ObjectDamageTypes.h"
 #include "AgentBeamToolComponent.generated.h"
 
@@ -130,6 +131,24 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Heal", meta=(ClampMin="0.0", UIMin="0.0"))
 	float HealingPerSecond = 20.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Dirty")
+	bool bAffectDirtySurfaces = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Dirty")
+	EDirtBrushMode DirtyBrushMode = EDirtBrushMode::Clean;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Dirty")
+	TObjectPtr<UTexture2D> DirtyBrushTexture = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Dirty", meta=(ClampMin="1.0", UIMin="1.0", Units="cm"))
+	float DirtyBrushSizeCm = 40.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Dirty", meta=(ClampMin="0.0", UIMin="0.0"))
+	float DirtyBrushStrengthPerSecond = 0.8f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Dirty", meta=(ClampMin="0.0", ClampMax="1.0", UIMin="0.0", UIMax="1.0"))
+	float DirtyBrushHardness = 0.7f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Damage")
 	EObjectDamageSourceKind DamageSourceKind = EObjectDamageSourceKind::Tool;
 
@@ -163,6 +182,7 @@ protected:
 	void DrawBeamDebug() const;
 	void ResetTraceState();
 	FName ResolveEffectiveSourceName() const;
+	FDirtBrushStamp BuildDirtyBrushStamp() const;
 
 	UPROPERTY(Transient)
 	bool bBeamActive = false;

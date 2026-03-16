@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "AgentBeamToolComponent.h"
+#include "Engine/Scene.h"
 #include "Engine/EngineTypes.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -23,6 +24,7 @@ class UVehicleInteractionComponent;
 class UBackAttachmentComponent;
 class UPlayerMagnetComponent;
 class UAgentScannerComponent;
+class UAgentAimFocusCameraModifier;
 class UCameraComponent;
 class UDroneSwarmComponent;
 class UInputAction;
@@ -223,12 +225,16 @@ protected:
 	void UpdateBeamSystems(float DeltaSeconds);
 	void UpdateScannerSystems(float DeltaSeconds);
 	void UpdateBeamAimZoom(float DeltaSeconds);
+	void UpdateBeamAimDepthOfField(float DeltaSeconds, bool bAimActive, const FVector& ViewOrigin, const FVector& ViewDirection);
+	void ResetBeamAimZoomState();
 	bool IsRawMouseBeamAimModifierHeld() const;
 	bool IsRawControllerBeamAimModifierHeld() const;
 	bool IsBeamAimModifierActive() const;
 	bool IsBeamFireInputHeld() const;
 	bool CanUseBeamTool() const;
 	UAgentBeamToolComponent* ResolveActiveBeamToolComponent() const;
+	UAgentAimFocusCameraModifier* ResolveBeamAimFocusCameraModifier();
+	bool ResolveBeamAimFocusDistance(const FVector& ViewOrigin, const FVector& ViewDirection, float& OutFocusDistance) const;
 	USceneComponent* ResolveActiveBeamOriginComponent() const;
 	bool ResolveActiveBeamPose(FVector& OutViewOrigin, FVector& OutViewDirection, FVector& OutVisualOrigin) const;
 	void UpdateViewModeButtonHold(float DeltaSeconds);
@@ -525,6 +531,32 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Zoom", meta=(ClampMin="0.0", UIMin="0.0"))
 	float BeamAimZoomOutInterpSpeed = 8.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Zoom|Focus")
+	bool bEnableBeamAimDepthOfField = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Zoom|Focus", meta=(ShowOnlyInnerProperties))
+	FPostProcessSettings BeamAimDepthOfFieldSettings;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Zoom|Focus")
+	bool bBeamAimDepthOfFieldUseDynamicFocalDistance = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Zoom|Focus", meta=(ClampMin="1.0", UIMin="1.0", Units="cm"))
+	float BeamAimDepthOfFieldFallbackDistance = 2200.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Zoom|Focus", meta=(Units="cm"))
+	float BeamAimDepthOfFieldFocusOffset = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Zoom|Focus", meta=(ClampMin="0.0", UIMin="0.0"))
+	float BeamAimDepthOfFieldFocusInterpSpeed = 10.0f;
+
+	/** 1.0 matches the zoom-in timing. 1.2 takes 20% longer to reach full DOF. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Zoom|Focus", meta=(ClampMin="0.01", UIMin="0.01"))
+	float BeamAimDepthOfFieldInTimeMultiplier = 1.2f;
+
+	/** 1.0 matches the zoom-out timing. 1.2 takes 20% longer to fade the DOF out. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Zoom|Focus", meta=(ClampMin="0.01", UIMin="0.01"))
+	float BeamAimDepthOfFieldOutTimeMultiplier = 1.2f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Crash")
 	bool bUseCrashRollRecovery = true;
@@ -1271,6 +1303,7 @@ protected:
 	bool bControllerBeamFireHeld = false;
 	bool bRightMouseBeamAimHeld = false;
 	bool bBeamAimZoomLocked = false;
+	bool bBeamAimFocusDistanceInitialized = false;
 
 	float DroneGamepadThrottleInput = 0.0f;
 	float DroneGamepadYawInput = 0.0f;
@@ -1300,7 +1333,10 @@ protected:
 	EAgentViewMode PreRagdollViewMode = EAgentViewMode::ThirdPerson;
 	float BeamAimBaseFov = 0.0f;
 	float BeamAimCurrentFov = 0.0f;
+	float BeamAimDepthOfFieldAlpha = 0.0f;
+	float BeamAimCurrentFocusDistance = 0.0f;
 	TWeakObjectPtr<AActor> BeamAimZoomViewTarget;
+	TWeakObjectPtr<UAgentAimFocusCameraModifier> BeamAimFocusCameraModifier;
 
 public:
 	UFUNCTION(BlueprintPure, Category="Clumsiness")

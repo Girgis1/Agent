@@ -10,6 +10,7 @@ class AMaterialNodeActor;
 class AMiningSwarmMachine;
 class UBoxComponent;
 class UCapsuleComponent;
+class UDirtBrushComponent;
 class UPrimitiveComponent;
 class USceneComponent;
 class USphereComponent;
@@ -99,6 +100,9 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|MiningBot")
 	TObjectPtr<UStaticMeshComponent> BotMesh = nullptr;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Factory|MiningBot|Cleaning")
+	TObjectPtr<UDirtBrushComponent> DirtTrailBrushComponent = nullptr;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MiningBot")
 	bool bEnabled = true;
 
@@ -158,6 +162,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MiningBot|Visual")
 	bool bEnableVisualLag = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MiningBot|Cleaning")
+	bool bEnableCleaningTrail = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MiningBot|Visual", meta=(ClampMin="0.05", UIMin="0.05", EditCondition="bEnableVisualLag"))
 	float VisualLagLocationInterpSpeed = 14.0f;

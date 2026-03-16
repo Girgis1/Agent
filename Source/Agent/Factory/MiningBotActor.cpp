@@ -8,6 +8,7 @@
 #include "Components/SphereComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "CollisionShape.h"
+#include "Dirty/DirtBrushComponent.h"
 #include "Engine/World.h"
 #include "Factory/FactoryPlacementHelpers.h"
 #include "Factory/MaterialNodeActor.h"
@@ -81,6 +82,18 @@ AMiningBotActor::AMiningBotActor()
 		BotMesh->SetRelativeScale3D(FVector(0.35f));
 	}
 
+	DirtTrailBrushComponent = CreateDefaultSubobject<UDirtBrushComponent>(TEXT("DirtTrailBrushComponent"));
+	DirtTrailBrushComponent->BrushMode = EDirtBrushMode::Clean;
+	DirtTrailBrushComponent->ApplicationType = EDirtBrushApplicationType::Trail;
+	DirtTrailBrushComponent->BrushSizeCm = 42.0f;
+	DirtTrailBrushComponent->BrushStrengthPerSecond = 0.85f;
+	DirtTrailBrushComponent->BrushHardness = 0.75f;
+	DirtTrailBrushComponent->ApplyIntervalSeconds = 0.05f;
+	DirtTrailBrushComponent->TrailTraceStartOffsetCm = 10.0f;
+	DirtTrailBrushComponent->TrailTraceLengthCm = 60.0f;
+	DirtTrailBrushComponent->TrailMinSegmentLengthCm = 8.0f;
+	DirtTrailBrushComponent->bTrailUseOwnerDownVector = true;
+
 	RuntimeStatus = FText::FromString(TEXT("Awaiting swarm"));
 	ActiveCollisionBody = BotCollision;
 	SmoothedSupportNormal = FVector::UpVector;
@@ -140,6 +153,14 @@ void AMiningBotActor::Tick(float DeltaSeconds)
 	{
 		SetRuntimeState(EMiningBotRuntimeState::Disabled, TEXT("Disabled"));
 		return;
+	}
+
+	if (DirtTrailBrushComponent)
+	{
+		const bool bShouldClean = bEnableCleaningTrail
+			&& RuntimeState != EMiningBotRuntimeState::PhysicsRagdoll
+			&& !bHeldByPhysicsHandle;
+		DirtTrailBrushComponent->SetBrushActive(bShouldClean);
 	}
 
 	if (!OwningSwarmMachine)

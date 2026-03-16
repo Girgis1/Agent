@@ -2,6 +2,7 @@
 
 #include "AgentCharacter.h"
 #include "AgentBeamToolComponent.h"
+#include "Camera/AgentAimFocusCameraModifier.h"
 #include "Scanner/AgentScannerComponent.h"
 #include "Backpack/Actors/BlackHoleBackpackActor.h"
 #include "Backpack/Components/BackAttachmentComponent.h"
@@ -235,6 +236,20 @@ AAgentCharacter::AAgentCharacter(const FObjectInitializer& ObjectInitializer)
 	{
 		MiningSwarmClass = MiningSwarmBlueprintClass.Class;
 	}
+
+	BeamAimDepthOfFieldSettings = FPostProcessSettings();
+	BeamAimDepthOfFieldSettings.bOverride_DepthOfFieldFocalDistance = true;
+	BeamAimDepthOfFieldSettings.DepthOfFieldFocalDistance = BeamAimDepthOfFieldFallbackDistance;
+	BeamAimDepthOfFieldSettings.bOverride_DepthOfFieldFstop = true;
+	BeamAimDepthOfFieldSettings.DepthOfFieldFstop = 1.0f;
+	BeamAimDepthOfFieldSettings.bOverride_DepthOfFieldFocalRegion = true;
+	BeamAimDepthOfFieldSettings.DepthOfFieldFocalRegion = 0.0f;
+	BeamAimDepthOfFieldSettings.bOverride_DepthOfFieldNearTransitionRegion = true;
+	BeamAimDepthOfFieldSettings.DepthOfFieldNearTransitionRegion = 20.0f;
+	BeamAimDepthOfFieldSettings.bOverride_DepthOfFieldFarTransitionRegion = true;
+	BeamAimDepthOfFieldSettings.DepthOfFieldFarTransitionRegion = 45.0f;
+	BeamAimDepthOfFieldSettings.bOverride_DepthOfFieldScale = true;
+	BeamAimDepthOfFieldSettings.DepthOfFieldScale = 1.0f;
 
 }
 
@@ -1599,6 +1614,101 @@ UAgentBeamToolComponent* AAgentCharacter::ResolveActiveBeamToolComponent() const
 	return PlayerBeamToolComponent;
 }
 
+UAgentAimFocusCameraModifier* AAgentCharacter::ResolveBeamAimFocusCameraModifier()
+{
+	if (BeamAimFocusCameraModifier.IsValid())
+	{
+		return BeamAimFocusCameraModifier.Get();
+	}
+
+	APlayerController* PlayerController = Cast<APlayerController>(GetController());
+	APlayerCameraManager* CameraManager = PlayerController ? PlayerController->PlayerCameraManager : nullptr;
+	if (!CameraManager)
+	{
+		return nullptr;
+	}
+
+	if (UCameraModifier* ExistingModifier = CameraManager->FindCameraModifierByClass(UAgentAimFocusCameraModifier::StaticClass()))
+	{
+		BeamAimFocusCameraModifier = Cast<UAgentAimFocusCameraModifier>(ExistingModifier);
+		return BeamAimFocusCameraModifier.Get();
+	}
+
+	BeamAimFocusCameraModifier = Cast<UAgentAimFocusCameraModifier>(
+		CameraManager->AddNewCameraModifier(UAgentAimFocusCameraModifier::StaticClass()));
+	return BeamAimFocusCameraModifier.Get();
+}
+
+bool AAgentCharacter::ResolveBeamAimFocusDistance(
+	const FVector& ViewOrigin,
+	const FVector& ViewDirection,
+	float& OutFocusDistance) const
+{
+	OutFocusDistance = FMath::Max(1.0f, BeamAimDepthOfFieldFallbackDistance);
+
+	const UAgentBeamToolComponent* ActiveBeamToolComponent = ResolveActiveBeamToolComponent();
+	if (ActiveBeamToolComponent)
+	{
+		const FAgentBeamTraceState& TraceState = ActiveBeamToolComponent->GetTraceState();
+		if (ActiveBeamToolComponent->IsBeamActive() && TraceState.bHasHit)
+		{
+			OutFocusDistance = FMath::Max(1.0f, FVector::Distance(ViewOrigin, TraceState.ImpactPoint));
+			return true;
+		}
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return false;
+	}
+
+	const FVector SafeViewDirection = ViewDirection.GetSafeNormal();
+	if (SafeViewDirection.IsNearlyZero())
+	{
+		return false;
+	}
+
+	const float TraceDistance = ScannerComponent
+		? FMath::Max(100.0f, ScannerComponent->ScannerTraceDistance)
+		: FMath::Max(100.0f, PlayerBeamToolComponent ? PlayerBeamToolComponent->BeamRange : 3000.0f);
+	const FVector TraceEnd = ViewOrigin + (SafeViewDirection * TraceDistance);
+
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(AgentBeamAimFocusTrace), false, this);
+	QueryParams.bReturnPhysicalMaterial = false;
+	QueryParams.bTraceComplex = false;
+	QueryParams.AddIgnoredActor(this);
+
+	TArray<AActor*> AttachedActors;
+	GetAttachedActors(AttachedActors, true, true);
+	for (AActor* AttachedActor : AttachedActors)
+	{
+		if (AttachedActor)
+		{
+			QueryParams.AddIgnoredActor(AttachedActor);
+		}
+	}
+
+	FHitResult HitResult;
+	const ECollisionChannel FocusTraceChannel = ScannerComponent
+		? static_cast<ECollisionChannel>(ScannerComponent->TraceChannel.GetValue())
+		: ECC_Visibility;
+	const bool bHasHit = World->LineTraceSingleByChannel(
+		HitResult,
+		ViewOrigin,
+		TraceEnd,
+		FocusTraceChannel,
+		QueryParams);
+	if (!bHasHit)
+	{
+		return false;
+	}
+
+	const FVector ImpactPoint = HitResult.ImpactPoint.IsNearlyZero() ? HitResult.Location : HitResult.ImpactPoint;
+	OutFocusDistance = FMath::Max(1.0f, FVector::Distance(ViewOrigin, ImpactPoint));
+	return true;
+}
+
 USceneComponent* AAgentCharacter::ResolveActiveBeamOriginComponent() const
 {
 	if ((bMapModeActive || CurrentViewMode == EAgentViewMode::DronePilot) && DroneCompanion)
@@ -1653,7 +1763,8 @@ void AAgentCharacter::UpdateBeamSystems(float DeltaSeconds)
 {
 	(void)DeltaSeconds;
 
-	const bool bShouldFireBeam = IsBeamAimModifierActive() && IsBeamFireInputHeld();
+	const bool bShouldFireBeam = CanUseBeamTool()
+		&& (bMouseBeamFireHeld || (IsBeamAimModifierActive() && bControllerBeamFireHeld));
 	if (!bShouldFireBeam)
 	{
 		StopAllBeamTools();
@@ -1718,7 +1829,7 @@ void AAgentCharacter::UpdateScannerSystems(float DeltaSeconds)
 		return;
 	}
 
-	const bool bAimActive = IsBeamAimModifierActive();
+	const bool bAimActive = IsBeamAimModifierActive() || (CanUseBeamTool() && bMouseBeamFireHeld);
 	const UAgentBeamToolComponent* ActiveBeamToolComponent = ResolveActiveBeamToolComponent();
 	const FAgentBeamTraceState* BeamTraceState = nullptr;
 	if (bAimActive && ActiveBeamToolComponent && ActiveBeamToolComponent->IsBeamActive())
@@ -1735,8 +1846,7 @@ void AAgentCharacter::UpdateBeamAimZoom(float DeltaSeconds)
 	APlayerCameraManager* CameraManager = PlayerController ? PlayerController->PlayerCameraManager : nullptr;
 	if (!CameraManager)
 	{
-		bBeamAimZoomLocked = false;
-		BeamAimZoomViewTarget.Reset();
+		ResetBeamAimZoomState();
 		return;
 	}
 
@@ -1756,8 +1866,10 @@ void AAgentCharacter::UpdateBeamAimZoom(float DeltaSeconds)
 		bBeamAimZoomLocked = true;
 	}
 
+	const float ZoomAlphaTarget = bShouldZoom ? 1.0f : 0.0f;
 	if (!bBeamAimZoomLocked)
 	{
+		UpdateBeamAimDepthOfField(DeltaSeconds, false, FVector::ZeroVector, FVector::ForwardVector);
 		return;
 	}
 
@@ -1772,6 +1884,16 @@ void AAgentCharacter::UpdateBeamAimZoom(float DeltaSeconds)
 		: TargetFov;
 	CameraManager->SetFOV(BeamAimCurrentFov);
 
+	FVector ViewOrigin = FVector::ZeroVector;
+	FVector ViewDirection = FVector::ForwardVector;
+	FVector VisualOrigin = FVector::ZeroVector;
+	const bool bHasAimPose = ResolveActiveBeamPose(ViewOrigin, ViewDirection, VisualOrigin);
+	UpdateBeamAimDepthOfField(
+		DeltaSeconds,
+		bShouldZoom && bHasAimPose,
+		bHasAimPose ? ViewOrigin : FVector::ZeroVector,
+		bHasAimPose ? ViewDirection : FVector::ForwardVector);
+
 	if (!bShouldZoom && FMath::IsNearlyEqual(BeamAimCurrentFov, BeamAimBaseFov, 0.05f))
 	{
 		CameraManager->UnlockFOV();
@@ -1780,9 +1902,99 @@ void AAgentCharacter::UpdateBeamAimZoom(float DeltaSeconds)
 	}
 }
 
+void AAgentCharacter::UpdateBeamAimDepthOfField(
+	float DeltaSeconds,
+	bool bAimActive,
+	const FVector& ViewOrigin,
+	const FVector& ViewDirection)
+{
+	UAgentAimFocusCameraModifier* FocusModifier = ResolveBeamAimFocusCameraModifier();
+	if (!FocusModifier)
+	{
+		return;
+	}
+
+	const bool bShouldApplyDepthOfField = bEnableBeamAimDepthOfField && bAimActive;
+	const float DepthOfFieldAlphaTarget = bShouldApplyDepthOfField ? 1.0f : 0.0f;
+	const float BaseInterpSpeed = bShouldApplyDepthOfField
+		? FMath::Max(0.0f, BeamAimZoomInInterpSpeed)
+		: FMath::Max(0.0f, BeamAimZoomOutInterpSpeed);
+	const float TimeMultiplier = bShouldApplyDepthOfField
+		? FMath::Max(KINDA_SMALL_NUMBER, BeamAimDepthOfFieldInTimeMultiplier)
+		: FMath::Max(KINDA_SMALL_NUMBER, BeamAimDepthOfFieldOutTimeMultiplier);
+	const float DepthOfFieldInterpSpeed = BaseInterpSpeed / TimeMultiplier;
+	BeamAimDepthOfFieldAlpha = DepthOfFieldInterpSpeed > KINDA_SMALL_NUMBER
+		? FMath::FInterpTo(BeamAimDepthOfFieldAlpha, DepthOfFieldAlphaTarget, DeltaSeconds, DepthOfFieldInterpSpeed)
+		: DepthOfFieldAlphaTarget;
+
+	float TargetFocusDistance = BeamAimDepthOfFieldFallbackDistance;
+	if (BeamAimDepthOfFieldSettings.bOverride_DepthOfFieldFocalDistance)
+	{
+		TargetFocusDistance = BeamAimDepthOfFieldSettings.DepthOfFieldFocalDistance;
+	}
+
+	if (bAimActive && bBeamAimDepthOfFieldUseDynamicFocalDistance)
+	{
+		float ResolvedFocusDistance = 0.0f;
+		if (ResolveBeamAimFocusDistance(ViewOrigin, ViewDirection, ResolvedFocusDistance))
+		{
+			TargetFocusDistance = ResolvedFocusDistance;
+		}
+	}
+	TargetFocusDistance = FMath::Max(1.0f, TargetFocusDistance + BeamAimDepthOfFieldFocusOffset);
+
+	if (!bBeamAimFocusDistanceInitialized)
+	{
+		BeamAimCurrentFocusDistance = TargetFocusDistance;
+		bBeamAimFocusDistanceInitialized = true;
+	}
+	else
+	{
+		const float FocusInterpSpeed = FMath::Max(0.0f, BeamAimDepthOfFieldFocusInterpSpeed);
+		BeamAimCurrentFocusDistance = FocusInterpSpeed > KINDA_SMALL_NUMBER
+			? FMath::FInterpTo(BeamAimCurrentFocusDistance, TargetFocusDistance, DeltaSeconds, FocusInterpSpeed)
+			: TargetFocusDistance;
+	}
+
+	FPostProcessSettings DepthOfFieldSettings = BeamAimDepthOfFieldSettings;
+	DepthOfFieldSettings.bOverride_DepthOfFieldFocalDistance = true;
+	DepthOfFieldSettings.DepthOfFieldFocalDistance = BeamAimCurrentFocusDistance;
+
+	FocusModifier->SetAimFocusState(
+		FMath::Clamp(BeamAimDepthOfFieldAlpha, 0.0f, 1.0f),
+		DepthOfFieldSettings);
+}
+
+void AAgentCharacter::ResetBeamAimZoomState()
+{
+	bBeamAimZoomLocked = false;
+	BeamAimZoomViewTarget.Reset();
+	BeamAimDepthOfFieldAlpha = 0.0f;
+	bBeamAimFocusDistanceInitialized = false;
+	BeamAimCurrentFocusDistance = 0.0f;
+
+	if (APlayerController* PlayerController = Cast<APlayerController>(GetController()))
+	{
+		if (APlayerCameraManager* CameraManager = PlayerController->PlayerCameraManager)
+		{
+			CameraManager->UnlockFOV();
+		}
+	}
+
+	if (UAgentAimFocusCameraModifier* FocusModifier = ResolveBeamAimFocusCameraModifier())
+	{
+		FPostProcessSettings ResetDepthOfFieldSettings = BeamAimDepthOfFieldSettings;
+		ResetDepthOfFieldSettings.bOverride_DepthOfFieldFocalDistance = true;
+		ResetDepthOfFieldSettings.DepthOfFieldFocalDistance = FMath::Max(
+			1.0f,
+			BeamAimDepthOfFieldFallbackDistance + BeamAimDepthOfFieldFocusOffset);
+		FocusModifier->SetAimFocusState(0.0f, ResetDepthOfFieldSettings);
+	}
+}
+
 void AAgentCharacter::OnLeftMouseButtonPressed()
 {
-	if (IsRawMouseBeamAimModifierHeld() && CanUseBeamTool())
+	if (CanUseBeamTool())
 	{
 		bMouseBeamFireHeld = true;
 		return;
@@ -1821,8 +2033,10 @@ void AAgentCharacter::OnRightMouseButtonPressed()
 void AAgentCharacter::OnRightMouseButtonReleased()
 {
 	bRightMouseBeamAimHeld = false;
-	bMouseBeamFireHeld = false;
-	StopAllBeamTools();
+	if (!bMouseBeamFireHeld && !bControllerBeamFireHeld)
+	{
+		StopAllBeamTools();
+	}
 }
 
 void AAgentCharacter::OnMouseScrollUpPressed()
@@ -1945,15 +2159,7 @@ void AAgentCharacter::CycleViewMode()
 void AAgentCharacter::ApplyViewMode(EAgentViewMode NewMode, bool bBlend)
 {
 	StopAllBeamTools();
-	bBeamAimZoomLocked = false;
-	BeamAimZoomViewTarget.Reset();
-	if (APlayerController* PlayerController = Cast<APlayerController>(GetController()))
-	{
-		if (APlayerCameraManager* CameraManager = PlayerController->PlayerCameraManager)
-		{
-			CameraManager->UnlockFOV();
-		}
-	}
+	ResetBeamAimZoomState();
 
 	if (bConveyorPlacementModeActive && NewMode != CurrentViewMode)
 	{
