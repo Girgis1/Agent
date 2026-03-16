@@ -24,9 +24,8 @@ The dirt gameplay path is now decal-first.
 ## Existing Integrations
 
 - `UAgentBeamToolComponent`
-  - Any beam hit now paints dirt decals first.
+  - Any beam hit now paints dirt decals.
   - Existing health and damage behavior is unchanged.
-  - Mesh-based `UDirtySurfaceComponent` support still exists as a fallback path.
 
 - `AMiningBotActor`
   - Mining bots already include a passive `Trail + Clean` brush.
@@ -72,8 +71,6 @@ Metallic = lerp(Dirty_CleanMetallic, Dirty_DirtyMetallic, DirtAlpha)
 ```
 
 Use a grayscale dirt pattern texture with soft gradients. White should mean heavy grime influence, black should mean little or no grime.
-
-## Authoring Workflow
 
 ## Simple Laser Test
 
@@ -122,5 +119,5 @@ That Blueprint uses `/Game/DirtyTest/M_DirtDecal_MaskTest`, which samples the ru
 
 - Receiver meshes need `Receives Decals` enabled.
 - Dirt decals are independent from the underlying mesh material.
-- `Support UV From Hit Results` is still enabled in project settings for the older mesh-surface path, but the decal path does not depend on mesh UVs.
-- `UDirtySurfaceComponent` is still in the project if you want a mesh-material dirt path later, but decals are now the recommended world dirt workflow.
+- The decal brush uses decal-local projection space, not mesh UVs or world-aligned texture coordinates.
+- `ADirtDecalActor` is now the only dirt surface implementation in the runtime codebase.

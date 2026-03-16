@@ -25,9 +25,9 @@
 
 namespace
 {
-	const FName BeamStartTagName(TEXT("BeamStart"));
+	const FName DroneBeamStartTagName(TEXT("BeamStart"));
 
-	USceneComponent* ResolveTaggedSceneComponent(AActor* SourceActor, FName RequiredTag)
+	USceneComponent* ResolveDroneTaggedSceneComponent(AActor* SourceActor, FName RequiredTag)
 	{
 		if (!SourceActor || RequiredTag.IsNone())
 		{
@@ -149,7 +149,7 @@ ADroneCompanion::ADroneCompanion()
 
 USceneComponent* ADroneCompanion::GetBeamOriginComponent() const
 {
-	return ResolveTaggedSceneComponent(const_cast<ADroneCompanion*>(this), BeamStartTagName);
+	return ResolveDroneTaggedSceneComponent(const_cast<ADroneCompanion*>(this), DroneBeamStartTagName);
 }
 
 void ADroneCompanion::BeginPlay()

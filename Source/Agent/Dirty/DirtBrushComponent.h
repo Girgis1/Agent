@@ -7,7 +7,6 @@
 #include "Dirty/DirtyTypes.h"
 #include "DirtBrushComponent.generated.h"
 
-class UDirtySurfaceComponent;
 class UTexture2D;
 
 UCLASS(ClassGroup=(Dirty), meta=(BlueprintSpawnableComponent))

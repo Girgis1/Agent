@@ -2,7 +2,6 @@
 
 #include "AgentBeamToolComponent.h"
 #include "Dirty/DirtDecalSubsystem.h"
-#include "Dirty/DirtySurfaceComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
@@ -209,15 +208,6 @@ void UAgentBeamToolComponent::UpdateBeamTrace(float DeltaTime)
 			}
 		}
 
-		if (bAffectDirtySurfaces)
-		{
-			if (UDirtySurfaceComponent* DirtySurfaceComponent = UDirtySurfaceComponent::FindDirtySurfaceComponent(
-					TraceState.HitActor,
-					TraceState.HitComponent))
-			{
-				DirtySurfaceComponent->ApplyBrushHit(HitResult, BuildDirtyBrushStamp(), DeltaTime);
-			}
-		}
 	}
 
 	if (bDrawDebugWhileFiring)

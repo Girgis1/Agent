@@ -121,7 +121,6 @@ void ADirtDecalActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		}
 	}
 
-	ClearSimpleTileGrid();
 	DynamicMaterial = nullptr;
 	DirtMaskTexture = nullptr;
 	DirtMaskPixels.Reset();
@@ -166,24 +165,6 @@ void ADirtDecalActor::InitializeDirtDecal()
 			*GetNameSafe(this));
 	}
 
-	if (bUseSimpleTileGrid)
-	{
-		BuildSimpleTileGrid();
-		if (TileDecalComponents.IsEmpty())
-		{
-			UE_LOG(
-				LogTemp,
-				Warning,
-				TEXT("DirtDecalActor %s could not enter simple tile grid mode, so the preview decal will stay visible."),
-				*GetNameSafe(this));
-			return;
-		}
-
-		RecomputeDirtynessFromTileGrid();
-		UpdateSpotlessDestroyState();
-		return;
-	}
-
 	if (EffectiveDecalMaterial)
 	{
 		DynamicMaterial = DirtDecalComponent->CreateDynamicMaterialInstance();
@@ -219,7 +200,7 @@ bool ADirtDecalActor::ApplyBrushAtWorldPoint(const FVector& WorldPoint, const FD
 		return false;
 	}
 
-	if (!bUseSimpleTileGrid && (!DirtMaskTexture || DirtMaskPixels.IsEmpty()))
+	if (!DirtMaskTexture || DirtMaskPixels.IsEmpty())
 	{
 		return false;
 	}
@@ -245,11 +226,6 @@ bool ADirtDecalActor::ApplyBrushAtWorldPoint(const FVector& WorldPoint, const FD
 		return false;
 	}
 
-	if (bUseSimpleTileGrid)
-	{
-		return ApplyBrushToTileGrid(LocalPoint, Stamp);
-	}
-
 	float RadiusXPixels = 0.0f;
 	float RadiusYPixels = 0.0f;
 	ComputeBrushRadiiPixels(Stamp.BrushSizeCm, RadiusXPixels, RadiusYPixels);
@@ -263,26 +239,6 @@ void ADirtDecalActor::SetDirtyness(float NewDirtyness, bool bResetMask)
 
 	if (bResetMask)
 	{
-		if (bUseSimpleTileGrid)
-		{
-			BuildSimpleTileGrid();
-			const int32 TotalTiles = TileDecalComponents.Num();
-			const int32 VisibleTiles = FMath::RoundToInt(FMath::Clamp(ClampedDirtyness, 0.0f, 1.0f) * static_cast<float>(TotalTiles));
-			for (int32 TileIndex = 0; TileIndex < TotalTiles; ++TileIndex)
-			{
-				const bool bShouldBeActive = TileIndex < VisibleTiles;
-				TileActiveStates[TileIndex] = bShouldBeActive;
-				if (UDecalComponent* TileDecal = TileDecalComponents[TileIndex])
-				{
-					TileDecal->SetHiddenInGame(!bShouldBeActive);
-					TileDecal->SetVisibility(bShouldBeActive, true);
-				}
-			}
-			RecomputeDirtynessFromTileGrid();
-			UpdateSpotlessDestroyState();
-			return;
-		}
-
 		FillMask(ClampedDirtyness);
 	}
 	else
@@ -295,11 +251,6 @@ void ADirtDecalActor::SetDirtyness(float NewDirtyness, bool bResetMask)
 
 void ADirtDecalActor::RefreshVisualParameters()
 {
-	if (bUseSimpleTileGrid)
-	{
-		return;
-	}
-
 	if (!DynamicMaterial)
 	{
 		return;
@@ -380,113 +331,6 @@ void ADirtDecalActor::CreateMaskTexture()
 	DirtMaskPixels.SetNumZeroed(SafeResolution * SafeResolution);
 }
 
-void ADirtDecalActor::BuildSimpleTileGrid()
-{
-	ClearSimpleTileGrid();
-
-	if (!DirtDecalComponent)
-	{
-		return;
-	}
-
-	UMaterialInterface* TileMaterial = BaseDecalMaterial ? BaseDecalMaterial.Get() : DirtDecalComponent->GetDecalMaterial();
-	if (!TileMaterial)
-	{
-		UE_LOG(
-			LogTemp,
-			Warning,
-			TEXT("DirtDecalActor %s could not build its simple tile grid because there is no decal material assigned."),
-			*GetNameSafe(this));
-		return;
-	}
-
-	const int32 SafeTileCountY = FMath::Clamp(TileCountY, 1, 32);
-	const int32 SafeTileCountZ = FMath::Clamp(TileCountZ, 1, 32);
-	const int32 TotalTileCount = SafeTileCountY * SafeTileCountZ;
-	const int32 InitiallyVisibleTileCount = FMath::Clamp(
-		FMath::RoundToInt(FMath::Clamp(InitialDirtyness, 0.0f, 1.0f) * static_cast<float>(TotalTileCount)),
-		0,
-		TotalTileCount);
-	const FVector OverallHalfExtent = DirtDecalComponent->DecalSize.ComponentMax(FVector(1.0f));
-	const float CellHalfExtentY = OverallHalfExtent.Y / static_cast<float>(SafeTileCountY);
-	const float CellHalfExtentZ = OverallHalfExtent.Z / static_cast<float>(SafeTileCountZ);
-
-	TileDecalComponents.Reserve(SafeTileCountY * SafeTileCountZ);
-	TileCenterLocalPoints.Reserve(SafeTileCountY * SafeTileCountZ);
-	TileActiveStates.Reserve(SafeTileCountY * SafeTileCountZ);
-
-	for (int32 TileYIndex = 0; TileYIndex < SafeTileCountY; ++TileYIndex)
-	{
-		const float CenterY = -OverallHalfExtent.Y + CellHalfExtentY + (static_cast<float>(TileYIndex) * CellHalfExtentY * 2.0f);
-		for (int32 TileZIndex = 0; TileZIndex < SafeTileCountZ; ++TileZIndex)
-		{
-			const int32 LinearTileIndex = (TileYIndex * SafeTileCountZ) + TileZIndex;
-			const float CenterZ = -OverallHalfExtent.Z + CellHalfExtentZ + (static_cast<float>(TileZIndex) * CellHalfExtentZ * 2.0f);
-
-			UDecalComponent* TileDecal = NewObject<UDecalComponent>(this);
-			if (!TileDecal)
-			{
-				continue;
-			}
-
-			TileDecal->CreationMethod = EComponentCreationMethod::Instance;
-			AddInstanceComponent(TileDecal);
-			TileDecal->SetDecalMaterial(TileMaterial);
-			TileDecal->DecalSize = FVector(OverallHalfExtent.X, CellHalfExtentY, CellHalfExtentZ);
-			TileDecal->SortOrder = DirtDecalComponent->SortOrder;
-			TileDecal->SetupAttachment(DirtDecalComponent);
-			TileDecal->SetRelativeLocation(FVector(0.0f, CenterY, CenterZ));
-			TileDecal->RegisterComponent();
-
-			const bool bIsInitiallyActive = LinearTileIndex < InitiallyVisibleTileCount;
-			TileDecal->SetHiddenInGame(!bIsInitiallyActive);
-			TileDecal->SetVisibility(bIsInitiallyActive, true);
-
-			TileDecalComponents.Add(TileDecal);
-			TileCenterLocalPoints.Add(FVector2D(CenterY, CenterZ));
-			TileActiveStates.Add(bIsInitiallyActive);
-		}
-	}
-
-	if (bHidePreviewDecalAtRuntime)
-	{
-		DirtDecalComponent->SetHiddenInGame(true);
-		DirtDecalComponent->SetVisibility(false, true);
-	}
-	else
-	{
-		DirtDecalComponent->SetHiddenInGame(false);
-		DirtDecalComponent->SetVisibility(true, true);
-	}
-
-	if (bDebugBrushLogging)
-	{
-		UE_LOG(
-			LogTemp,
-			Log,
-			TEXT("DirtDecalActor %s built a %dx%d simple tile grid using %s."),
-			*GetNameSafe(this),
-			SafeTileCountY,
-			SafeTileCountZ,
-			*GetNameSafe(TileMaterial));
-	}
-}
-
-void ADirtDecalActor::ClearSimpleTileGrid()
-{
-	for (UDecalComponent* TileDecal : TileDecalComponents)
-	{
-		if (TileDecal)
-		{
-			TileDecal->DestroyComponent();
-		}
-	}
-
-	TileDecalComponents.Reset();
-	TileCenterLocalPoints.Reset();
-	TileActiveStates.Reset();
-}
-
 void ADirtDecalActor::FillMask(float NormalizedValue)
 {
 	if (!DirtMaskTexture || DirtMaskPixels.IsEmpty())
@@ -533,24 +377,6 @@ void ADirtDecalActor::RecomputeDirtyness()
 	CurrentDirtyness = Denominator > 0.0 ? static_cast<float>(TotalValue / Denominator) : 0.0f;
 }
 
-void ADirtDecalActor::RecomputeDirtynessFromTileGrid()
-{
-	const int32 TotalTiles = TileActiveStates.Num();
-	if (TotalTiles <= 0)
-	{
-		CurrentDirtyness = 0.0f;
-		return;
-	}
-
-	int32 ActiveTileCount = 0;
-	for (const bool bTileIsActive : TileActiveStates)
-	{
-		ActiveTileCount += bTileIsActive ? 1 : 0;
-	}
-
-	CurrentDirtyness = static_cast<float>(ActiveTileCount) / static_cast<float>(TotalTiles);
-}
-
 void ADirtDecalActor::ComputeBrushRadiiPixels(float BrushSizeCm, float& OutRadiusXPixels, float& OutRadiusYPixels) const
 {
 	OutRadiusXPixels = 1.0f;
@@ -591,75 +417,6 @@ bool ADirtDecalActor::ResolveWorldPointToUV(const FVector& WorldPoint, FVector2D
 	// coordinates as zyx before assigning DecalUVs = SwizzlePos.xy.
 	OutUV.X = (OutLocalPoint.Z / (DecalHalfExtent.Z * 2.0f)) + 0.5f;
 	OutUV.Y = (OutLocalPoint.Y / (DecalHalfExtent.Y * 2.0f)) + 0.5f;
-	return true;
-}
-
-bool ADirtDecalActor::ApplyBrushToTileGrid(const FVector& LocalPoint, const FDirtBrushStamp& Stamp)
-{
-	if (TileDecalComponents.IsEmpty() || TileCenterLocalPoints.Num() != TileDecalComponents.Num() || TileActiveStates.Num() != TileDecalComponents.Num() || !DirtDecalComponent)
-	{
-		return false;
-	}
-
-	const FVector WorldScale = DirtDecalComponent->GetComponentTransform().GetScale3D().GetAbs().ComponentMax(FVector(UE_SMALL_NUMBER));
-	const FVector OverallHalfExtent = DirtDecalComponent->DecalSize.ComponentMax(FVector(1.0f));
-	const int32 SafeTileCountY = FMath::Clamp(TileCountY, 1, 32);
-	const int32 SafeTileCountZ = FMath::Clamp(TileCountZ, 1, 32);
-	const float CellHalfExtentYWorld = (OverallHalfExtent.Y / static_cast<float>(SafeTileCountY)) * WorldScale.Y;
-	const float CellHalfExtentZWorld = (OverallHalfExtent.Z / static_cast<float>(SafeTileCountZ)) * WorldScale.Z;
-	const float CellInfluenceRadiusCm = FMath::Sqrt(FMath::Square(CellHalfExtentYWorld) + FMath::Square(CellHalfExtentZWorld));
-	const float BrushRadiusCm = FMath::Max(1.0f, Stamp.BrushSizeCm * 0.5f);
-	const float EffectiveRadiusCm = BrushRadiusCm + CellInfluenceRadiusCm;
-	const bool bEnableTile = Stamp.Mode == EDirtBrushMode::Dirty;
-
-	bool bAnyTileChanged = false;
-	int32 ChangedTileCount = 0;
-	for (int32 TileIndex = 0; TileIndex < TileDecalComponents.Num(); ++TileIndex)
-	{
-		const FVector2D& TileCenterLocal = TileCenterLocalPoints[TileIndex];
-		const float DeltaYWorld = (LocalPoint.Y - TileCenterLocal.X) * WorldScale.Y;
-		const float DeltaZWorld = (LocalPoint.Z - TileCenterLocal.Y) * WorldScale.Z;
-		if (FMath::Sqrt(FMath::Square(DeltaYWorld) + FMath::Square(DeltaZWorld)) > EffectiveRadiusCm)
-		{
-			continue;
-		}
-
-		if (TileActiveStates[TileIndex] == bEnableTile)
-		{
-			continue;
-		}
-
-		TileActiveStates[TileIndex] = bEnableTile;
-		if (UDecalComponent* TileDecal = TileDecalComponents[TileIndex])
-		{
-			TileDecal->SetHiddenInGame(!bEnableTile);
-			TileDecal->SetVisibility(bEnableTile, true);
-		}
-
-		bAnyTileChanged = true;
-		++ChangedTileCount;
-	}
-
-	if (!bAnyTileChanged)
-	{
-		return false;
-	}
-
-	RecomputeDirtynessFromTileGrid();
-	UpdateSpotlessDestroyState();
-
-	if (bDebugBrushLogging)
-	{
-		UE_LOG(
-			LogTemp,
-			Log,
-			TEXT("DirtDecalActor %s %s %d tile(s); dirtyness now %.3f."),
-			*GetNameSafe(this),
-			bEnableTile ? TEXT("re-dirtied") : TEXT("cleaned"),
-			ChangedTileCount,
-			CurrentDirtyness);
-	}
-
 	return true;
 }
 

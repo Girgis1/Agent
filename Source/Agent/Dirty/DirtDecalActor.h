@@ -80,18 +80,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal")
 	TObjectPtr<UMaterialInterface> BaseDecalMaterial = nullptr;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal|Test")
-	bool bUseSimpleTileGrid = false;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal|Test", meta=(ClampMin="1", ClampMax="32", UIMin="1", UIMax="32", EditCondition="bUseSimpleTileGrid"))
-	int32 TileCountY = 8;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal|Test", meta=(ClampMin="1", ClampMax="32", UIMin="1", UIMax="32", EditCondition="bUseSimpleTileGrid"))
-	int32 TileCountZ = 8;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal|Test", meta=(EditCondition="bUseSimpleTileGrid"))
-	bool bHidePreviewDecalAtRuntime = true;
-
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal|Debug")
 	bool bDebugBrushLogging = true;
 
@@ -178,15 +166,11 @@ public:
 
 protected:
 	void CreateMaskTexture();
-	void BuildSimpleTileGrid();
-	void ClearSimpleTileGrid();
 	void FillMask(float NormalizedValue);
 	void UploadMaskTexture();
 	void RecomputeDirtyness();
-	void RecomputeDirtynessFromTileGrid();
 	void ComputeBrushRadiiPixels(float BrushSizeCm, float& OutRadiusXPixels, float& OutRadiusYPixels) const;
 	bool ResolveWorldPointToUV(const FVector& WorldPoint, FVector2D& OutUV, FVector& OutLocalPoint) const;
-	bool ApplyBrushToTileGrid(const FVector& LocalPoint, const FDirtBrushStamp& Stamp);
 	bool ApplyBrushAtUV(const FVector2D& UV, float RadiusXPixels, float RadiusYPixels, const FDirtBrushStamp& Stamp, float DeltaTime);
 	void UpdateSpotlessDestroyState();
 	void HandleSpotlessDestroy();
@@ -196,12 +180,6 @@ protected:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UTexture2D> DirtMaskTexture = nullptr;
-
-	UPROPERTY(Transient)
-	TArray<TObjectPtr<UDecalComponent>> TileDecalComponents;
-
-	TArray<FVector2D> TileCenterLocalPoints;
-	TArray<bool> TileActiveStates;
 
 	FTimerHandle SpotlessDestroyTimerHandle;
 

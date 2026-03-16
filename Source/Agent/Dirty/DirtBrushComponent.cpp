@@ -3,7 +3,6 @@
 #include "Dirty/DirtBrushComponent.h"
 
 #include "Dirty/DirtDecalSubsystem.h"
-#include "Dirty/DirtySurfaceComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
@@ -167,28 +166,15 @@ void UDirtBrushComponent::ApplyAreaBrush(const FVector& Origin, float DeltaTime)
 
 bool UDirtBrushComponent::TryApplyBrushToHit(const FHitResult& Hit, float DeltaTime)
 {
-	bool bApplied = false;
-
 	if (UWorld* World = GetWorld())
 	{
 		if (UDirtDecalSubsystem* DirtDecalSubsystem = World->GetSubsystem<UDirtDecalSubsystem>())
 		{
-			bApplied |= DirtDecalSubsystem->ApplyBrushAtHit(Hit, BuildBrushStamp(), DeltaTime);
+			return DirtDecalSubsystem->ApplyBrushAtHit(Hit, BuildBrushStamp(), DeltaTime);
 		}
 	}
 
-	AActor* HitActor = Hit.GetActor();
-	if (!HitActor)
-	{
-		return bApplied;
-	}
-
-	if (UDirtySurfaceComponent* DirtySurface = UDirtySurfaceComponent::FindDirtySurfaceComponent(HitActor, Hit.GetComponent()))
-	{
-		bApplied |= DirtySurface->ApplyBrushHit(Hit, BuildBrushStamp(), DeltaTime);
-	}
-
-	return bApplied;
+	return false;
 }
 
 void UDirtBrushComponent::TickTrailBrush(float DeltaTime)
