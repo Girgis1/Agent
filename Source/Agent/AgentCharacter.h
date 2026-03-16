@@ -22,6 +22,7 @@ class AActor;
 class UVehicleInteractionComponent;
 class UBackAttachmentComponent;
 class UPlayerMagnetComponent;
+class UAgentScannerComponent;
 class UCameraComponent;
 class UDroneSwarmComponent;
 class UInputAction;
@@ -134,6 +135,10 @@ class AAgentCharacter : public ACharacter
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UAgentBeamToolComponent* PlayerBeamToolComponent;
 
+	/** Passive scanner that reveals target health and composition while aiming. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	UAgentScannerComponent* ScannerComponent;
+
 	/** Swarm registry and role-slot coordinator for all known drones */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UDroneSwarmComponent* DroneSwarmComponent;
@@ -216,6 +221,7 @@ protected:
 	void ApplyBeamModeToEmitters();
 	void StopAllBeamTools();
 	void UpdateBeamSystems(float DeltaSeconds);
+	void UpdateScannerSystems(float DeltaSeconds);
 	void UpdateBeamAimZoom(float DeltaSeconds);
 	bool IsRawMouseBeamAimModifierHeld() const;
 	bool IsRawControllerBeamAimModifierHeld() const;
@@ -1317,6 +1323,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category="Interaction|Backpack")
 	UPlayerMagnetComponent* GetPlayerMagnetComponent() const { return PlayerMagnetComponent; }
+
+	UFUNCTION(BlueprintPure, Category="Scanner")
+	UAgentScannerComponent* GetScannerComponent() const { return ScannerComponent; }
 
 	FORCEINLINE USpringArmComponent* GetCameraBoom() const { return CameraBoom; }
 	FORCEINLINE UCameraComponent* GetFollowCamera() const { return FollowCamera; }

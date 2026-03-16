@@ -2,6 +2,7 @@
 
 #include "AgentCharacter.h"
 #include "AgentBeamToolComponent.h"
+#include "Scanner/AgentScannerComponent.h"
 #include "Backpack/Actors/BlackHoleBackpackActor.h"
 #include "Backpack/Components/BackAttachmentComponent.h"
 #include "Backpack/Components/PlayerMagnetComponent.h"
@@ -193,6 +194,7 @@ AAgentCharacter::AAgentCharacter(const FObjectInitializer& ObjectInitializer)
 	PlayerBeamToolComponent->HealingPerSecond = 16.0f;
 	PlayerBeamToolComponent->BaseTraceRadius = 6.0f;
 	PlayerBeamToolComponent->BeamRange = 3000.0f;
+	ScannerComponent = CreateDefaultSubobject<UAgentScannerComponent>(TEXT("ScannerComponent"));
 	DroneSwarmComponent = CreateDefaultSubobject<UDroneSwarmComponent>(TEXT("DroneSwarmComponent"));
 
 	ThirdPersonDroneProxyMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ThirdPersonDroneProxyMesh"));
@@ -465,6 +467,7 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 	UpdateDronePilotCameraLimits();
 	RefreshPrimaryDroneAvailabilityFromCompanion();
 	UpdateBeamSystems(DeltaSeconds);
+	UpdateScannerSystems(DeltaSeconds);
 	UpdateBeamAimZoom(DeltaSeconds);
 	if (!bPrimaryDroneAvailable
 		&& bForceFirstPersonWhenDroneUnavailable
@@ -1697,6 +1700,33 @@ void AAgentCharacter::UpdateBeamSystems(float DeltaSeconds)
 	ActiveBeamToolComponent->SetBeamMode(CurrentBeamMode);
 	ActiveBeamToolComponent->SetBeamPose(ViewOrigin, ViewDirection, VisualOrigin);
 	ActiveBeamToolComponent->StartBeam();
+}
+
+void AAgentCharacter::UpdateScannerSystems(float DeltaSeconds)
+{
+	if (!ScannerComponent)
+	{
+		return;
+	}
+
+	FVector ViewOrigin = FVector::ZeroVector;
+	FVector ViewDirection = FVector::ForwardVector;
+	FVector VisualOrigin = FVector::ZeroVector;
+	if (!ResolveActiveBeamPose(ViewOrigin, ViewDirection, VisualOrigin))
+	{
+		ScannerComponent->UpdateScanner(DeltaSeconds, false, FVector::ZeroVector, FVector::ZeroVector, nullptr);
+		return;
+	}
+
+	const bool bAimActive = IsBeamAimModifierActive();
+	const UAgentBeamToolComponent* ActiveBeamToolComponent = ResolveActiveBeamToolComponent();
+	const FAgentBeamTraceState* BeamTraceState = nullptr;
+	if (bAimActive && ActiveBeamToolComponent && ActiveBeamToolComponent->IsBeamActive())
+	{
+		BeamTraceState = &ActiveBeamToolComponent->GetTraceState();
+	}
+
+	ScannerComponent->UpdateScanner(DeltaSeconds, bAimActive, ViewOrigin, ViewDirection, BeamTraceState);
 }
 
 void AAgentCharacter::UpdateBeamAimZoom(float DeltaSeconds)
