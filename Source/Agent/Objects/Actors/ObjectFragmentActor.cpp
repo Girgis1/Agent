@@ -7,6 +7,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "GeometryScript/CollisionFunctions.h"
 #include "KismetProceduralMeshLibrary.h"
+#include "Objects/Components/ObjectSliceComponent.h"
 #include "UDynamicMesh.h"
 #include "Engine/StaticMesh.h"
 
@@ -52,6 +53,10 @@ AObjectFragmentActor::AObjectFragmentActor()
 	ProceduralMeshPiece->bUseComplexAsSimpleCollision = false;
 	ProceduralMeshPiece->bUseAsyncCooking = true;
 	ProceduralMeshPiece->SetHiddenInGame(true);
+
+	ObjectSlice = CreateDefaultSubobject<UObjectSliceComponent>(TEXT("ObjectSlice"));
+	ObjectSlice->bSlicingEnabled = true;
+	ObjectSlice->MaxRuntimeSlices = 0;
 
 	if (ItemMesh)
 	{
@@ -104,14 +109,14 @@ bool AObjectFragmentActor::InitializeFromDynamicMesh(const UDynamicMesh* SourceM
 	});
 
 	DynamicMeshPiece->ConfigureMaterialSet(MaterialSet, true);
-	DynamicMeshPiece->DetachFromComponent(FDetachmentTransformRules::KeepRelativeTransform);
-	DynamicMeshPiece->SetRelativeTransform(FTransform::Identity);
+	const FTransform PieceWorldTransform = DynamicMeshPiece->GetComponentTransform();
+	DynamicMeshPiece->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
 	SetRootComponent(DynamicMeshPiece);
+	SetActorTransform(PieceWorldTransform, false, nullptr, ETeleportType::TeleportPhysics);
 
 	if (PhysicsProxy)
 	{
-		PhysicsProxy->AttachToComponent(DynamicMeshPiece, FAttachmentTransformRules::KeepRelativeTransform);
-		PhysicsProxy->SetRelativeTransform(FTransform::Identity);
+		PhysicsProxy->AttachToComponent(DynamicMeshPiece, FAttachmentTransformRules::KeepWorldTransform);
 		PhysicsProxy->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		PhysicsProxy->SetSimulatePhysics(false);
 		PhysicsProxy->SetHiddenInGame(true);
@@ -123,6 +128,21 @@ bool AObjectFragmentActor::InitializeFromDynamicMesh(const UDynamicMesh* SourceM
 		ItemMesh->SetGenerateOverlapEvents(false);
 		ItemMesh->SetSimulatePhysics(false);
 		ItemMesh->SetHiddenInGame(true);
+	}
+
+	if (ProceduralMeshPiece)
+	{
+		ProceduralMeshPiece->ClearAllMeshSections();
+		ProceduralMeshPiece->ClearCollisionConvexMeshes();
+		ProceduralMeshPiece->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		ProceduralMeshPiece->SetSimulatePhysics(false);
+		ProceduralMeshPiece->SetHiddenInGame(true);
+	}
+
+	if (GeneratedProceduralOtherHalf)
+	{
+		GeneratedProceduralOtherHalf->DestroyComponent();
+		GeneratedProceduralOtherHalf = nullptr;
 	}
 
 	FGeometryScriptCollisionFromMeshOptions CollisionOptions;
@@ -139,7 +159,10 @@ bool AObjectFragmentActor::InitializeFromDynamicMesh(const UDynamicMesh* SourceM
 	DynamicMeshPiece->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 	DynamicMeshPiece->SetSimulatePhysics(true);
 	DynamicMeshPiece->SetHiddenInGame(false);
+	ActiveProceduralMeshPiece = nullptr;
 	bUsingDynamicMeshPiece = true;
+	bUsingProceduralMeshPiece = false;
+	DisableInactiveVisualComponents();
 	return true;
 }
 
@@ -285,15 +308,23 @@ void AObjectFragmentActor::DisableInactiveVisualComponents()
 
 	if (DynamicMeshPiece)
 	{
-		DynamicMeshPiece->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		DynamicMeshPiece->SetSimulatePhysics(false);
-		DynamicMeshPiece->SetHiddenInGame(true);
+		const bool bDynamicMeshIsActive = bUsingDynamicMeshPiece && GetRootComponent() == DynamicMeshPiece;
+		if (!bDynamicMeshIsActive)
+		{
+			DynamicMeshPiece->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			DynamicMeshPiece->SetSimulatePhysics(false);
+			DynamicMeshPiece->SetHiddenInGame(true);
+		}
 	}
 
-	if (ProceduralMeshPiece && ProceduralMeshPiece != ActiveProceduralMeshPiece)
+	if (ProceduralMeshPiece)
 	{
-		ProceduralMeshPiece->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		ProceduralMeshPiece->SetSimulatePhysics(false);
-		ProceduralMeshPiece->SetHiddenInGame(true);
+		const bool bProceduralMeshIsActive = bUsingProceduralMeshPiece && (ProceduralMeshPiece == ActiveProceduralMeshPiece);
+		if (!bProceduralMeshIsActive)
+		{
+			ProceduralMeshPiece->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			ProceduralMeshPiece->SetSimulatePhysics(false);
+			ProceduralMeshPiece->SetHiddenInGame(true);
+		}
 	}
 }

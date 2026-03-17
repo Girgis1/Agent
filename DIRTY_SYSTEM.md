@@ -40,11 +40,15 @@ Recommended texture parameters:
 
 - `Dirty_MaskTexture`
 - `Dirty_PatternTexture`
+- `Mask`
 
 Recommended scalar parameters:
 
 - `Dirty_Dirtyness`
 - `Dirty_Intensity`
+- `Dirty_PatternIntensity`
+- `Dirty_MaskIntensity`
+- `Dirty_CleanProgressPercent`
 - `Dirty_IsSpotless`
 - `Dirty_CleanRoughness`
 - `Dirty_DirtyRoughness`
@@ -61,8 +65,9 @@ Recommended decal material logic:
 
 ```text
 Pattern = Dirt texture sample
-Mask = Runtime dirt mask sample
-DirtAlpha = saturate(Pattern * Dirty_Intensity * Mask)
+CoverageMask = Decal visibility / opacity mask sample
+RuntimeMask = Runtime dirt mask sample
+DirtAlpha = saturate(CoverageMask * Dirty_MaskIntensity * Pattern * Dirty_PatternIntensity * RuntimeMask * Dirty_Intensity)
 
 BaseColor = lerp(CleanBaseColor, DirtyBaseColor, DirtAlpha)
 Roughness = lerp(Dirty_CleanRoughness, Dirty_DirtyRoughness, DirtAlpha)
@@ -94,11 +99,21 @@ That Blueprint uses `/Game/DirtyTest/M_DirtDecal_MaskTest`, which samples the ru
    - `InitialDirtyness`
    - `DirtIntensity`
    - `DirtPatternTexture`
+   - `DirtCoverageTexture` or let the actor read `Mask` from the material instance
+   - `DirtPatternIntensity`
+   - `DirtMaskIntensity`
    - `SpotlessThreshold`
    - `bAutoDestroyWhenSpotless`
    - `DestroyDelayAfterSpotlessSeconds`
    - tint and roughness/specular/metallic values
 5. Size and rotate the `DirtDecalComponent` so it covers the wall, floor, or machine grime patch you want.
+
+### Progress And Material Defaults
+
+- `Dirtyness` is now visibility-weighted by the decal's authored coverage and pattern textures, so transparent holes do not count toward clean progress.
+- `CleanProgressPercent` is exposed from `ADirtDecalActor` as `1 - Dirtyness`.
+- If `bUseMaterialVisualDefaults` is enabled, the actor will read matching parameter values from the assigned decal material or material instance at runtime.
+- This is especially useful for material-instance driven Megascans decals where `Dirty_Intensity`, `Dirty_PatternIntensity`, `Dirty_MaskIntensity`, tint, and surface response values are authored in the MI.
 
 ### Clean Or Dirty Brush
 

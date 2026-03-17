@@ -128,6 +128,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Behavior", meta=(ClampMin="0.0", UIMin="0.0"))
 	float SliceSeparationImpulse = 150.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Behavior", meta=(ClampMin="0.0", UIMin="0.0", Units="s", ToolTip="If a generated piece is below any MinPiece threshold, assign this lifespan (0 = keep forever)."))
+	float SmallPieceLifespanSeconds = 15.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Behavior")
 	bool bDisableSourceCollisionOnSlice = true;
 

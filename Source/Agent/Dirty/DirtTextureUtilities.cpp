@@ -16,19 +16,19 @@ namespace
 	TMap<TWeakObjectPtr<const UTexture2D>, FBrushTextureCache> GBrushTextureCache;
 }
 
-float AgentDirtTextureUtilities::SampleBrushAlpha(const UTexture2D* BrushTexture, float U, float V)
+float AgentDirtTextureUtilities::SampleTextureWeight(const UTexture2D* Texture, float U, float V)
 {
-	if (!BrushTexture)
+	if (!Texture)
 	{
 		return 1.0f;
 	}
 
-	const TWeakObjectPtr<const UTexture2D> TextureKey(BrushTexture);
+	const TWeakObjectPtr<const UTexture2D> TextureKey(Texture);
 	FBrushTextureCache* Cache = GBrushTextureCache.Find(TextureKey);
 	if (!Cache)
 	{
 		FBrushTextureCache NewCache;
-		const FTexturePlatformData* PlatformData = BrushTexture->GetPlatformData();
+		const FTexturePlatformData* PlatformData = Texture->GetPlatformData();
 		if (PlatformData && PlatformData->Mips.Num() > 0 && (PlatformData->PixelFormat == PF_B8G8R8A8 || PlatformData->PixelFormat == PF_R8G8B8A8))
 		{
 			const FTexture2DMipMap& Mip = PlatformData->Mips[0];
@@ -57,6 +57,11 @@ float AgentDirtTextureUtilities::SampleBrushAlpha(const UTexture2D* BrushTexture
 	const float Alpha = static_cast<float>(Pixel.A) / 255.0f;
 	const float Luminance = (0.2126f * static_cast<float>(Pixel.R) + 0.7152f * static_cast<float>(Pixel.G) + 0.0722f * static_cast<float>(Pixel.B)) / 255.0f;
 	return FMath::Clamp(FMath::Max(Alpha, Luminance), 0.0f, 1.0f);
+}
+
+float AgentDirtTextureUtilities::SampleBrushAlpha(const UTexture2D* BrushTexture, float U, float V)
+{
+	return SampleTextureWeight(BrushTexture, U, V);
 }
 
 bool AgentDirtTextureUtilities::UploadTexturePixels(UTexture2D* Texture, const TArray<FColor>& Pixels)

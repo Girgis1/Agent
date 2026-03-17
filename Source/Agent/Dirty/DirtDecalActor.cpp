@@ -11,11 +11,52 @@
 #include "Engine/EngineTypes.h"
 #include "Engine/Texture2D.h"
 #include "Engine/World.h"
-#include "UObject/ConstructorHelpers.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
+#include "Materials/MaterialParameters.h"
 #include "TimerManager.h"
+#include "UObject/ConstructorHelpers.h"
+
+namespace
+{
+bool TryResolveScalarParameter(const UMaterialInterface* Material, const FName ParameterName, float& OutValue)
+{
+	if (!Material || ParameterName.IsNone())
+	{
+		return false;
+	}
+
+	return Material->GetScalarParameterValue(FHashedMaterialParameterInfo(ParameterName), OutValue, false);
+}
+
+bool TryResolveVectorParameter(const UMaterialInterface* Material, const FName ParameterName, FLinearColor& OutValue)
+{
+	if (!Material || ParameterName.IsNone())
+	{
+		return false;
+	}
+
+	return Material->GetVectorParameterValue(FHashedMaterialParameterInfo(ParameterName), OutValue, false);
+}
+
+template <typename TextureType>
+TextureType* TryResolveTextureParameter(const UMaterialInterface* Material, const FName ParameterName)
+{
+	if (!Material || ParameterName.IsNone())
+	{
+		return nullptr;
+	}
+
+	UTexture* ResolvedTexture = nullptr;
+	if (!Material->GetTextureParameterValue(FHashedMaterialParameterInfo(ParameterName), ResolvedTexture, false))
+	{
+		return nullptr;
+	}
+
+	return Cast<TextureType>(ResolvedTexture);
+}
+}
 
 ADirtDecalActor::ADirtDecalActor()
 {
@@ -167,6 +208,7 @@ void ADirtDecalActor::InitializeDirtDecal()
 
 	if (EffectiveDecalMaterial)
 	{
+		ResolveMaterialDrivenDefaults(EffectiveDecalMaterial);
 		DynamicMaterial = DirtDecalComponent->CreateDynamicMaterialInstance();
 	}
 
@@ -244,6 +286,7 @@ void ADirtDecalActor::SetDirtyness(float NewDirtyness, bool bResetMask)
 	else
 	{
 		CurrentDirtyness = ClampedDirtyness;
+		CurrentCleanProgressPercent = FMath::Clamp(1.0f - CurrentDirtyness, 0.0f, 1.0f);
 		RefreshVisualParameters();
 		UpdateSpotlessDestroyState();
 	}
@@ -266,8 +309,17 @@ void ADirtDecalActor::RefreshVisualParameters()
 		DynamicMaterial->SetTextureParameterValue(DirtPatternTextureParameterName, DirtPatternTexture);
 	}
 
+	if (DirtCoverageTexture)
+	{
+		DynamicMaterial->SetTextureParameterValue(DirtCoverageTextureParameterName, DirtCoverageTexture);
+	}
+
+	RecomputeDirtyness();
 	DynamicMaterial->SetScalarParameterValue(DirtynessParameterName, CurrentDirtyness);
 	DynamicMaterial->SetScalarParameterValue(DirtIntensityParameterName, DirtIntensity);
+	DynamicMaterial->SetScalarParameterValue(DirtPatternIntensityParameterName, DirtPatternIntensity);
+	DynamicMaterial->SetScalarParameterValue(DirtMaskIntensityParameterName, DirtMaskIntensity);
+	DynamicMaterial->SetScalarParameterValue(CleanProgressParameterName, CurrentCleanProgressPercent);
 	DynamicMaterial->SetScalarParameterValue(SpotlessParameterName, IsSpotless() ? 1.0f : 0.0f);
 	DynamicMaterial->SetVectorParameterValue(DirtyTintParameterName, DirtyTint);
 	DynamicMaterial->SetScalarParameterValue(CleanRoughnessParameterName, CleanRoughness);
@@ -276,6 +328,7 @@ void ADirtDecalActor::RefreshVisualParameters()
 	DynamicMaterial->SetScalarParameterValue(DirtySpecularParameterName, DirtySpecular);
 	DynamicMaterial->SetScalarParameterValue(CleanMetallicParameterName, CleanMetallic);
 	DynamicMaterial->SetScalarParameterValue(DirtyMetallicParameterName, DirtyMetallic);
+	UpdateSpotlessDestroyState();
 }
 
 void ADirtDecalActor::SetDecalHalfExtent(const FVector& NewHalfExtentCm)
@@ -361,20 +414,42 @@ void ADirtDecalActor::UploadMaskTexture()
 
 void ADirtDecalActor::RecomputeDirtyness()
 {
-	if (DirtMaskPixels.IsEmpty())
+	if (!DirtMaskTexture || DirtMaskPixels.IsEmpty())
 	{
 		CurrentDirtyness = 0.0f;
+		CurrentCleanProgressPercent = 1.0f;
 		return;
 	}
 
-	uint64 TotalValue = 0;
-	for (const FColor& Pixel : DirtMaskPixels)
+	const int32 Width = DirtMaskTexture->GetSizeX();
+	const int32 Height = DirtMaskTexture->GetSizeY();
+	double WeightedDirtyTotal = 0.0;
+	double VisibilityWeightTotal = 0.0;
+	for (int32 PixelY = 0; PixelY < Height; ++PixelY)
 	{
-		TotalValue += static_cast<uint64>(Pixel.R);
+		const float SampleV = Height > 1 ? static_cast<float>(PixelY) / static_cast<float>(Height - 1) : 0.5f;
+		for (int32 PixelX = 0; PixelX < Width; ++PixelX)
+		{
+			const float SampleU = Width > 1 ? static_cast<float>(PixelX) / static_cast<float>(Width - 1) : 0.5f;
+			const float VisibilityWeight = SampleVisibleCoverageWeight(SampleU, SampleV);
+			if (VisibilityWeight <= KINDA_SMALL_NUMBER)
+			{
+				continue;
+			}
+
+			const FColor& Pixel = DirtMaskPixels[(PixelY * Width) + PixelX];
+			const float DirtyValue = static_cast<float>(Pixel.R) / 255.0f;
+			WeightedDirtyTotal += static_cast<double>(DirtyValue) * static_cast<double>(VisibilityWeight);
+			VisibilityWeightTotal += static_cast<double>(VisibilityWeight);
+		}
 	}
 
-	const double Denominator = static_cast<double>(DirtMaskPixels.Num()) * 255.0;
-	CurrentDirtyness = Denominator > 0.0 ? static_cast<float>(TotalValue / Denominator) : 0.0f;
+	CurrentDirtyness = VisibilityWeightTotal > 0.0
+		? static_cast<float>(WeightedDirtyTotal / VisibilityWeightTotal)
+		: 0.0f;
+	CurrentDirtyness = FMath::Clamp(CurrentDirtyness, 0.0f, 1.0f);
+	CurrentCleanProgressPercent = 1.0f - CurrentDirtyness;
+	CurrentCleanProgressPercent = FMath::Clamp(CurrentCleanProgressPercent, 0.0f, 1.0f);
 }
 
 void ADirtDecalActor::ComputeBrushRadiiPixels(float BrushSizeCm, float& OutRadiusXPixels, float& OutRadiusYPixels) const
@@ -396,6 +471,108 @@ void ADirtDecalActor::ComputeBrushRadiiPixels(float BrushSizeCm, float& OutRadiu
 
 	OutRadiusXPixels = FMath::Max(1.0f, (BrushDiameterCm / SurfaceWidthCm) * ResolutionX * 0.5f);
 	OutRadiusYPixels = FMath::Max(1.0f, (BrushDiameterCm / SurfaceHeightCm) * ResolutionY * 0.5f);
+}
+
+void ADirtDecalActor::ResolveMaterialDrivenDefaults(UMaterialInterface* SourceMaterial)
+{
+	if (!bUseMaterialVisualDefaults || !SourceMaterial)
+	{
+		return;
+	}
+
+	float ResolvedScalar = 0.0f;
+	if (TryResolveScalarParameter(SourceMaterial, DirtIntensityParameterName, ResolvedScalar))
+	{
+		DirtIntensity = FMath::Max(0.0f, ResolvedScalar);
+	}
+
+	if (TryResolveScalarParameter(SourceMaterial, DirtPatternIntensityParameterName, ResolvedScalar))
+	{
+		DirtPatternIntensity = FMath::Max(0.0f, ResolvedScalar);
+	}
+
+	if (TryResolveScalarParameter(SourceMaterial, DirtMaskIntensityParameterName, ResolvedScalar))
+	{
+		DirtMaskIntensity = FMath::Max(0.0f, ResolvedScalar);
+	}
+
+	FLinearColor ResolvedColor = DirtyTint;
+	if (TryResolveVectorParameter(SourceMaterial, DirtyTintParameterName, ResolvedColor))
+	{
+		DirtyTint = ResolvedColor;
+	}
+
+	if (TryResolveScalarParameter(SourceMaterial, CleanRoughnessParameterName, ResolvedScalar))
+	{
+		CleanRoughness = FMath::Clamp(ResolvedScalar, 0.0f, 1.0f);
+	}
+
+	if (TryResolveScalarParameter(SourceMaterial, DirtyRoughnessParameterName, ResolvedScalar))
+	{
+		DirtyRoughness = FMath::Clamp(ResolvedScalar, 0.0f, 1.0f);
+	}
+
+	if (TryResolveScalarParameter(SourceMaterial, CleanSpecularParameterName, ResolvedScalar))
+	{
+		CleanSpecular = FMath::Clamp(ResolvedScalar, 0.0f, 1.0f);
+	}
+
+	if (TryResolveScalarParameter(SourceMaterial, DirtySpecularParameterName, ResolvedScalar))
+	{
+		DirtySpecular = FMath::Clamp(ResolvedScalar, 0.0f, 1.0f);
+	}
+
+	if (TryResolveScalarParameter(SourceMaterial, CleanMetallicParameterName, ResolvedScalar))
+	{
+		CleanMetallic = FMath::Clamp(ResolvedScalar, 0.0f, 1.0f);
+	}
+
+	if (TryResolveScalarParameter(SourceMaterial, DirtyMetallicParameterName, ResolvedScalar))
+	{
+		DirtyMetallic = FMath::Clamp(ResolvedScalar, 0.0f, 1.0f);
+	}
+
+	if (UTexture2D* ResolvedPatternTexture = TryResolveTextureParameter<UTexture2D>(SourceMaterial, DirtPatternTextureParameterName))
+	{
+		DirtPatternTexture = ResolvedPatternTexture;
+	}
+
+	if (UTexture2D* ResolvedCoverageTexture = TryResolveTextureParameter<UTexture2D>(SourceMaterial, DirtCoverageTextureParameterName))
+	{
+		DirtCoverageTexture = ResolvedCoverageTexture;
+	}
+}
+
+float ADirtDecalActor::SampleVisibleCoverageWeight(float U, float V) const
+{
+	if (!bUseVisibilityWeightedDirtyness)
+	{
+		return 1.0f;
+	}
+
+	bool bHasVisibleSource = false;
+	float VisibilityWeight = 1.0f;
+
+	if (DirtCoverageTexture)
+	{
+		const float CoverageWeight = AgentDirtTextureUtilities::SampleTextureWeight(DirtCoverageTexture, U, V) * FMath::Max(0.0f, DirtMaskIntensity);
+		VisibilityWeight *= CoverageWeight;
+		bHasVisibleSource = true;
+	}
+
+	if (DirtPatternTexture)
+	{
+		const float PatternWeight = AgentDirtTextureUtilities::SampleTextureWeight(DirtPatternTexture, U, V) * FMath::Max(0.0f, DirtPatternIntensity);
+		VisibilityWeight *= PatternWeight;
+		bHasVisibleSource = true;
+	}
+
+	if (!bHasVisibleSource)
+	{
+		return 1.0f;
+	}
+
+	return FMath::Clamp(VisibilityWeight, 0.0f, 1.0f);
 }
 
 bool ADirtDecalActor::ResolveWorldPointToUV(const FVector& WorldPoint, FVector2D& OutUV, FVector& OutLocalPoint) const

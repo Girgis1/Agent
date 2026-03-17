@@ -55,6 +55,9 @@ public:
 	float GetDirtyness() const { return CurrentDirtyness; }
 
 	UFUNCTION(BlueprintPure, Category="Dirty|Decal")
+	float GetCleanProgressPercent() const { return CurrentCleanProgressPercent; }
+
+	UFUNCTION(BlueprintPure, Category="Dirty|Decal")
 	UDecalComponent* GetDirtDecalComponent() const { return DirtDecalComponent; }
 
 	UFUNCTION(BlueprintPure, Category="Dirty|Decal")
@@ -80,6 +83,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal")
 	TObjectPtr<UMaterialInterface> BaseDecalMaterial = nullptr;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal|Material")
+	bool bUseMaterialVisualDefaults = true;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal|Debug")
 	bool bDebugBrushLogging = true;
 
@@ -92,11 +98,26 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Dirty|Decal")
 	float CurrentDirtyness = 1.0f;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Dirty|Decal")
+	float CurrentCleanProgressPercent = 0.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal", meta=(ClampMin="0.0", UIMin="0.0"))
 	float DirtIntensity = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal")
 	TObjectPtr<UTexture2D> DirtPatternTexture = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal")
+	TObjectPtr<UTexture2D> DirtCoverageTexture = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal|Visual", meta=(ClampMin="0.0", UIMin="0.0"))
+	float DirtPatternIntensity = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal|Visual", meta=(ClampMin="0.0", UIMin="0.0"))
+	float DirtMaskIntensity = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal|Visual")
+	bool bUseVisibilityWeightedDirtyness = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal", meta=(ClampMin="0.0", ClampMax="1.0", UIMin="0.0", UIMax="1.0"))
 	float SpotlessThreshold = 0.02f;
@@ -135,10 +156,22 @@ public:
 	FName DirtPatternTextureParameterName = TEXT("Dirty_PatternTexture");
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal|Material")
+	FName DirtCoverageTextureParameterName = TEXT("Mask");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal|Material")
 	FName DirtynessParameterName = TEXT("Dirty_Dirtyness");
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal|Material")
 	FName DirtIntensityParameterName = TEXT("Dirty_Intensity");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal|Material")
+	FName DirtPatternIntensityParameterName = TEXT("Dirty_PatternIntensity");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal|Material")
+	FName DirtMaskIntensityParameterName = TEXT("Dirty_MaskIntensity");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal|Material")
+	FName CleanProgressParameterName = TEXT("Dirty_CleanProgressPercent");
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal|Material")
 	FName SpotlessParameterName = TEXT("Dirty_IsSpotless");
@@ -169,7 +202,9 @@ protected:
 	void FillMask(float NormalizedValue);
 	void UploadMaskTexture();
 	void RecomputeDirtyness();
+	void ResolveMaterialDrivenDefaults(UMaterialInterface* SourceMaterial);
 	void ComputeBrushRadiiPixels(float BrushSizeCm, float& OutRadiusXPixels, float& OutRadiusYPixels) const;
+	float SampleVisibleCoverageWeight(float U, float V) const;
 	bool ResolveWorldPointToUV(const FVector& WorldPoint, FVector2D& OutUV, FVector& OutLocalPoint) const;
 	bool ApplyBrushAtUV(const FVector2D& UV, float RadiusXPixels, float RadiusYPixels, const FDirtBrushStamp& Stamp, float DeltaTime);
 	void UpdateSpotlessDestroyState();

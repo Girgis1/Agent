@@ -10,6 +10,7 @@ class UBoxComponent;
 class UDynamicMesh;
 class UDynamicMeshComponent;
 class UMaterialInterface;
+class UObjectSliceComponent;
 class UProceduralMeshComponent;
 class UPrimitiveComponent;
 class UStaticMeshComponent;
@@ -49,6 +50,9 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Objects|Fracture")
 	TObjectPtr<UProceduralMeshComponent> ProceduralMeshPiece = nullptr;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Objects|Slice")
+	TObjectPtr<UObjectSliceComponent> ObjectSlice = nullptr;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Fracture", meta=(ClampMin="0.5", ClampMax="1.0", UIMin="0.5", UIMax="1.0"))
 	float PhysicsProxyExtentScale = 0.9f;

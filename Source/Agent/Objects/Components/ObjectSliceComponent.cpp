@@ -4,10 +4,8 @@
 #include "Components/MeshComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
-#include "Components/StaticMeshComponent.h"
 #include "UDynamicMesh.h"
 #include "Engine/World.h"
-#include "Engine/StaticMesh.h"
 #include "GeometryScript/CollisionFunctions.h"
 #include "GeometryScript/MeshBooleanFunctions.h"
 #include "GeometryScript/MeshDecompositionFunctions.h"
@@ -372,19 +370,6 @@ bool UObjectSliceComponent::TryExecuteSliceFromBeamGesture(
 	}
 
 	const FVector SliceMidpointWorld = (CurrentEntryPointWorld + CurrentExitPointWorld) * 0.5f;
-	TArray<bool> PiecePositiveSides;
-	PiecePositiveSides.Reserve(PieceMeshes.Num());
-	int32 PositivePieceCount = 0;
-	int32 NegativePieceCount = 0;
-	for (int32 PieceIndex = 0; PieceIndex < PieceCentersLocal.Num(); ++PieceIndex)
-	{
-		const FVector PieceCenterWorld = SourceTransform.TransformPosition(PieceCentersLocal[PieceIndex]);
-		const bool bPositiveSide = FVector::DotProduct(PieceCenterWorld - SliceMidpointWorld, PlaneNormalWorld) >= 0.0f;
-		PiecePositiveSides.Add(bPositiveSide);
-		PositivePieceCount += bPositiveSide ? 1 : 0;
-		NegativePieceCount += bPositiveSide ? 0 : 1;
-	}
-
 	const double SourceVolume = CachedSourceVolumeCm3 > KINDA_SMALL_NUMBER
 		? static_cast<double>(CachedSourceVolumeCm3)
 		: TotalPieceVolume;
@@ -393,6 +378,9 @@ bool UObjectSliceComponent::TryExecuteSliceFromBeamGesture(
 		OutFailureReason = TEXT("Slice pieces have invalid volume");
 		return false;
 	}
+
+	TArray<bool> PieceBelowMinimumThreshold;
+	PieceBelowMinimumThreshold.SetNumZeroed(PieceMeshes.Num());
 
 	for (int32 PieceIndex = 0; PieceIndex < PieceMeshes.Num(); ++PieceIndex)
 	{
@@ -412,48 +400,12 @@ bool UObjectSliceComponent::TryExecuteSliceFromBeamGesture(
 
 		const FVector WorldExtent = ResolveWorldExtent(UGeometryScriptLibrary_MeshQueryFunctions::GetMeshBoundingBox(PieceMesh).GetExtent(), SourceTransform);
 		const float MinWorldExtent = WorldExtent.GetMin();
-		if (MinPieceVolumeCm3 > 0.0f && PieceVolumeAbs < MinPieceVolumeCm3)
-		{
-			OutFailureReason = TEXT("Slice would create a piece below the minimum volume");
-			return false;
-		}
 
-		if (MinPieceMassKg > 0.0f && PieceMassKg < MinPieceMassKg)
-		{
-			OutFailureReason = TEXT("Slice would create a piece below the minimum mass");
-			return false;
-		}
-
-		if (MinPieceExtentCm > 0.0f && MinWorldExtent < MinPieceExtentCm)
-		{
-			OutFailureReason = TEXT("Slice would create a piece below the minimum extent");
-			return false;
-		}
-
-		if (MinPieceVolumeRatio > 0.0f && PieceRatio < MinPieceVolumeRatio)
-		{
-			OutFailureReason = TEXT("Slice would create a sliver piece");
-			return false;
-		}
-	}
-
-	UStaticMeshComponent* SourceStaticMeshComponent = Cast<UStaticMeshComponent>(SourcePrimitive);
-	const bool bCanUseProceduralStaticMeshSlice = SourceStaticMeshComponent
-		&& SourceStaticMeshComponent->GetStaticMesh()
-		&& SourceStaticMeshComponent->GetStaticMesh()->bAllowCPUAccess;
-	if (bCanUseProceduralStaticMeshSlice)
-	{
-		if (PieceMeshes.Num() != 2)
-		{
-			OutFailureReason = TEXT("Static mesh slicing currently requires exactly two halves");
-			return false;
-		}
-
-		if (PositivePieceCount != 1 || NegativePieceCount != 1)
-		{
-			OutFailureReason = TEXT("Slice could not resolve unique positive and negative halves");
-			return false;
-		}
+		const bool bBelowMinVolume = MinPieceVolumeCm3 > 0.0f && PieceVolumeAbs < MinPieceVolumeCm3;
+		const bool bBelowMinMass = MinPieceMassKg > 0.0f && PieceMassKg < MinPieceMassKg;
+		const bool bBelowMinExtent = MinPieceExtentCm > 0.0f && MinWorldExtent < MinPieceExtentCm;
+		const bool bBelowMinRatio = MinPieceVolumeRatio > 0.0f && PieceRatio < MinPieceVolumeRatio;
+		PieceBelowMinimumThreshold[PieceIndex] = bBelowMinVolume || bBelowMinMass || bBelowMinExtent || bBelowMinRatio;
 	}
 
 	FResolvedObjectBreakSourceState SourceState;
@@ -500,20 +452,11 @@ bool UObjectSliceComponent::TryExecuteSliceFromBeamGesture(
 			return false;
 		}
 
-		const bool bInitializedPiece = bCanUseProceduralStaticMeshSlice
-			? SpawnedPiece->InitializeFromStaticMeshSlice(
-				SourceStaticMeshComponent,
-				SliceMidpointWorld,
-				PlaneNormalWorld,
-				PiecePositiveSides.IsValidIndex(PieceIndex) ? PiecePositiveSides[PieceIndex] : true,
-				SliceCapMaterial)
-			: SpawnedPiece->InitializeFromDynamicMesh(PieceMeshes[PieceIndex], ResultMaterialSet);
+		const bool bInitializedPiece = SpawnedPiece->InitializeFromDynamicMesh(PieceMeshes[PieceIndex], ResultMaterialSet);
 		if (!bInitializedPiece)
 		{
 			SpawnedPiece->Destroy();
-			OutFailureReason = bCanUseProceduralStaticMeshSlice
-				? TEXT("Failed to initialize a procedural slice half. Ensure the source static mesh has Allow CPU Access enabled.")
-				: TEXT("Failed to initialize a slice result mesh");
+			OutFailureReason = TEXT("Failed to initialize a slice result mesh");
 			for (AActor* SpawnedActor : SpawnedActors)
 			{
 				if (SpawnedActor)
@@ -545,20 +488,57 @@ bool UObjectSliceComponent::TryExecuteSliceFromBeamGesture(
 
 		if (UObjectHealthComponent* SpawnedHealthComponent = SpawnedPiece->FindComponentByClass<UObjectHealthComponent>())
 		{
-			const bool bSourceHealthEnabled = SourceState.SourceHealthComponent ? SourceState.SourceHealthComponent->bHealthEnabled : false;
-			SpawnedHealthComponent->bHealthEnabled = bSourceHealthEnabled;
-			SpawnedHealthComponent->InitializationMode = EObjectHealthInitializationMode::FromCurrentMass;
-			SpawnedHealthComponent->bAutoInitializeOnBeginPlay = true;
-			SpawnedHealthComponent->bDeferMassInitializationToNextTick = true;
-			if (bSourceHealthEnabled)
+			SpawnedHealthComponent->bHealthEnabled = false;
+			SpawnedHealthComponent->bCanTakeDamage = false;
+			SpawnedHealthComponent->bCanDie = false;
+			SpawnedHealthComponent->bDestroyOwnerWhenDepleted = false;
+			SpawnedHealthComponent->bAutoInitializeOnBeginPlay = false;
+			SpawnedHealthComponent->bDeferMassInitializationToNextTick = false;
+		}
+
+		if (UObjectSliceComponent* SpawnedSliceComponent = SpawnedPiece->FindComponentByClass<UObjectSliceComponent>())
+		{
+			SpawnedSliceComponent->bSlicingEnabled = true;
+			SpawnedSliceComponent->SliceResultActorClass = SliceResultActorClass;
+			SpawnedSliceComponent->SliceCapMaterial = SliceCapMaterial;
+			SpawnedSliceComponent->MaxRuntimeSlices = 0;
+			SpawnedSliceComponent->MaxGeneratedPiecesPerSlice = MaxGeneratedPiecesPerSlice;
+			SpawnedSliceComponent->MinSourceMassKg = MinSourceMassKg;
+			SpawnedSliceComponent->MinSourceVolumeCm3 = MinSourceVolumeCm3;
+			SpawnedSliceComponent->MinPieceMassKg = MinPieceMassKg;
+			SpawnedSliceComponent->MinPieceVolumeCm3 = MinPieceVolumeCm3;
+			SpawnedSliceComponent->MinPieceExtentCm = MinPieceExtentCm;
+			SpawnedSliceComponent->MinPieceVolumeRatio = MinPieceVolumeRatio;
+			SpawnedSliceComponent->MinimumPenetrationThicknessCm = MinimumPenetrationThicknessCm;
+			SpawnedSliceComponent->MaxSourceTriangleCount = MaxSourceTriangleCount;
+			SpawnedSliceComponent->bRequireClosedMesh = bRequireClosedMesh;
+			SpawnedSliceComponent->bRequireSingleConnectedSourceIsland = bRequireSingleConnectedSourceIsland;
+			SpawnedSliceComponent->SliceGapWidthCm = SliceGapWidthCm;
+			SpawnedSliceComponent->SliceSeparationImpulse = SliceSeparationImpulse;
+			SpawnedSliceComponent->SmallPieceLifespanSeconds = SmallPieceLifespanSeconds;
+			SpawnedSliceComponent->bDisableSourceCollisionOnSlice = bDisableSourceCollisionOnSlice;
+			SpawnedSliceComponent->bHideSourceActorOnSlice = bHideSourceActorOnSlice;
+			SpawnedSliceComponent->bDestroySourceActorAfterSlice = bDestroySourceActorAfterSlice;
+			SpawnedSliceComponent->bDisableSourceFractureAfterSlice = bDisableSourceFractureAfterSlice;
+			SpawnedSliceComponent->InvalidateSourceMeshCache();
+
+			if (PieceBelowMinimumThreshold.IsValidIndex(PieceIndex) && PieceBelowMinimumThreshold[PieceIndex])
 			{
-				SpawnedHealthComponent->SetInheritedDamagedPenaltyPercent(SourceState.InheritedDamagedPenaltyPercent);
+				SpawnedSliceComponent->bSlicingEnabled = false;
 			}
 		}
 
 		DisableFractureOnActor(SpawnedPiece);
 
 		UGameplayStatics::FinishSpawningActor(SpawnedPiece, SourceTransform);
+
+		if (PieceBelowMinimumThreshold.IsValidIndex(PieceIndex)
+			&& PieceBelowMinimumThreshold[PieceIndex]
+			&& SmallPieceLifespanSeconds > KINDA_SMALL_NUMBER)
+		{
+			SpawnedPiece->SetLifeSpan(SmallPieceLifespanSeconds);
+		}
+
 		SpawnedActors.Add(SpawnedPiece);
 
 		if (UPrimitiveComponent* SpawnedPrimitive = AgentObjectBreak::ResolveBestPrimitiveOnActor(SpawnedPiece))
@@ -613,6 +593,24 @@ USceneComponent* UObjectSliceComponent::ResolveSliceSourceSceneComponent() const
 		if (USceneComponent* ExplicitComponent = Cast<USceneComponent>(SliceSourceComponent.GetComponent(OwnerActor)))
 		{
 			return ExplicitComponent;
+		}
+
+		if (USceneComponent* RootComponent = OwnerActor->GetRootComponent())
+		{
+			if (Cast<UMeshComponent>(RootComponent))
+			{
+				return RootComponent;
+			}
+		}
+
+		TArray<UMeshComponent*> MeshComponents;
+		OwnerActor->GetComponents<UMeshComponent>(MeshComponents);
+		for (UMeshComponent* MeshComponent : MeshComponents)
+		{
+			if (MeshComponent)
+			{
+				return MeshComponent;
+			}
 		}
 
 		return OwnerActor->GetRootComponent();
