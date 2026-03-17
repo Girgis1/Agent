@@ -226,6 +226,7 @@ protected:
 	void UpdateScannerSystems(float DeltaSeconds);
 	void UpdateBeamAimZoom(float DeltaSeconds);
 	void UpdateBeamAimDepthOfField(float DeltaSeconds, bool bAimActive, const FVector& ViewOrigin, const FVector& ViewDirection);
+	bool TryExecuteControllerHorizontalSlice();
 	void ResetBeamAimZoomState();
 	bool IsRawMouseBeamAimModifierHeld() const;
 	bool IsRawControllerBeamAimModifierHeld() const;
@@ -557,6 +558,27 @@ public:
 	/** 1.0 matches the zoom-out timing. 1.2 takes 20% longer to fade the DOF out. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Zoom|Focus", meta=(ClampMin="0.01", UIMin="0.01"))
 	float BeamAimDepthOfFieldOutTimeMultiplier = 1.2f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerShortcut")
+	bool bEnableControllerHorizontalSliceShortcut = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerShortcut", meta=(ClampMin="1.0", UIMin="1.0", Units="cm"))
+	float ControllerHorizontalSliceDistanceCm = 200.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerShortcut", meta=(ClampMin="0.0", UIMin="0.0", Units="cm"))
+	float ControllerHorizontalSliceTraceRadiusCm = 6.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerShortcut", meta=(ClampMin="1.0", UIMin="1.0", Units="cm"))
+	float ControllerHorizontalSliceGestureHalfLengthCm = 25.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerShortcut|Debug")
+	bool bDrawControllerHorizontalSliceDebug = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerShortcut|Debug", meta=(ClampMin="1.0", UIMin="1.0", Units="cm", EditCondition="bDrawControllerHorizontalSliceDebug"))
+	float ControllerHorizontalSliceDebugPlaneExtentCm = 45.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerShortcut|Debug", meta=(ClampMin="0.0", UIMin="0.0", Units="s", EditCondition="bDrawControllerHorizontalSliceDebug"))
+	float ControllerHorizontalSliceDebugDuration = 1.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Crash")
 	bool bUseCrashRollRecovery = true;

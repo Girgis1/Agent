@@ -15,6 +15,24 @@ class UProceduralMeshComponent;
 class UPrimitiveComponent;
 class UStaticMeshComponent;
 
+USTRUCT(BlueprintType)
+struct FObjectFragmentCollisionGenerationSettings
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Fracture")
+	bool bUseLongObjectProfile = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Fracture", meta=(ClampMin="1", UIMin="1"))
+	int32 LongObjectMaxConvexHulls = 6;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Fracture", meta=(ClampMin="1", UIMin="1"))
+	int32 LongObjectMaxShapeCount = 6;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Fracture", meta=(ClampMin="0.01", UIMin="0.01", Units="cm"))
+	float LongObjectMinThicknessCm = 0.15f;
+};
+
 UCLASS()
 class AObjectFragmentActor : public AMaterialActor
 {
@@ -27,7 +45,14 @@ public:
 	void RefreshPhysicsProxyFromItemMesh();
 
 	UFUNCTION(BlueprintCallable, Category="Objects|Fracture")
-	bool InitializeFromDynamicMesh(const UDynamicMesh* SourceMesh, const TArray<UMaterialInterface*>& MaterialSet);
+	bool InitializeFromDynamicMesh(
+		const UDynamicMesh* SourceMesh,
+		const TArray<UMaterialInterface*>& MaterialSet);
+
+	bool InitializeFromDynamicMesh(
+		const UDynamicMesh* SourceMesh,
+		const TArray<UMaterialInterface*>& MaterialSet,
+		const FObjectFragmentCollisionGenerationSettings& CollisionSettings);
 
 	bool InitializeFromStaticMeshSlice(
 		UStaticMeshComponent* SourceStaticMeshComponent,

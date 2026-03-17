@@ -96,7 +96,18 @@ void AObjectFragmentActor::RefreshPhysicsProxyFromItemMesh()
 	PhysicsProxy->SetBoxExtent(SafeExtents, true);
 }
 
-bool AObjectFragmentActor::InitializeFromDynamicMesh(const UDynamicMesh* SourceMesh, const TArray<UMaterialInterface*>& MaterialSet)
+bool AObjectFragmentActor::InitializeFromDynamicMesh(
+	const UDynamicMesh* SourceMesh,
+	const TArray<UMaterialInterface*>& MaterialSet)
+{
+	FObjectFragmentCollisionGenerationSettings DefaultCollisionSettings;
+	return InitializeFromDynamicMesh(SourceMesh, MaterialSet, DefaultCollisionSettings);
+}
+
+bool AObjectFragmentActor::InitializeFromDynamicMesh(
+	const UDynamicMesh* SourceMesh,
+	const TArray<UMaterialInterface*>& MaterialSet,
+	const FObjectFragmentCollisionGenerationSettings& CollisionSettings)
 {
 	if (!SourceMesh || !DynamicMeshPiece)
 	{
@@ -147,10 +158,23 @@ bool AObjectFragmentActor::InitializeFromDynamicMesh(const UDynamicMesh* SourceM
 
 	FGeometryScriptCollisionFromMeshOptions CollisionOptions;
 	CollisionOptions.bEmitTransaction = false;
-	CollisionOptions.Method = EGeometryScriptCollisionGenerationMethod::MinVolumeShapes;
-	CollisionOptions.MaxShapeCount = 1;
-	CollisionOptions.MaxConvexHullsPerMesh = 1;
-	CollisionOptions.MinThickness = 0.5f;
+	if (CollisionSettings.bUseLongObjectProfile)
+	{
+		CollisionOptions.Method = EGeometryScriptCollisionGenerationMethod::ConvexHulls;
+		CollisionOptions.MaxConvexHullsPerMesh = FMath::Max(1, CollisionSettings.LongObjectMaxConvexHulls);
+		CollisionOptions.MaxShapeCount = FMath::Max(1, CollisionSettings.LongObjectMaxShapeCount);
+		CollisionOptions.MinThickness = FMath::Max(0.01f, CollisionSettings.LongObjectMinThicknessCm);
+		CollisionOptions.bSimplifyHulls = true;
+		CollisionOptions.ConvexHullTargetFaceCount = 32;
+	}
+	else
+	{
+		CollisionOptions.Method = EGeometryScriptCollisionGenerationMethod::MinVolumeShapes;
+		CollisionOptions.MaxShapeCount = 1;
+		CollisionOptions.MaxConvexHullsPerMesh = 1;
+		CollisionOptions.MinThickness = 0.5f;
+	}
+
 	UGeometryScriptLibrary_CollisionFunctions::SetDynamicMeshCollisionFromMesh(
 		DynamicMeshPiece->GetDynamicMesh(),
 		DynamicMeshPiece,

@@ -10,12 +10,12 @@
 
 class AActor;
 class AObjectFragmentActor;
-class AVolume;
 class UDynamicMesh;
 class UMaterialInterface;
 class UMeshComponent;
 class UPrimitiveComponent;
 class USceneComponent;
+class UBoxComponent;
 
 USTRUCT(BlueprintType)
 struct FObjectSliceBeamIntersection
@@ -40,7 +40,7 @@ enum class EObjectSliceAnchorMode : uint8
 {
 	None UMETA(DisplayName="None"),
 	OriginBand UMETA(DisplayName="Origin Band"),
-	SupportVolumes UMETA(DisplayName="Support Volumes")
+	SupportVolumes UMETA(DisplayName="Support Collision Boxes")
 };
 
 UCLASS(ClassGroup=(Objects), meta=(BlueprintSpawnableComponent))
@@ -101,6 +101,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Validation", meta=(ClampMin="0.0", UIMin="0.0"))
 	float MinPieceVolumeCm3 = 0.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Validation", meta=(DisplayName="Nanite Sliceable (Experimental)", ToolTip="Allows runtime slicing attempts on Nanite static meshes for testing. Heavy assets can hitch or freeze when sliced."))
+	bool bAllowNaniteStaticMeshes = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Validation", meta=(ClampMin="0", UIMin="0", ToolTip="0 means no triangle safety cap."))
+	int32 MaxSourceLod0Triangles = 50000;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Validation", meta=(ClampMin="0.0", UIMin="0.0", Units="cm"))
 	float MinPieceExtentCm = 3.0f;
 
@@ -116,14 +122,29 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Behavior", meta=(ClampMin="0.0", UIMin="0.0", Units="s", ToolTip="If a generated piece is below any MinPiece threshold, assign this lifespan (0 = keep forever)."))
 	float SmallPieceLifespanSeconds = 15.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|LongObject", meta=(DisplayName="Long Object Profile", ToolTip="Uses tree-friendly collision generation and spawn stabilization for long meshes."))
+	bool bUseLongObjectProfile = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|LongObject", meta=(ClampMin="1", UIMin="1", EditCondition="bUseLongObjectProfile", EditConditionHides))
+	int32 LongObjectMaxConvexHulls = 6;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|LongObject", meta=(ClampMin="1", UIMin="1", EditCondition="bUseLongObjectProfile", EditConditionHides))
+	int32 LongObjectMaxShapeCount = 6;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|LongObject", meta=(ClampMin="0.01", UIMin="0.01", Units="cm", EditCondition="bUseLongObjectProfile", EditConditionHides))
+	float LongObjectMinCollisionThicknessCm = 0.15f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|LongObject", meta=(ClampMin="0.0", UIMin="0.0", Units="s", EditCondition="bUseLongObjectProfile", EditConditionHides, ToolTip="Temporarily ignores PhysicsBody collisions between fresh slice pieces to prevent first-frame pop."))
+	float LongObjectSiblingCollisionIgnoreSeconds = 0.12f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Anchoring")
 	EObjectSliceAnchorMode AnchorMode = EObjectSliceAnchorMode::None;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Anchoring", meta=(ClampMin="0.0", UIMin="0.0", Units="cm", EditCondition="AnchorMode==EObjectSliceAnchorMode::OriginBand", EditConditionHides))
 	float StaticAnchorMaxLocalZCm = 35.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Anchoring", meta=(EditCondition="AnchorMode==EObjectSliceAnchorMode::SupportVolumes", EditConditionHides))
-	TArray<TObjectPtr<AVolume>> SupportVolumes;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Anchoring", meta=(DisplayName="Support Box Colliders", UseComponentPicker, AllowedClasses="/Script/Engine.BoxComponent", ToolTip="Box collision components used to anchor slice pieces that overlap them.", EditCondition="AnchorMode==EObjectSliceAnchorMode::SupportVolumes", EditConditionHides))
+	TArray<FComponentReference> SupportBoxColliders;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Anchoring", meta=(ClampMin="0.0", UIMin="0.0", Units="cm", EditCondition="AnchorMode==EObjectSliceAnchorMode::SupportVolumes", EditConditionHides))
 	float MinSupportOverlapCm = 1.0f;
@@ -141,7 +162,7 @@ protected:
 	void DisableFractureOnActor(AActor* Actor) const;
 	bool IsPieceAnchored(const FBox& PieceLocalBounds, const FTransform& SourceTransform) const;
 	bool IsAnchoredByOriginBand(const FBox& PieceLocalBounds, const FTransform& SourceTransform) const;
-	bool IsAnchoredBySupportVolumes(const FBox& PieceLocalBounds, const FTransform& SourceTransform) const;
+	bool IsAnchoredBySupportBoxes(const FBox& PieceLocalBounds, const FTransform& SourceTransform) const;
 
 	UPROPERTY(Transient)
 	int32 CompletedSliceCount = 0;

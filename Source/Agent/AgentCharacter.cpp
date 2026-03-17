@@ -20,6 +20,7 @@
 #include "Factory/MiningSwarmMachine.h"
 #include "Machine/MachineActor.h"
 #include "Factory/StorageBin.h"
+#include "Objects/Components/ObjectSliceComponent.h"
 #include "Vehicle/Components/VehicleInteractionComponent.h"
 #include "Camera/CameraComponent.h"
 #include "CollisionShape.h"
@@ -1759,6 +1760,189 @@ bool AAgentCharacter::ResolveActiveBeamPose(
 	return true;
 }
 
+bool AAgentCharacter::TryExecuteControllerHorizontalSlice()
+{
+	if (!bEnableControllerHorizontalSliceShortcut
+		|| !CanUseBeamTool()
+		|| !IsRawControllerBeamAimModifierHeld())
+	{
+		return false;
+	}
+
+	FVector ViewOrigin = FVector::ZeroVector;
+	FVector ViewDirection = FVector::ForwardVector;
+	FVector VisualOrigin = FVector::ZeroVector;
+	if (!ResolveActiveBeamPose(ViewOrigin, ViewDirection, VisualOrigin))
+	{
+		return false;
+	}
+	(void)VisualOrigin;
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return false;
+	}
+
+	const FVector SafeViewDirection = ViewDirection.GetSafeNormal();
+	if (SafeViewDirection.IsNearlyZero())
+	{
+		return false;
+	}
+
+	FVector HorizontalDirection(SafeViewDirection.X, SafeViewDirection.Y, 0.0f);
+	HorizontalDirection = HorizontalDirection.GetSafeNormal();
+	if (HorizontalDirection.IsNearlyZero())
+	{
+		FVector FallbackForward = GetActorForwardVector();
+		FallbackForward.Z = 0.0f;
+		HorizontalDirection = FallbackForward.GetSafeNormal();
+	}
+
+	if (HorizontalDirection.IsNearlyZero())
+	{
+		return false;
+	}
+
+	const FVector TraceStart = ViewOrigin;
+	const FVector TraceEnd = TraceStart + (SafeViewDirection * FMath::Max(1.0f, ControllerHorizontalSliceDistanceCm));
+	ECollisionChannel TraceChannel = ECC_Visibility;
+	if (const UAgentBeamToolComponent* ActiveBeamToolComponent = ResolveActiveBeamToolComponent())
+	{
+		TraceChannel = static_cast<ECollisionChannel>(ActiveBeamToolComponent->TraceChannel.GetValue());
+	}
+
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(AgentControllerHorizontalSliceTrace), false, this);
+	QueryParams.bTraceComplex = false;
+	QueryParams.bReturnPhysicalMaterial = false;
+	QueryParams.AddIgnoredActor(this);
+
+	TArray<AActor*> AttachedActors;
+	GetAttachedActors(AttachedActors, true, true);
+	for (AActor* AttachedActor : AttachedActors)
+	{
+		if (AttachedActor)
+		{
+			QueryParams.AddIgnoredActor(AttachedActor);
+		}
+	}
+
+	TArray<FHitResult> HitResults;
+	const float TraceRadius = FMath::Max(0.0f, ControllerHorizontalSliceTraceRadiusCm);
+	const bool bHasAnyHit = TraceRadius > KINDA_SMALL_NUMBER
+		? World->SweepMultiByChannel(
+			HitResults,
+			TraceStart,
+			TraceEnd,
+			FQuat::Identity,
+			TraceChannel,
+			FCollisionShape::MakeSphere(TraceRadius),
+			QueryParams)
+		: World->LineTraceMultiByChannel(
+			HitResults,
+			TraceStart,
+			TraceEnd,
+			TraceChannel,
+			QueryParams);
+
+	const float DebugDuration = FMath::Max(0.0f, ControllerHorizontalSliceDebugDuration);
+	if (bDrawControllerHorizontalSliceDebug)
+	{
+		DrawDebugLine(
+			World,
+			TraceStart,
+			TraceEnd,
+			bHasAnyHit ? FColor::Cyan : FColor::Silver,
+			false,
+			DebugDuration,
+			0,
+			2.0f);
+	}
+
+	TSet<AActor*> ProcessedActors;
+	int32 SuccessfulSlices = 0;
+	const float GestureHalfLength = FMath::Max(1.0f, ControllerHorizontalSliceGestureHalfLengthCm);
+	const float PlaneExtent = FMath::Max(1.0f, ControllerHorizontalSliceDebugPlaneExtentCm);
+	for (const FHitResult& HitResult : HitResults)
+	{
+		AActor* HitActor = HitResult.GetActor();
+		if (!HitActor || ProcessedActors.Contains(HitActor))
+		{
+			continue;
+		}
+		ProcessedActors.Add(HitActor);
+
+		UObjectSliceComponent* SliceComponent = UObjectSliceComponent::FindObjectSliceComponent(HitActor, HitResult.GetComponent());
+		if (!SliceComponent)
+		{
+			continue;
+		}
+
+		const FVector SlicePoint = HitResult.ImpactPoint.IsNearlyZero() ? HitResult.Location : HitResult.ImpactPoint;
+		const FVector CurrentEntryPoint = SlicePoint - (HorizontalDirection * GestureHalfLength);
+		const FVector CurrentExitPoint = SlicePoint + (HorizontalDirection * GestureHalfLength);
+		const FVector CurrentGestureVector = CurrentEntryPoint - SlicePoint;
+
+		FVector FirstGestureDirection = FVector::CrossProduct(CurrentGestureVector, FVector::UpVector).GetSafeNormal();
+		if (FirstGestureDirection.IsNearlyZero())
+		{
+			FirstGestureDirection = FVector::CrossProduct(FVector::UpVector, HorizontalDirection).GetSafeNormal();
+		}
+
+		if (FirstGestureDirection.IsNearlyZero())
+		{
+			continue;
+		}
+
+		const FVector FirstEntryPoint = SlicePoint + (FirstGestureDirection * GestureHalfLength);
+		FString SliceFailureReason;
+		const bool bSliced = SliceComponent->TryExecuteSliceFromBeamGesture(
+			SlicePoint,
+			FirstEntryPoint,
+			CurrentEntryPoint,
+			CurrentExitPoint,
+			this,
+			SliceFailureReason);
+		if (bSliced)
+		{
+			++SuccessfulSlices;
+		}
+
+		if (bDrawControllerHorizontalSliceDebug)
+		{
+			const FVector PlaneAxisX = HorizontalDirection * PlaneExtent;
+			FVector PlaneAxisY = FVector::CrossProduct(FVector::UpVector, HorizontalDirection).GetSafeNormal() * PlaneExtent;
+			if (PlaneAxisY.IsNearlyZero())
+			{
+				PlaneAxisY = FVector::RightVector * PlaneExtent;
+			}
+
+			const FVector CornerA = SlicePoint + PlaneAxisX + PlaneAxisY;
+			const FVector CornerB = SlicePoint + PlaneAxisX - PlaneAxisY;
+			const FVector CornerC = SlicePoint - PlaneAxisX - PlaneAxisY;
+			const FVector CornerD = SlicePoint - PlaneAxisX + PlaneAxisY;
+			const FColor PlaneColor = bSliced ? FColor::Green : FColor::Red;
+
+			DrawDebugLine(World, CornerA, CornerB, PlaneColor, false, DebugDuration, 0, 1.5f);
+			DrawDebugLine(World, CornerB, CornerC, PlaneColor, false, DebugDuration, 0, 1.5f);
+			DrawDebugLine(World, CornerC, CornerD, PlaneColor, false, DebugDuration, 0, 1.5f);
+			DrawDebugLine(World, CornerD, CornerA, PlaneColor, false, DebugDuration, 0, 1.5f);
+			DrawDebugDirectionalArrow(
+				World,
+				SlicePoint,
+				SlicePoint + FVector::UpVector * (PlaneExtent * 0.6f),
+				10.0f,
+				PlaneColor,
+				false,
+				DebugDuration,
+				0,
+				1.5f);
+		}
+	}
+
+	return SuccessfulSlices > 0;
+}
+
 void AAgentCharacter::UpdateBeamSystems(float DeltaSeconds)
 {
 	(void)DeltaSeconds;
@@ -1833,7 +2017,8 @@ void AAgentCharacter::UpdateScannerSystems(float DeltaSeconds)
 	const UAgentBeamToolComponent* ActiveBeamToolComponent = ResolveActiveBeamToolComponent();
 	if (ActiveBeamToolComponent && ActiveBeamToolComponent->IsBeamActive())
 	{
-		ScannerComponent->ClearScanner(true);
+		// Keep the current scanner readout state visible while firing;
+		// skip scanner updates so no new scan attempts occur.
 		return;
 	}
 
@@ -7025,6 +7210,11 @@ void AAgentCharacter::OnHookJobButtonPressed()
 	if (bConveyorPlacementModeActive)
 	{
 		OnConveyorRotateRightPressed();
+		return;
+	}
+
+	if (TryExecuteControllerHorizontalSlice())
+	{
 		return;
 	}
 

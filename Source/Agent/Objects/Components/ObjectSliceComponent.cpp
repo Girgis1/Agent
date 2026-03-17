@@ -1,12 +1,14 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Objects/Components/ObjectSliceComponent.h"
+#include "Components/BoxComponent.h"
 #include "Components/MeshComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "UDynamicMesh.h"
 #include "Engine/World.h"
-#include "GameFramework/Volume.h"
+#include "Engine/StaticMesh.h"
 #include "GeometryScript/CollisionFunctions.h"
 #include "GeometryScript/MeshBooleanFunctions.h"
 #include "GeometryScript/MeshDecompositionFunctions.h"
@@ -15,6 +17,7 @@
 #include "GeometryScript/SceneUtilityFunctions.h"
 #include "GameFramework/Actor.h"
 #include "Kismet/GameplayStatics.h"
+#include "TimerManager.h"
 #include "Material/MaterialComponent.h"
 #include "Materials/MaterialInterface.h"
 #include "Objects/Actors/ObjectFragmentActor.h"
@@ -438,6 +441,26 @@ bool UObjectSliceComponent::TryExecuteSliceFromBeamGesture(
 		NormalizedWeights.Add(VolumeRatioValue / TotalPieceVolume);
 	}
 
+	TArray<FComponentReference> ResolvedSupportBoxColliders = SupportBoxColliders;
+	for (FComponentReference& SupportBoxReference : ResolvedSupportBoxColliders)
+	{
+		// Keep support boxes bound to the original owner actor when they are local references.
+		if (!SupportBoxReference.OtherActor.IsValid())
+		{
+			SupportBoxReference.OtherActor = OwnerActor;
+		}
+	}
+
+	FObjectFragmentCollisionGenerationSettings FragmentCollisionSettings;
+	FragmentCollisionSettings.bUseLongObjectProfile = bUseLongObjectProfile;
+	FragmentCollisionSettings.LongObjectMaxConvexHulls = LongObjectMaxConvexHulls;
+	FragmentCollisionSettings.LongObjectMaxShapeCount = LongObjectMaxShapeCount;
+	FragmentCollisionSettings.LongObjectMinThicknessCm = LongObjectMinCollisionThicknessCm;
+	const float EffectiveLongObjectCollisionIgnoreSeconds =
+		bUseLongObjectProfile
+			? FMath::Max(0.0f, LongObjectSiblingCollisionIgnoreSeconds)
+			: 0.0f;
+
 	TArray<TMap<FName, int32>> SplitResourceQuantitiesScaled;
 	AgentObjectBreak::SplitResourceQuantitiesExact(SourceState.SourceResourceQuantitiesScaled, NormalizedWeights, SplitResourceQuantitiesScaled);
 
@@ -445,6 +468,7 @@ bool UObjectSliceComponent::TryExecuteSliceFromBeamGesture(
 	SpawnedActors.Reserve(PieceMeshes.Num());
 	TArray<TWeakObjectPtr<UPrimitiveComponent>> SpawnedPrimitives;
 	SpawnedPrimitives.SetNum(PieceMeshes.Num());
+	TArray<TTuple<TWeakObjectPtr<UPrimitiveComponent>, ECollisionResponse>> PendingPhysicsBodyCollisionRestore;
 
 	for (int32 PieceIndex = 0; PieceIndex < PieceMeshes.Num(); ++PieceIndex)
 	{
@@ -467,7 +491,10 @@ bool UObjectSliceComponent::TryExecuteSliceFromBeamGesture(
 			return false;
 		}
 
-		const bool bInitializedPiece = SpawnedPiece->InitializeFromDynamicMesh(PieceMeshes[PieceIndex], ResultMaterialSet);
+		const bool bInitializedPiece = SpawnedPiece->InitializeFromDynamicMesh(
+			PieceMeshes[PieceIndex],
+			ResultMaterialSet,
+			FragmentCollisionSettings);
 		if (!bInitializedPiece)
 		{
 			SpawnedPiece->Destroy();
@@ -517,15 +544,22 @@ bool UObjectSliceComponent::TryExecuteSliceFromBeamGesture(
 			SpawnedSliceComponent->SliceResultActorClass = SliceResultActorClass;
 			SpawnedSliceComponent->SliceCapMaterial = SliceCapMaterial;
 			SpawnedSliceComponent->MaxRuntimeSlices = 0;
+			SpawnedSliceComponent->bAllowNaniteStaticMeshes = bAllowNaniteStaticMeshes;
+			SpawnedSliceComponent->MaxSourceLod0Triangles = MaxSourceLod0Triangles;
 			SpawnedSliceComponent->MinPieceVolumeCm3 = MinPieceVolumeCm3;
 			SpawnedSliceComponent->MinPieceExtentCm = MinPieceExtentCm;
 			SpawnedSliceComponent->MinimumPenetrationThicknessCm = MinimumPenetrationThicknessCm;
 			SpawnedSliceComponent->SliceGapWidthCm = SliceGapWidthCm;
 			SpawnedSliceComponent->SliceSeparationImpulse = SliceSeparationImpulse;
 			SpawnedSliceComponent->SmallPieceLifespanSeconds = SmallPieceLifespanSeconds;
+			SpawnedSliceComponent->bUseLongObjectProfile = bUseLongObjectProfile;
+			SpawnedSliceComponent->LongObjectMaxConvexHulls = LongObjectMaxConvexHulls;
+			SpawnedSliceComponent->LongObjectMaxShapeCount = LongObjectMaxShapeCount;
+			SpawnedSliceComponent->LongObjectMinCollisionThicknessCm = LongObjectMinCollisionThicknessCm;
+			SpawnedSliceComponent->LongObjectSiblingCollisionIgnoreSeconds = LongObjectSiblingCollisionIgnoreSeconds;
 			SpawnedSliceComponent->AnchorMode = AnchorMode;
 			SpawnedSliceComponent->StaticAnchorMaxLocalZCm = StaticAnchorMaxLocalZCm;
-			SpawnedSliceComponent->SupportVolumes = SupportVolumes;
+			SpawnedSliceComponent->SupportBoxColliders = ResolvedSupportBoxColliders;
 			SpawnedSliceComponent->MinSupportOverlapCm = MinSupportOverlapCm;
 			SpawnedSliceComponent->bDisableSlicingOnAnchoredPieces = bDisableSlicingOnAnchoredPieces;
 			SpawnedSliceComponent->InvalidateSourceMeshCache();
@@ -580,6 +614,15 @@ bool UObjectSliceComponent::TryExecuteSliceFromBeamGesture(
 			SpawnedPrimitive->SetPhysicsLinearVelocity(SourceState.SourceLinearVelocity);
 			SpawnedPrimitive->SetPhysicsAngularVelocityInDegrees(SourceState.SourceAngularVelocityDeg);
 
+			if (EffectiveLongObjectCollisionIgnoreSeconds > KINDA_SMALL_NUMBER)
+			{
+				PendingPhysicsBodyCollisionRestore.Add(
+					MakeTuple(
+						TWeakObjectPtr<UPrimitiveComponent>(SpawnedPrimitive),
+						SpawnedPrimitive->GetCollisionResponseToChannel(ECC_PhysicsBody)));
+				SpawnedPrimitive->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Ignore);
+			}
+
 			if (SliceSeparationImpulse > KINDA_SMALL_NUMBER)
 			{
 				const FVector PieceCenterWorld = SourceTransform.TransformPosition(PieceCentersLocal[PieceIndex]);
@@ -587,6 +630,25 @@ bool UObjectSliceComponent::TryExecuteSliceFromBeamGesture(
 				SpawnedPrimitive->AddImpulse(PlaneNormalWorld * (SliceSeparationImpulse * Side), NAME_None, true);
 			}
 		}
+	}
+
+	if (PendingPhysicsBodyCollisionRestore.Num() > 0)
+	{
+		FTimerHandle RestoreCollisionTimerHandle;
+		World->GetTimerManager().SetTimer(
+			RestoreCollisionTimerHandle,
+			[PendingPhysicsBodyCollisionRestore]()
+			{
+				for (const TTuple<TWeakObjectPtr<UPrimitiveComponent>, ECollisionResponse>& PendingEntry : PendingPhysicsBodyCollisionRestore)
+				{
+					if (UPrimitiveComponent* Primitive = PendingEntry.Get<0>().Get())
+					{
+						Primitive->SetCollisionResponseToChannel(ECC_PhysicsBody, PendingEntry.Get<1>());
+					}
+				}
+			},
+			EffectiveLongObjectCollisionIgnoreSeconds,
+			false);
 	}
 
 	InvalidateSourceMeshCache();
@@ -656,6 +718,33 @@ bool UObjectSliceComponent::BuildSliceSourceCache(FString& OutFailureReason)
 	{
 		OutFailureReason = TEXT("Missing slice source scene component");
 		return false;
+	}
+
+	if (const UStaticMeshComponent* StaticMeshComponent = Cast<UStaticMeshComponent>(SourceSceneComponent))
+	{
+		if (const UStaticMesh* StaticMesh = StaticMeshComponent->GetStaticMesh())
+		{
+			const bool bIsNaniteMesh = StaticMesh->IsNaniteEnabled();
+			if (bIsNaniteMesh && !bAllowNaniteStaticMeshes)
+			{
+				OutFailureReason = TEXT("Nanite mesh blocked. Enable 'Nanite Sliceable (Experimental)' on ObjectSliceComponent to test.");
+				return false;
+			}
+
+			const bool bShouldCheckTriangleCap = MaxSourceLod0Triangles > 0 && !(bIsNaniteMesh && bAllowNaniteStaticMeshes);
+			if (bShouldCheckTriangleCap)
+			{
+				const int32 Lod0Triangles = StaticMesh->GetNumTriangles(0);
+				if (Lod0Triangles > MaxSourceLod0Triangles)
+				{
+					OutFailureReason = FString::Printf(
+						TEXT("Slice source LOD0 triangle count %d exceeds limit %d"),
+						Lod0Triangles,
+						MaxSourceLod0Triangles);
+					return false;
+				}
+			}
+		}
 	}
 
 	CachedSourceMesh = NewObject<UDynamicMesh>(this, NAME_None, RF_Transient);
@@ -741,11 +830,25 @@ void UObjectSliceComponent::ApplySourceActorPostSlice() const
 
 	DisableFractureOnActor(OwnerActor);
 
+	TSet<const UPrimitiveComponent*> AnchorSupportPrimitives;
+	for (const FComponentReference& SupportBoxReference : SupportBoxColliders)
+	{
+		if (UPrimitiveComponent* SupportPrimitive = Cast<UPrimitiveComponent>(SupportBoxReference.GetComponent(OwnerActor)))
+		{
+			AnchorSupportPrimitives.Add(SupportPrimitive);
+		}
+	}
+
 	TArray<UPrimitiveComponent*> PrimitiveComponents;
 	OwnerActor->GetComponents<UPrimitiveComponent>(PrimitiveComponents);
 	for (UPrimitiveComponent* PrimitiveComponent : PrimitiveComponents)
 	{
 		if (!PrimitiveComponent)
+		{
+			continue;
+		}
+
+		if (AnchorSupportPrimitives.Contains(PrimitiveComponent))
 		{
 			continue;
 		}
@@ -778,7 +881,7 @@ bool UObjectSliceComponent::IsPieceAnchored(const FBox& PieceLocalBounds, const 
 	case EObjectSliceAnchorMode::OriginBand:
 		return IsAnchoredByOriginBand(PieceLocalBounds, SourceTransform);
 	case EObjectSliceAnchorMode::SupportVolumes:
-		return IsAnchoredBySupportVolumes(PieceLocalBounds, SourceTransform);
+		return IsAnchoredBySupportBoxes(PieceLocalBounds, SourceTransform);
 	default:
 		return false;
 	}
@@ -796,9 +899,15 @@ bool UObjectSliceComponent::IsAnchoredByOriginBand(const FBox& PieceLocalBounds,
 	return PieceLocalBounds.Min.Z <= LocalThresholdZ;
 }
 
-bool UObjectSliceComponent::IsAnchoredBySupportVolumes(const FBox& PieceLocalBounds, const FTransform& SourceTransform) const
+bool UObjectSliceComponent::IsAnchoredBySupportBoxes(const FBox& PieceLocalBounds, const FTransform& SourceTransform) const
 {
-	if (!PieceLocalBounds.IsValid || SupportVolumes.Num() == 0)
+	if (!PieceLocalBounds.IsValid || SupportBoxColliders.Num() == 0)
+	{
+		return false;
+	}
+
+	AActor* OwnerActor = GetOwner();
+	if (!OwnerActor)
 	{
 		return false;
 	}
@@ -809,15 +918,15 @@ bool UObjectSliceComponent::IsAnchoredBySupportVolumes(const FBox& PieceLocalBou
 		return false;
 	}
 
-	for (const TObjectPtr<AVolume>& SupportVolumePtr : SupportVolumes)
+	for (const FComponentReference& SupportBoxReference : SupportBoxColliders)
 	{
-		const AVolume* SupportVolume = SupportVolumePtr.Get();
-		if (!IsValid(SupportVolume))
+		const UBoxComponent* SupportBoxComponent = Cast<UBoxComponent>(SupportBoxReference.GetComponent(OwnerActor));
+		if (!IsValid(SupportBoxComponent) || !SupportBoxComponent->IsCollisionEnabled())
 		{
 			continue;
 		}
 
-		const FBox SupportBounds = SupportVolume->GetComponentsBoundingBox(true);
+		const FBox SupportBounds = SupportBoxComponent->Bounds.GetBox();
 		if (!SupportBounds.IsValid || !PieceWorldBounds.Intersect(SupportBounds))
 		{
 			continue;
