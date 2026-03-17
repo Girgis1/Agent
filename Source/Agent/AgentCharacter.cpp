@@ -1830,15 +1830,15 @@ void AAgentCharacter::UpdateScannerSystems(float DeltaSeconds)
 		return;
 	}
 
-	const bool bAimActive = IsBeamAimModifierActive() || (CanUseBeamTool() && bMouseBeamFireHeld);
 	const UAgentBeamToolComponent* ActiveBeamToolComponent = ResolveActiveBeamToolComponent();
-	const FAgentBeamTraceState* BeamTraceState = nullptr;
-	if (bAimActive && ActiveBeamToolComponent && ActiveBeamToolComponent->IsBeamActive())
+	if (ActiveBeamToolComponent && ActiveBeamToolComponent->IsBeamActive())
 	{
-		BeamTraceState = &ActiveBeamToolComponent->GetTraceState();
+		ScannerComponent->ClearScanner(true);
+		return;
 	}
 
-	ScannerComponent->UpdateScanner(DeltaSeconds, bAimActive, ViewOrigin, ViewDirection, BeamTraceState);
+	const bool bAimActive = CanUseBeamTool() && IsRawMouseBeamAimModifierHeld();
+	ScannerComponent->UpdateScanner(DeltaSeconds, bAimActive, ViewOrigin, ViewDirection, nullptr);
 }
 
 void AAgentCharacter::UpdateBeamAimZoom(float DeltaSeconds)

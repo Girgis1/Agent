@@ -168,7 +168,7 @@ void UAgentBeamToolComponent::UpdateBeamTrace(float DeltaTime)
 	TraceState.VisualOrigin = CurrentVisualOrigin;
 
 	const bool bSliceModeActive = ShouldUseSliceMode();
-	const FVector TraceStart = (bSliceModeActive && !CurrentVisualOrigin.IsNearlyZero()) ? CurrentVisualOrigin : CurrentViewOrigin;
+	const FVector TraceStart = CurrentViewOrigin;
 	const float SafeRange = FMath::Max(1.0f, BeamRange);
 	const FVector TraceEnd = TraceStart + (CurrentViewDirection * SafeRange);
 

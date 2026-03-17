@@ -10,6 +10,7 @@
 
 class AActor;
 class AObjectFragmentActor;
+class AVolume;
 class UDynamicMesh;
 class UMaterialInterface;
 class UMeshComponent;
@@ -32,6 +33,14 @@ struct FObjectSliceBeamIntersection
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Objects|Slice")
 	float ThicknessCm = 0.0f;
+};
+
+UENUM(BlueprintType)
+enum class EObjectSliceAnchorMode : uint8
+{
+	None UMETA(DisplayName="None"),
+	OriginBand UMETA(DisplayName="Origin Band"),
+	SupportVolumes UMETA(DisplayName="Support Volumes")
 };
 
 UCLASS(ClassGroup=(Objects), meta=(BlueprintSpawnableComponent))
@@ -89,59 +98,38 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice", meta=(ClampMin="0", UIMin="0"))
 	int32 MaxRuntimeSlices = 1;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice", meta=(ClampMin="0", UIMin="0"))
-	int32 MaxGeneratedPiecesPerSlice = 2;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Validation", meta=(ClampMin="0.0", UIMin="0.0"))
-	float MinSourceMassKg = 0.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Validation", meta=(ClampMin="0.0", UIMin="0.0"))
-	float MinSourceVolumeCm3 = 0.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Validation", meta=(ClampMin="0.0", UIMin="0.0"))
-	float MinPieceMassKg = 0.0f;
-
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Validation", meta=(ClampMin="0.0", UIMin="0.0"))
 	float MinPieceVolumeCm3 = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Validation", meta=(ClampMin="0.0", UIMin="0.0", Units="cm"))
-	float MinPieceExtentCm = 5.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Validation", meta=(ClampMin="0.0", ClampMax="0.5", UIMin="0.0", UIMax="0.5"))
-	float MinPieceVolumeRatio = 0.1f;
+	float MinPieceExtentCm = 3.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Validation", meta=(ClampMin="0.0", UIMin="0.0", Units="cm"))
 	float MinimumPenetrationThicknessCm = 2.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Validation", meta=(ClampMin="0", UIMin="0", ToolTip="0 means unlimited."))
-	int32 MaxSourceTriangleCount = 0;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Validation")
-	bool bRequireClosedMesh = true;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Validation")
-	bool bRequireSingleConnectedSourceIsland = true;
-
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Behavior", meta=(ClampMin="0.01", UIMin="0.01", Units="cm"))
-	float SliceGapWidthCm = 0.75f;
+	float SliceGapWidthCm = 0.1f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Behavior", meta=(ClampMin="0.0", UIMin="0.0"))
-	float SliceSeparationImpulse = 150.0f;
+	float SliceSeparationImpulse = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Behavior", meta=(ClampMin="0.0", UIMin="0.0", Units="s", ToolTip="If a generated piece is below any MinPiece threshold, assign this lifespan (0 = keep forever)."))
 	float SmallPieceLifespanSeconds = 15.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Behavior")
-	bool bDisableSourceCollisionOnSlice = true;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Anchoring")
+	EObjectSliceAnchorMode AnchorMode = EObjectSliceAnchorMode::None;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Behavior")
-	bool bHideSourceActorOnSlice = true;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Anchoring", meta=(ClampMin="0.0", UIMin="0.0", Units="cm", EditCondition="AnchorMode==EObjectSliceAnchorMode::OriginBand", EditConditionHides))
+	float StaticAnchorMaxLocalZCm = 35.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Behavior")
-	bool bDestroySourceActorAfterSlice = false;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Anchoring", meta=(EditCondition="AnchorMode==EObjectSliceAnchorMode::SupportVolumes", EditConditionHides))
+	TArray<TObjectPtr<AVolume>> SupportVolumes;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Behavior")
-	bool bDisableSourceFractureAfterSlice = true;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Anchoring", meta=(ClampMin="0.0", UIMin="0.0", Units="cm", EditCondition="AnchorMode==EObjectSliceAnchorMode::SupportVolumes", EditConditionHides))
+	float MinSupportOverlapCm = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice|Anchoring")
+	bool bDisableSlicingOnAnchoredPieces = false;
 
 protected:
 	USceneComponent* ResolveSliceSourceSceneComponent() const;
@@ -151,6 +139,9 @@ protected:
 	bool CollectSourceMaterialSet(TArray<UMaterialInterface*>& OutMaterialSet) const;
 	void ApplySourceActorPostSlice() const;
 	void DisableFractureOnActor(AActor* Actor) const;
+	bool IsPieceAnchored(const FBox& PieceLocalBounds, const FTransform& SourceTransform) const;
+	bool IsAnchoredByOriginBand(const FBox& PieceLocalBounds, const FTransform& SourceTransform) const;
+	bool IsAnchoredBySupportVolumes(const FBox& PieceLocalBounds, const FTransform& SourceTransform) const;
 
 	UPROPERTY(Transient)
 	int32 CompletedSliceCount = 0;
@@ -165,17 +156,5 @@ protected:
 	bool bSourceCacheValid = false;
 
 	UPROPERTY(Transient)
-	FBox CachedSourceLocalBounds = FBox(EForceInit::ForceInit);
-
-	UPROPERTY(Transient)
 	float CachedSourceVolumeCm3 = 0.0f;
-
-	UPROPERTY(Transient)
-	bool bCachedSourceClosedMesh = false;
-
-	UPROPERTY(Transient)
-	int32 CachedSourceConnectedComponents = 0;
-
-	UPROPERTY(Transient)
-	int32 CachedSourceTriangleCount = 0;
 };

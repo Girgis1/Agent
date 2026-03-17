@@ -6,6 +6,7 @@
 #include "Components/SceneComponent.h"
 #include "UDynamicMesh.h"
 #include "Engine/World.h"
+#include "GameFramework/Volume.h"
 #include "GeometryScript/CollisionFunctions.h"
 #include "GeometryScript/MeshBooleanFunctions.h"
 #include "GeometryScript/MeshDecompositionFunctions.h"
@@ -33,6 +34,27 @@ FVector ResolveWorldExtent(const FVector& LocalExtent, const FTransform& Transfo
 {
 	const FVector Scale3D = Transform.GetScale3D().GetAbs();
 	return FVector(LocalExtent.X * Scale3D.X, LocalExtent.Y * Scale3D.Y, LocalExtent.Z * Scale3D.Z);
+}
+
+FBox TransformBoundsToWorld(const FBox& LocalBounds, const FTransform& Transform)
+{
+	if (!LocalBounds.IsValid)
+	{
+		return FBox(EForceInit::ForceInit);
+	}
+
+	const FVector Min = LocalBounds.Min;
+	const FVector Max = LocalBounds.Max;
+	FBox WorldBounds(EForceInit::ForceInit);
+	WorldBounds += Transform.TransformPosition(FVector(Min.X, Min.Y, Min.Z));
+	WorldBounds += Transform.TransformPosition(FVector(Min.X, Min.Y, Max.Z));
+	WorldBounds += Transform.TransformPosition(FVector(Min.X, Max.Y, Min.Z));
+	WorldBounds += Transform.TransformPosition(FVector(Min.X, Max.Y, Max.Z));
+	WorldBounds += Transform.TransformPosition(FVector(Max.X, Min.Y, Min.Z));
+	WorldBounds += Transform.TransformPosition(FVector(Max.X, Min.Y, Max.Z));
+	WorldBounds += Transform.TransformPosition(FVector(Max.X, Max.Y, Min.Z));
+	WorldBounds += Transform.TransformPosition(FVector(Max.X, Max.Y, Max.Z));
+	return WorldBounds;
 }
 }
 
@@ -345,12 +367,6 @@ bool UObjectSliceComponent::TryExecuteSliceFromBeamGesture(
 		return false;
 	}
 
-	if (MaxGeneratedPiecesPerSlice > 0 && PieceMeshes.Num() > MaxGeneratedPiecesPerSlice)
-	{
-		OutFailureReason = TEXT("Slice produced too many loose pieces");
-		return false;
-	}
-
 	TArray<double> VolumeRatios;
 	TArray<FVector> PieceCentersLocal;
 	VolumeRatios.Reserve(PieceMeshes.Num());
@@ -381,6 +397,8 @@ bool UObjectSliceComponent::TryExecuteSliceFromBeamGesture(
 
 	TArray<bool> PieceBelowMinimumThreshold;
 	PieceBelowMinimumThreshold.SetNumZeroed(PieceMeshes.Num());
+	TArray<bool> PieceAnchored;
+	PieceAnchored.SetNumZeroed(PieceMeshes.Num());
 
 	for (int32 PieceIndex = 0; PieceIndex < PieceMeshes.Num(); ++PieceIndex)
 	{
@@ -395,17 +413,14 @@ bool UObjectSliceComponent::TryExecuteSliceFromBeamGesture(
 		float PieceVolume = 0.0f;
 		UGeometryScriptLibrary_MeshQueryFunctions::GetMeshVolumeArea(PieceMesh, PieceArea, PieceVolume);
 		const float PieceVolumeAbs = FMath::Abs(PieceVolume);
-		const double PieceRatio = VolumeRatios[PieceIndex] / SourceVolume;
-		const float PieceMassKg = AgentObjectBreak::ResolvePrimitiveMassKgWithoutWarning(SourcePrimitive) * static_cast<float>(PieceRatio);
-
-		const FVector WorldExtent = ResolveWorldExtent(UGeometryScriptLibrary_MeshQueryFunctions::GetMeshBoundingBox(PieceMesh).GetExtent(), SourceTransform);
+		const FBox PieceLocalBounds = UGeometryScriptLibrary_MeshQueryFunctions::GetMeshBoundingBox(PieceMesh);
+		const FVector WorldExtent = ResolveWorldExtent(PieceLocalBounds.GetExtent(), SourceTransform);
 		const float MinWorldExtent = WorldExtent.GetMin();
 
 		const bool bBelowMinVolume = MinPieceVolumeCm3 > 0.0f && PieceVolumeAbs < MinPieceVolumeCm3;
-		const bool bBelowMinMass = MinPieceMassKg > 0.0f && PieceMassKg < MinPieceMassKg;
 		const bool bBelowMinExtent = MinPieceExtentCm > 0.0f && MinWorldExtent < MinPieceExtentCm;
-		const bool bBelowMinRatio = MinPieceVolumeRatio > 0.0f && PieceRatio < MinPieceVolumeRatio;
-		PieceBelowMinimumThreshold[PieceIndex] = bBelowMinVolume || bBelowMinMass || bBelowMinExtent || bBelowMinRatio;
+		PieceBelowMinimumThreshold[PieceIndex] = bBelowMinVolume || bBelowMinExtent;
+		PieceAnchored[PieceIndex] = IsPieceAnchored(PieceLocalBounds, SourceTransform);
 	}
 
 	FResolvedObjectBreakSourceState SourceState;
@@ -502,27 +517,22 @@ bool UObjectSliceComponent::TryExecuteSliceFromBeamGesture(
 			SpawnedSliceComponent->SliceResultActorClass = SliceResultActorClass;
 			SpawnedSliceComponent->SliceCapMaterial = SliceCapMaterial;
 			SpawnedSliceComponent->MaxRuntimeSlices = 0;
-			SpawnedSliceComponent->MaxGeneratedPiecesPerSlice = MaxGeneratedPiecesPerSlice;
-			SpawnedSliceComponent->MinSourceMassKg = MinSourceMassKg;
-			SpawnedSliceComponent->MinSourceVolumeCm3 = MinSourceVolumeCm3;
-			SpawnedSliceComponent->MinPieceMassKg = MinPieceMassKg;
 			SpawnedSliceComponent->MinPieceVolumeCm3 = MinPieceVolumeCm3;
 			SpawnedSliceComponent->MinPieceExtentCm = MinPieceExtentCm;
-			SpawnedSliceComponent->MinPieceVolumeRatio = MinPieceVolumeRatio;
 			SpawnedSliceComponent->MinimumPenetrationThicknessCm = MinimumPenetrationThicknessCm;
-			SpawnedSliceComponent->MaxSourceTriangleCount = MaxSourceTriangleCount;
-			SpawnedSliceComponent->bRequireClosedMesh = bRequireClosedMesh;
-			SpawnedSliceComponent->bRequireSingleConnectedSourceIsland = bRequireSingleConnectedSourceIsland;
 			SpawnedSliceComponent->SliceGapWidthCm = SliceGapWidthCm;
 			SpawnedSliceComponent->SliceSeparationImpulse = SliceSeparationImpulse;
 			SpawnedSliceComponent->SmallPieceLifespanSeconds = SmallPieceLifespanSeconds;
-			SpawnedSliceComponent->bDisableSourceCollisionOnSlice = bDisableSourceCollisionOnSlice;
-			SpawnedSliceComponent->bHideSourceActorOnSlice = bHideSourceActorOnSlice;
-			SpawnedSliceComponent->bDestroySourceActorAfterSlice = bDestroySourceActorAfterSlice;
-			SpawnedSliceComponent->bDisableSourceFractureAfterSlice = bDisableSourceFractureAfterSlice;
+			SpawnedSliceComponent->AnchorMode = AnchorMode;
+			SpawnedSliceComponent->StaticAnchorMaxLocalZCm = StaticAnchorMaxLocalZCm;
+			SpawnedSliceComponent->SupportVolumes = SupportVolumes;
+			SpawnedSliceComponent->MinSupportOverlapCm = MinSupportOverlapCm;
+			SpawnedSliceComponent->bDisableSlicingOnAnchoredPieces = bDisableSlicingOnAnchoredPieces;
 			SpawnedSliceComponent->InvalidateSourceMeshCache();
 
-			if (PieceBelowMinimumThreshold.IsValidIndex(PieceIndex) && PieceBelowMinimumThreshold[PieceIndex])
+			const bool bPieceBelowThreshold = PieceBelowMinimumThreshold.IsValidIndex(PieceIndex) && PieceBelowMinimumThreshold[PieceIndex];
+			const bool bPieceAnchored = PieceAnchored.IsValidIndex(PieceIndex) && PieceAnchored[PieceIndex];
+			if (bPieceBelowThreshold || (bPieceAnchored && bDisableSlicingOnAnchoredPieces))
 			{
 				SpawnedSliceComponent->bSlicingEnabled = false;
 			}
@@ -556,7 +566,16 @@ bool UObjectSliceComponent::TryExecuteSliceFromBeamGesture(
 	{
 		if (UPrimitiveComponent* SpawnedPrimitive = SpawnedPrimitives[PieceIndex].Get())
 		{
+			const bool bPieceAnchored = PieceAnchored.IsValidIndex(PieceIndex) && PieceAnchored[PieceIndex];
 			SpawnedPrimitive->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+			if (bPieceAnchored)
+			{
+				SpawnedPrimitive->SetSimulatePhysics(false);
+				SpawnedPrimitive->SetPhysicsLinearVelocity(FVector::ZeroVector);
+				SpawnedPrimitive->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+				continue;
+			}
+
 			SpawnedPrimitive->SetSimulatePhysics(true);
 			SpawnedPrimitive->SetPhysicsLinearVelocity(SourceState.SourceLinearVelocity);
 			SpawnedPrimitive->SetPhysicsAngularVelocityInDegrees(SourceState.SourceAngularVelocityDeg);
@@ -578,11 +597,7 @@ void UObjectSliceComponent::InvalidateSourceMeshCache()
 {
 	bSourceCacheValid = false;
 	CachedSourceMesh = nullptr;
-	CachedSourceLocalBounds = FBox(EForceInit::ForceInit);
 	CachedSourceVolumeCm3 = 0.0f;
-	bCachedSourceClosedMesh = false;
-	CachedSourceConnectedComponents = 0;
-	CachedSourceTriangleCount = 0;
 	UGeometryScriptLibrary_MeshSpatial::ResetBVH(CachedSourceMeshBVH);
 }
 
@@ -671,20 +686,9 @@ bool UObjectSliceComponent::BuildSliceSourceCache(FString& OutFailureReason)
 		return false;
 	}
 
-	CachedSourceTriangleCount = CachedSourceMesh->GetTriangleCount();
-	if (MaxSourceTriangleCount > 0 && CachedSourceTriangleCount > MaxSourceTriangleCount)
-	{
-		OutFailureReason = TEXT("Slice source mesh is too dense for runtime slicing");
-		InvalidateSourceMeshCache();
-		return false;
-	}
-
-	CachedSourceLocalBounds = UGeometryScriptLibrary_MeshQueryFunctions::GetMeshBoundingBox(CachedSourceMesh);
 	float SurfaceArea = 0.0f;
 	UGeometryScriptLibrary_MeshQueryFunctions::GetMeshVolumeArea(CachedSourceMesh, SurfaceArea, CachedSourceVolumeCm3);
 	CachedSourceVolumeCm3 = FMath::Abs(CachedSourceVolumeCm3);
-	bCachedSourceClosedMesh = UGeometryScriptLibrary_MeshQueryFunctions::GetIsClosedMesh(CachedSourceMesh);
-	CachedSourceConnectedComponents = UGeometryScriptLibrary_MeshQueryFunctions::GetNumConnectedComponents(CachedSourceMesh);
 
 	if (!ValidateCachedSourceMesh(OutFailureReason))
 	{
@@ -703,34 +707,6 @@ bool UObjectSliceComponent::ValidateCachedSourceMesh(FString& OutFailureReason) 
 	{
 		OutFailureReason = TEXT("Slice source mesh is empty");
 		return false;
-	}
-
-	if (bRequireClosedMesh && !bCachedSourceClosedMesh)
-	{
-		OutFailureReason = TEXT("Slice source mesh must be closed");
-		return false;
-	}
-
-	if (bRequireSingleConnectedSourceIsland && CachedSourceConnectedComponents > 1)
-	{
-		OutFailureReason = TEXT("Slice source mesh must be one connected island");
-		return false;
-	}
-
-	if (MinSourceVolumeCm3 > 0.0f && CachedSourceVolumeCm3 < MinSourceVolumeCm3)
-	{
-		OutFailureReason = TEXT("Slice source mesh is below the minimum volume");
-		return false;
-	}
-
-	if (MinSourceMassKg > 0.0f)
-	{
-		const float SourceMassKg = AgentObjectBreak::ResolvePrimitiveMassKgWithoutWarning(GetSliceSourcePrimitive());
-		if (SourceMassKg < MinSourceMassKg)
-		{
-			OutFailureReason = TEXT("Slice source mesh is below the minimum mass");
-			return false;
-		}
 	}
 
 	return true;
@@ -763,36 +739,22 @@ void UObjectSliceComponent::ApplySourceActorPostSlice() const
 		return;
 	}
 
-	if (bDisableSourceFractureAfterSlice)
-	{
-		DisableFractureOnActor(OwnerActor);
-	}
+	DisableFractureOnActor(OwnerActor);
 
-	if (bDisableSourceCollisionOnSlice)
+	TArray<UPrimitiveComponent*> PrimitiveComponents;
+	OwnerActor->GetComponents<UPrimitiveComponent>(PrimitiveComponents);
+	for (UPrimitiveComponent* PrimitiveComponent : PrimitiveComponents)
 	{
-		TArray<UPrimitiveComponent*> PrimitiveComponents;
-		OwnerActor->GetComponents<UPrimitiveComponent>(PrimitiveComponents);
-		for (UPrimitiveComponent* PrimitiveComponent : PrimitiveComponents)
+		if (!PrimitiveComponent)
 		{
-			if (!PrimitiveComponent)
-			{
-				continue;
-			}
-
-			PrimitiveComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-			PrimitiveComponent->SetSimulatePhysics(false);
+			continue;
 		}
+
+		PrimitiveComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		PrimitiveComponent->SetSimulatePhysics(false);
 	}
 
-	if (bHideSourceActorOnSlice)
-	{
-		OwnerActor->SetActorHiddenInGame(true);
-	}
-
-	if (bDestroySourceActorAfterSlice)
-	{
-		OwnerActor->Destroy();
-	}
+	OwnerActor->SetActorHiddenInGame(true);
 }
 
 void UObjectSliceComponent::DisableFractureOnActor(AActor* Actor) const
@@ -807,4 +769,84 @@ void UObjectSliceComponent::DisableFractureOnActor(AActor* Actor) const
 		FractureComponent->bFractureEnabled = false;
 		FractureComponent->bAutoFractureOnDepleted = false;
 	}
+}
+
+bool UObjectSliceComponent::IsPieceAnchored(const FBox& PieceLocalBounds, const FTransform& SourceTransform) const
+{
+	switch (AnchorMode)
+	{
+	case EObjectSliceAnchorMode::OriginBand:
+		return IsAnchoredByOriginBand(PieceLocalBounds, SourceTransform);
+	case EObjectSliceAnchorMode::SupportVolumes:
+		return IsAnchoredBySupportVolumes(PieceLocalBounds, SourceTransform);
+	default:
+		return false;
+	}
+}
+
+bool UObjectSliceComponent::IsAnchoredByOriginBand(const FBox& PieceLocalBounds, const FTransform& SourceTransform) const
+{
+	if (!PieceLocalBounds.IsValid || StaticAnchorMaxLocalZCm <= KINDA_SMALL_NUMBER)
+	{
+		return false;
+	}
+
+	const float SafeScaleZ = FMath::Max(KINDA_SMALL_NUMBER, SourceTransform.GetScale3D().GetAbs().Z);
+	const float LocalThresholdZ = StaticAnchorMaxLocalZCm / SafeScaleZ;
+	return PieceLocalBounds.Min.Z <= LocalThresholdZ;
+}
+
+bool UObjectSliceComponent::IsAnchoredBySupportVolumes(const FBox& PieceLocalBounds, const FTransform& SourceTransform) const
+{
+	if (!PieceLocalBounds.IsValid || SupportVolumes.Num() == 0)
+	{
+		return false;
+	}
+
+	const FBox PieceWorldBounds = TransformBoundsToWorld(PieceLocalBounds, SourceTransform);
+	if (!PieceWorldBounds.IsValid)
+	{
+		return false;
+	}
+
+	for (const TObjectPtr<AVolume>& SupportVolumePtr : SupportVolumes)
+	{
+		const AVolume* SupportVolume = SupportVolumePtr.Get();
+		if (!IsValid(SupportVolume))
+		{
+			continue;
+		}
+
+		const FBox SupportBounds = SupportVolume->GetComponentsBoundingBox(true);
+		if (!SupportBounds.IsValid || !PieceWorldBounds.Intersect(SupportBounds))
+		{
+			continue;
+		}
+
+		if (MinSupportOverlapCm <= KINDA_SMALL_NUMBER)
+		{
+			return true;
+		}
+
+		const FVector OverlapMin(
+			FMath::Max(PieceWorldBounds.Min.X, SupportBounds.Min.X),
+			FMath::Max(PieceWorldBounds.Min.Y, SupportBounds.Min.Y),
+			FMath::Max(PieceWorldBounds.Min.Z, SupportBounds.Min.Z));
+		const FVector OverlapMax(
+			FMath::Min(PieceWorldBounds.Max.X, SupportBounds.Max.X),
+			FMath::Min(PieceWorldBounds.Max.Y, SupportBounds.Max.Y),
+			FMath::Min(PieceWorldBounds.Max.Z, SupportBounds.Max.Z));
+		if (OverlapMax.X <= OverlapMin.X || OverlapMax.Y <= OverlapMin.Y || OverlapMax.Z <= OverlapMin.Z)
+		{
+			continue;
+		}
+
+		const FVector OverlapSize = OverlapMax - OverlapMin;
+		if (OverlapSize.GetMin() >= MinSupportOverlapCm)
+		{
+			return true;
+		}
+	}
+
+	return false;
 }
