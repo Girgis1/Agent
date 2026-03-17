@@ -95,7 +95,6 @@ public:
 protected:
 	bool TryApplyBrushToHit(const FHitResult& Hit, float DeltaTime);
 	void TickTrailBrush(float DeltaTime);
-	void TickAreaBrush(float DeltaTime);
 	FVector ResolveTraceDownVector() const;
 	FCollisionQueryParams BuildTraceParams() const;
 

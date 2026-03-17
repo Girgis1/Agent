@@ -13,91 +13,12 @@
 #include "Objects/Actors/ObjectGeometryCollectionActor.h"
 #include "Objects/Assets/ObjectFractureDefinitionAsset.h"
 #include "Objects/Components/ObjectHealthComponent.h"
+#include "Objects/Types/ObjectBreakUtilities.h"
 #include "Objects/Types/ObjectHealthTypes.h"
 #include "PhysicsEngine/BodyInstance.h"
 
 namespace
 {
-struct FResolvedObjectFractureSourceState
-{
-	AActor* OwnerActor = nullptr;
-	UPrimitiveComponent* SourcePrimitive = nullptr;
-	UMaterialComponent* SourceMaterialComponent = nullptr;
-	UObjectHealthComponent* SourceHealthComponent = nullptr;
-	TMap<FName, int32> SourceResourceQuantitiesScaled;
-	float SourceMaterialWeightKg = 0.0f;
-	float SourceGlobalMassMultiplier = 1.0f;
-	float SourceCurrentMassKg = 0.0f;
-	float SourceBaseContributionKg = 0.0f;
-	float SourceBaseMassBeforeMultiplierKg = 0.0f;
-	FVector SourceLinearVelocity = FVector::ZeroVector;
-	FVector SourceAngularVelocityDeg = FVector::ZeroVector;
-	FVector SourceLocation = FVector::ZeroVector;
-	FTransform SourceTransform = FTransform::Identity;
-	float InheritedDamagedPenaltyPercent = 0.0f;
-};
-
-UPrimitiveComponent* ResolveBestPrimitiveOnActor(AActor* Actor)
-{
-	if (!Actor)
-	{
-		return nullptr;
-	}
-
-	if (UPrimitiveComponent* RootPrimitive = Cast<UPrimitiveComponent>(Actor->GetRootComponent()))
-	{
-		return RootPrimitive;
-	}
-
-	TArray<UPrimitiveComponent*> PrimitiveComponents;
-	Actor->GetComponents<UPrimitiveComponent>(PrimitiveComponents);
-
-	UPrimitiveComponent* FirstUsablePrimitive = nullptr;
-	for (UPrimitiveComponent* PrimitiveComponent : PrimitiveComponents)
-	{
-		if (!PrimitiveComponent || PrimitiveComponent->GetCollisionEnabled() == ECollisionEnabled::NoCollision)
-		{
-			continue;
-		}
-
-		if (!FirstUsablePrimitive)
-		{
-			FirstUsablePrimitive = PrimitiveComponent;
-		}
-
-		if (PrimitiveComponent->IsSimulatingPhysics())
-		{
-			return PrimitiveComponent;
-		}
-	}
-
-	return FirstUsablePrimitive;
-}
-
-float ResolvePrimitiveMassKgWithoutWarningForFracture(const UPrimitiveComponent* PrimitiveComponent)
-{
-	if (!PrimitiveComponent)
-	{
-		return 0.0f;
-	}
-
-	if (const FBodyInstance* BodyInstance = PrimitiveComponent->GetBodyInstance())
-	{
-		const float BodyMassKg = BodyInstance->GetBodyMass();
-		if (BodyMassKg > KINDA_SMALL_NUMBER)
-		{
-			return FMath::Max(0.0f, BodyMassKg);
-		}
-	}
-
-	if (PrimitiveComponent->IsSimulatingPhysics())
-	{
-		return FMath::Max(0.0f, PrimitiveComponent->GetMass());
-	}
-
-	return 0.0f;
-}
-
 double EstimateStaticMeshRelativeMassWeight(const UStaticMesh* StaticMesh)
 {
 	if (!StaticMesh)
@@ -163,105 +84,6 @@ void BuildNormalizedFragmentWeights(
 	}
 }
 
-void SplitResourceQuantitiesExact(
-	const TMap<FName, int32>& SourceQuantitiesScaled,
-	const TArray<double>& NormalizedWeights,
-	TArray<TMap<FName, int32>>& OutSplitQuantitiesScaled)
-{
-	OutSplitQuantitiesScaled.Reset();
-	OutSplitQuantitiesScaled.SetNum(NormalizedWeights.Num());
-
-	if (NormalizedWeights.Num() == 0 || SourceQuantitiesScaled.Num() == 0)
-	{
-		return;
-	}
-
-	for (const TPair<FName, int32>& Pair : SourceQuantitiesScaled)
-	{
-		const FName ResourceId = Pair.Key;
-		const int32 SourceQuantityScaled = FMath::Max(0, Pair.Value);
-		if (ResourceId.IsNone() || SourceQuantityScaled <= 0)
-		{
-			continue;
-		}
-
-		TArray<int32> WholeShares;
-		TArray<double> FractionalRemainders;
-		WholeShares.SetNumZeroed(NormalizedWeights.Num());
-		FractionalRemainders.SetNumZeroed(NormalizedWeights.Num());
-
-		int32 AllocatedScaled = 0;
-		for (int32 Index = 0; Index < NormalizedWeights.Num(); ++Index)
-		{
-			const double RawShare = static_cast<double>(SourceQuantityScaled) * NormalizedWeights[Index];
-			const int32 WholeShare = FMath::Max(0, static_cast<int32>(FMath::FloorToDouble(RawShare)));
-			WholeShares[Index] = WholeShare;
-			FractionalRemainders[Index] = RawShare - static_cast<double>(WholeShare);
-			AllocatedScaled += WholeShare;
-		}
-
-		int32 RemainingScaled = FMath::Max(0, SourceQuantityScaled - AllocatedScaled);
-		while (RemainingScaled > 0)
-		{
-			int32 BestIndex = 0;
-			double BestRemainder = -1.0;
-			for (int32 Index = 0; Index < FractionalRemainders.Num(); ++Index)
-			{
-				if (FractionalRemainders[Index] > BestRemainder)
-				{
-					BestRemainder = FractionalRemainders[Index];
-					BestIndex = Index;
-				}
-			}
-
-			++WholeShares[BestIndex];
-			FractionalRemainders[BestIndex] = -1.0;
-			--RemainingScaled;
-		}
-
-		for (int32 Index = 0; Index < WholeShares.Num(); ++Index)
-		{
-			if (WholeShares[Index] > 0)
-			{
-				OutSplitQuantitiesScaled[Index].FindOrAdd(ResourceId) += WholeShares[Index];
-			}
-		}
-	}
-}
-
-void BuildSourceState(
-	AActor* OwnerActor,
-	UPrimitiveComponent* SourcePrimitive,
-	UMaterialComponent* SourceMaterialComponent,
-	UObjectHealthComponent* SourceHealthComponent,
-	FResolvedObjectFractureSourceState& OutState)
-{
-	OutState = FResolvedObjectFractureSourceState();
-	OutState.OwnerActor = OwnerActor;
-	OutState.SourcePrimitive = SourcePrimitive;
-	OutState.SourceMaterialComponent = SourceMaterialComponent;
-	OutState.SourceHealthComponent = SourceHealthComponent;
-	OutState.SourceLocation = OwnerActor ? OwnerActor->GetActorLocation() : FVector::ZeroVector;
-	OutState.SourceTransform = OwnerActor ? OwnerActor->GetActorTransform() : FTransform::Identity;
-	OutState.SourceLinearVelocity = SourcePrimitive ? SourcePrimitive->GetPhysicsLinearVelocity() : (OwnerActor ? OwnerActor->GetVelocity() : FVector::ZeroVector);
-	OutState.SourceAngularVelocityDeg = SourcePrimitive ? SourcePrimitive->GetPhysicsAngularVelocityInDegrees() : FVector::ZeroVector;
-	OutState.InheritedDamagedPenaltyPercent = SourceHealthComponent
-		? SourceHealthComponent->GetTotalDamagedPenaltyPercent()
-		: 0.0f;
-
-	if (SourceMaterialComponent && SourcePrimitive)
-	{
-		SourceMaterialComponent->BuildResolvedResourceQuantitiesScaled(SourcePrimitive, OutState.SourceResourceQuantitiesScaled);
-		OutState.SourceMaterialWeightKg = SourceMaterialComponent->GetResolvedMaterialWeightKg(SourcePrimitive);
-		OutState.SourceGlobalMassMultiplier = FMath::Max(KINDA_SMALL_NUMBER, SourceMaterialComponent->GetResolvedGlobalMassMultiplier());
-	}
-
-	OutState.SourceCurrentMassKg = ResolvePrimitiveMassKgWithoutWarningForFracture(SourcePrimitive);
-	OutState.SourceBaseContributionKg = FMath::Max(0.0f, OutState.SourceCurrentMassKg - OutState.SourceMaterialWeightKg);
-	OutState.SourceBaseMassBeforeMultiplierKg = SourceMaterialComponent
-		? (OutState.SourceGlobalMassMultiplier > KINDA_SMALL_NUMBER ? (OutState.SourceBaseContributionKg / OutState.SourceGlobalMassMultiplier) : 0.0f)
-		: 0.0f;
-}
 }
 
 bool FObjectFractureOption::IsUsable() const
@@ -620,8 +442,8 @@ bool UObjectFractureComponent::TriggerFractureDefinition(UObjectFractureDefiniti
 		return false;
 	}
 
-	FResolvedObjectFractureSourceState SourceState;
-	BuildSourceState(
+	FResolvedObjectBreakSourceState SourceState;
+	AgentObjectBreak::BuildSourceState(
 		OwnerActor,
 		ResolveSourcePrimitive(),
 		ResolveMaterialComponent(),
@@ -637,7 +459,7 @@ bool UObjectFractureComponent::TriggerFractureDefinition(UObjectFractureDefiniti
 	}
 
 	TArray<TMap<FName, int32>> SplitResourceQuantitiesScaled;
-	SplitResourceQuantitiesExact(SourceState.SourceResourceQuantitiesScaled, NormalizedWeights, SplitResourceQuantitiesScaled);
+	AgentObjectBreak::SplitResourceQuantitiesExact(SourceState.SourceResourceQuantitiesScaled, NormalizedWeights, SplitResourceQuantitiesScaled);
 
 	DisableSourceActorCollisionForFracture();
 
@@ -694,7 +516,7 @@ bool UObjectFractureComponent::TriggerFractureDefinition(UObjectFractureDefiniti
 				FragmentMaterialComponent->ClearConfiguredResources();
 			}
 		}
-		else if (UPrimitiveComponent* DeferredFragmentPrimitive = ResolveBestPrimitiveOnActor(SpawnedFragment))
+		else if (UPrimitiveComponent* DeferredFragmentPrimitive = AgentObjectBreak::ResolveBestPrimitiveOnActor(SpawnedFragment))
 		{
 			const float TargetFragmentMassKg = FMath::Max(0.01f, SourceState.SourceCurrentMassKg * static_cast<float>(NormalizedWeights[SpawnIndex]));
 			DeferredFragmentPrimitive->SetMassOverrideInKg(NAME_None, TargetFragmentMassKg, true);
@@ -733,7 +555,7 @@ bool UObjectFractureComponent::TriggerFractureDefinition(UObjectFractureDefiniti
 
 		UGameplayStatics::FinishSpawningActor(SpawnedFragment, SpawnTransform);
 
-		if (UPrimitiveComponent* FragmentPrimitive = ResolveBestPrimitiveOnActor(SpawnedFragment))
+		if (UPrimitiveComponent* FragmentPrimitive = AgentObjectBreak::ResolveBestPrimitiveOnActor(SpawnedFragment))
 		{
 			if (SelectedDefinition->bTransferSourceVelocity)
 			{
@@ -826,8 +648,8 @@ bool UObjectFractureComponent::TriggerSpawnedReplacement(const FObjectFractureOp
 		return false;
 	}
 
-	FResolvedObjectFractureSourceState SourceState;
-	BuildSourceState(
+	FResolvedObjectBreakSourceState SourceState;
+	AgentObjectBreak::BuildSourceState(
 		OwnerActor,
 		ResolveSourcePrimitive(),
 		ResolveMaterialComponent(),
@@ -889,7 +711,7 @@ UObjectHealthComponent* UObjectFractureComponent::ResolveHealthComponent() const
 
 UPrimitiveComponent* UObjectFractureComponent::ResolveSourcePrimitive() const
 {
-	return ResolveBestPrimitiveOnActor(GetOwner());
+	return AgentObjectBreak::ResolveBestPrimitiveOnActor(GetOwner());
 }
 
 UMaterialComponent* UObjectFractureComponent::ResolveMaterialComponent() const
@@ -996,7 +818,7 @@ void UObjectFractureComponent::ApplySpawnedActorState(
 			SpawnedMaterialComponent->ClearConfiguredResources();
 		}
 	}
-	else if (UPrimitiveComponent* SpawnedPrimitive = ResolveBestPrimitiveOnActor(SpawnedActor))
+	else if (UPrimitiveComponent* SpawnedPrimitive = AgentObjectBreak::ResolveBestPrimitiveOnActor(SpawnedActor))
 	{
 		SpawnedPrimitive->SetMassOverrideInKg(NAME_None, FMath::Max(0.01f, SourceCurrentMassKg), true);
 	}
@@ -1026,7 +848,7 @@ void UObjectFractureComponent::ApplySpawnedActorVelocityAndImpulses(
 	const FVector& SourceLocation,
 	const FObjectFractureOption& SelectedOption) const
 {
-	UPrimitiveComponent* SpawnedPrimitive = ResolveBestPrimitiveOnActor(SpawnedActor);
+	UPrimitiveComponent* SpawnedPrimitive = AgentObjectBreak::ResolveBestPrimitiveOnActor(SpawnedActor);
 	if (!SpawnedPrimitive)
 	{
 		return;

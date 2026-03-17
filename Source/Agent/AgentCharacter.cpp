@@ -1809,6 +1809,7 @@ void AAgentCharacter::UpdateBeamSystems(float DeltaSeconds)
 	}
 
 	ActiveBeamToolComponent->SetBeamMode(CurrentBeamMode);
+	ActiveBeamToolComponent->SetSliceIntentActive(CurrentBeamMode == EAgentBeamMode::Damage && IsBeamAimModifierActive());
 	ActiveBeamToolComponent->SetBeamPose(ViewOrigin, ViewDirection, VisualOrigin);
 	ActiveBeamToolComponent->StartBeam();
 }
@@ -2041,18 +2042,12 @@ void AAgentCharacter::OnRightMouseButtonReleased()
 
 void AAgentCharacter::OnMouseScrollUpPressed()
 {
-	if (IsRawMouseBeamAimModifierHeld() && CanUseBeamTool())
-	{
-		CycleBeamMode(1);
-	}
+	CycleBeamMode(1);
 }
 
 void AAgentCharacter::OnMouseScrollDownPressed()
 {
-	if (IsRawMouseBeamAimModifierHeld() && CanUseBeamTool())
-	{
-		CycleBeamMode(-1);
-	}
+	CycleBeamMode(-1);
 }
 
 void AAgentCharacter::OnGamepadFaceButtonLeftPressed()

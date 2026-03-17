@@ -85,9 +85,9 @@ AMiningBotActor::AMiningBotActor()
 	DirtTrailBrushComponent = CreateDefaultSubobject<UDirtBrushComponent>(TEXT("DirtTrailBrushComponent"));
 	DirtTrailBrushComponent->BrushMode = EDirtBrushMode::Clean;
 	DirtTrailBrushComponent->ApplicationType = EDirtBrushApplicationType::Trail;
-	DirtTrailBrushComponent->BrushSizeCm = 42.0f;
-	DirtTrailBrushComponent->BrushStrengthPerSecond = 0.85f;
-	DirtTrailBrushComponent->BrushHardness = 0.75f;
+	DirtTrailBrushComponent->BrushSizeCm = 50.0f;
+	DirtTrailBrushComponent->BrushStrengthPerSecond = 3.0f;
+	DirtTrailBrushComponent->BrushHardness = 0.5f;
 	DirtTrailBrushComponent->ApplyIntervalSeconds = 0.05f;
 	DirtTrailBrushComponent->TrailTraceStartOffsetCm = 10.0f;
 	DirtTrailBrushComponent->TrailTraceLengthCm = 60.0f;
