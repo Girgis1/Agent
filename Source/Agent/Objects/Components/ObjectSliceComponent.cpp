@@ -12,8 +12,10 @@
 #include "GeometryScript/CollisionFunctions.h"
 #include "GeometryScript/MeshBooleanFunctions.h"
 #include "GeometryScript/MeshDecompositionFunctions.h"
+#include "GeometryScript/MeshPrimitiveFunctions.h"
 #include "GeometryScript/MeshQueryFunctions.h"
 #include "GeometryScript/MeshSpatialFunctions.h"
+#include "GeometryScript/PolygonFunctions.h"
 #include "GeometryScript/SceneUtilityFunctions.h"
 #include "GameFramework/Actor.h"
 #include "Kismet/GameplayStatics.h"
@@ -24,6 +26,7 @@
 #include "Objects/Components/ObjectFractureComponent.h"
 #include "Objects/Components/ObjectHealthComponent.h"
 #include "Objects/Types/ObjectBreakUtilities.h"
+#include "Algo/Reverse.h"
 
 namespace
 {
@@ -58,6 +61,25 @@ FBox TransformBoundsToWorld(const FBox& LocalBounds, const FTransform& Transform
 	WorldBounds += Transform.TransformPosition(FVector(Max.X, Max.Y, Min.Z));
 	WorldBounds += Transform.TransformPosition(FVector(Max.X, Max.Y, Max.Z));
 	return WorldBounds;
+}
+
+double ComputeSignedPolygonArea2D(const TArray<FVector2D>& PolygonVertices)
+{
+	if (PolygonVertices.Num() < 3)
+	{
+		return 0.0;
+	}
+
+	double TwiceArea = 0.0;
+	for (int32 VertexIndex = 0; VertexIndex < PolygonVertices.Num(); ++VertexIndex)
+	{
+		const FVector2D& CurrentVertex = PolygonVertices[VertexIndex];
+		const FVector2D& NextVertex = PolygonVertices[(VertexIndex + 1) % PolygonVertices.Num()];
+		TwiceArea += (static_cast<double>(CurrentVertex.X) * static_cast<double>(NextVertex.Y))
+			- (static_cast<double>(NextVertex.X) * static_cast<double>(CurrentVertex.Y));
+	}
+
+	return TwiceArea * 0.5;
 }
 }
 
@@ -342,23 +364,321 @@ bool UObjectSliceComponent::TryExecuteSliceFromBeamGesture(
 		WorkingMesh->SetMesh(UE::Geometry::FDynamicMesh3(SourceMesh));
 	});
 
-	TArray<UMaterialInterface*> ResultMaterialSet;
-	CollectSourceMaterialSet(ResultMaterialSet);
-	int32 HoleFillMaterialId = INDEX_NONE;
-	if (SliceCapMaterial)
-	{
-		HoleFillMaterialId = ResultMaterialSet.Num();
-		ResultMaterialSet.Add(SliceCapMaterial);
-	}
-
 	FGeometryScriptMeshPlaneSliceOptions SliceOptions;
 	SliceOptions.bFillHoles = true;
 	SliceOptions.bFillSpans = true;
-	SliceOptions.HoleFillMaterialID = HoleFillMaterialId;
+	SliceOptions.HoleFillMaterialID = INDEX_NONE;
 	SliceOptions.GapWidth = FMath::Max(0.01f, SliceGapWidthCm / ResolveAverageScale(SourceTransform));
+	if (SliceCapMaterial)
+	{
+		TArray<UMaterialInterface*> ResultMaterialSet;
+		CollectSourceMaterialSet(ResultMaterialSet);
+		SliceOptions.HoleFillMaterialID = ResultMaterialSet.Num();
+	}
 
 	const FTransform CutFrame(FRotationMatrix::MakeFromXZ(LocalBeamAxis, LocalPlaneNormal).ToQuat(), LocalPlaneOrigin);
 	UGeometryScriptLibrary_MeshBooleanFunctions::ApplyMeshPlaneSlice(WorkingMesh, CutFrame, SliceOptions, nullptr);
+	const FVector SliceMidpointWorld = (CurrentEntryPointWorld + CurrentExitPointWorld) * 0.5f;
+	return FinalizeSliceFromWorkingMesh(
+		WorkingMesh,
+		PlaneNormalWorld,
+		SliceMidpointWorld,
+		SliceInstigator,
+		OutFailureReason);
+}
+
+bool UObjectSliceComponent::TryExecuteSliceFromStrokeCutter(
+	const TArray<FVector>& StrokePointsWorld,
+	const FVector& ExtrudeDirectionTowardRayStartWorld,
+	float CutDepthCm,
+	float StrokeWidthCm,
+	AActor* SliceInstigator,
+	FString& OutFailureReason)
+{
+	if (!BuildSliceSourceCache(OutFailureReason))
+	{
+		return false;
+	}
+
+	UPrimitiveComponent* SourcePrimitive = GetSliceSourcePrimitive();
+	UWorld* World = GetWorld();
+	AActor* OwnerActor = GetOwner();
+	if (!SourcePrimitive || !World || !OwnerActor)
+	{
+		OutFailureReason = TEXT("Slice target is missing runtime state");
+		return false;
+	}
+
+	if (StrokePointsWorld.Num() < 2)
+	{
+		OutFailureReason = TEXT("Stroke requires at least two points");
+		return false;
+	}
+
+	const FVector SafeExtrudeDirectionWorld = ExtrudeDirectionTowardRayStartWorld.GetSafeNormal();
+	if (SafeExtrudeDirectionWorld.IsNearlyZero())
+	{
+		OutFailureReason = TEXT("Stroke cutter extrusion direction is invalid");
+		return false;
+	}
+
+	const FTransform SourceTransform = SourcePrimitive->GetComponentTransform();
+	const float SafeAverageScale = ResolveAverageScale(SourceTransform);
+	const float LocalPointMergeTolerance = FMath::Max(0.01f, 0.25f / SafeAverageScale);
+	const float LocalPointMergeToleranceSq = FMath::Square(LocalPointMergeTolerance);
+
+	TArray<FVector> LocalStrokePoints;
+	LocalStrokePoints.Reserve(StrokePointsWorld.Num());
+	for (const FVector& PointWorld : StrokePointsWorld)
+	{
+		const FVector LocalPoint = SourceTransform.InverseTransformPosition(PointWorld);
+		if (LocalStrokePoints.Num() == 0 || FVector::DistSquared(LocalStrokePoints.Last(), LocalPoint) > LocalPointMergeToleranceSq)
+		{
+			LocalStrokePoints.Add(LocalPoint);
+		}
+	}
+
+	if (LocalStrokePoints.Num() < 2)
+	{
+		OutFailureReason = TEXT("Stroke collapsed to a single point");
+		return false;
+	}
+
+	const FVector LocalExtrudeDirection = SourceTransform.InverseTransformVector(SafeExtrudeDirectionWorld).GetSafeNormal();
+	if (LocalExtrudeDirection.IsNearlyZero())
+	{
+		OutFailureReason = TEXT("Unable to transform stroke extrusion direction");
+		return false;
+	}
+
+	FVector LocalPathAxis = FVector::ZeroVector;
+	double BestProjectedSegmentLengthSq = 0.0;
+	for (int32 PointIndex = 1; PointIndex < LocalStrokePoints.Num(); ++PointIndex)
+	{
+		FVector Segment = LocalStrokePoints[PointIndex] - LocalStrokePoints[PointIndex - 1];
+		Segment -= FVector::DotProduct(Segment, LocalExtrudeDirection) * LocalExtrudeDirection;
+		const double SegmentLengthSq = Segment.SizeSquared();
+		if (SegmentLengthSq > BestProjectedSegmentLengthSq)
+		{
+			BestProjectedSegmentLengthSq = SegmentLengthSq;
+			LocalPathAxis = Segment;
+		}
+	}
+
+	if (LocalPathAxis.IsNearlyZero())
+	{
+		LocalPathAxis = FVector::CrossProduct(LocalExtrudeDirection, FVector::UpVector);
+		if (LocalPathAxis.IsNearlyZero())
+		{
+			LocalPathAxis = FVector::CrossProduct(LocalExtrudeDirection, FVector::RightVector);
+		}
+	}
+	LocalPathAxis = LocalPathAxis.GetSafeNormal();
+	if (LocalPathAxis.IsNearlyZero())
+	{
+		OutFailureReason = TEXT("Stroke cutter path axis is degenerate");
+		return false;
+	}
+
+	FVector LocalPathBinormal = FVector::CrossProduct(LocalExtrudeDirection, LocalPathAxis).GetSafeNormal();
+	if (LocalPathBinormal.IsNearlyZero())
+	{
+		OutFailureReason = TEXT("Stroke cutter frame could not be constructed");
+		return false;
+	}
+	LocalPathAxis = FVector::CrossProduct(LocalPathBinormal, LocalExtrudeDirection).GetSafeNormal();
+	if (LocalPathAxis.IsNearlyZero())
+	{
+		OutFailureReason = TEXT("Stroke cutter frame collapsed");
+		return false;
+	}
+
+	const FVector LocalPathOrigin = LocalStrokePoints[0];
+	TArray<FVector2D> Path2D;
+	Path2D.Reserve(LocalStrokePoints.Num());
+	for (const FVector& LocalPoint : LocalStrokePoints)
+	{
+		const FVector Delta = LocalPoint - LocalPathOrigin;
+		const FVector2D ProjectedPoint(
+			FVector::DotProduct(Delta, LocalPathAxis),
+			FVector::DotProduct(Delta, LocalPathBinormal));
+		if (Path2D.Num() == 0 || FVector2D::Distance(Path2D.Last(), ProjectedPoint) > LocalPointMergeTolerance)
+		{
+			Path2D.Add(ProjectedPoint);
+		}
+	}
+
+	if (Path2D.Num() < 2)
+	{
+		OutFailureReason = TEXT("Stroke projection is too short for a cutter");
+		return false;
+	}
+
+	FGeometryScriptOpenPathOffsetOptions OffsetOptions;
+	OffsetOptions.JoinType = EGeometryScriptPolyOffsetJoinType::Round;
+	OffsetOptions.EndType = EGeometryScriptPathOffsetEndType::Round;
+
+	bool bPathOffsetSuccess = false;
+	const double LocalStrokeHalfWidth = FMath::Max(
+		0.25,
+		static_cast<double>(FMath::Max(0.1f, StrokeWidthCm) / SafeAverageScale) * 0.5);
+	const FGeometryScriptGeneralPolygonList OffsetPolygonList =
+		UGeometryScriptLibrary_PolygonListFunctions::CreatePolygonsFromPathOffset(
+			Path2D,
+			OffsetOptions,
+			LocalStrokeHalfWidth,
+			bPathOffsetSuccess,
+			true);
+	if (!bPathOffsetSuccess)
+	{
+		OutFailureReason = TEXT("Failed to offset stroke path into a cutter polygon");
+		return false;
+	}
+
+	const int32 PolygonCount = UGeometryScriptLibrary_PolygonListFunctions::GetPolygonCount(OffsetPolygonList);
+	if (PolygonCount <= 0)
+	{
+		OutFailureReason = TEXT("Stroke offset produced no cutter polygon");
+		return false;
+	}
+
+	int32 SelectedPolygonIndex = INDEX_NONE;
+	double SelectedPolygonArea = 0.0;
+	for (int32 PolygonIndex = 0; PolygonIndex < PolygonCount; ++PolygonIndex)
+	{
+		bool bValidPolygon = false;
+		const double PolygonArea = FMath::Abs(
+			UGeometryScriptLibrary_PolygonListFunctions::GetPolygonArea(
+				OffsetPolygonList,
+				bValidPolygon,
+				PolygonIndex));
+		if (bValidPolygon && (SelectedPolygonIndex == INDEX_NONE || PolygonArea > SelectedPolygonArea))
+		{
+			SelectedPolygonIndex = PolygonIndex;
+			SelectedPolygonArea = PolygonArea;
+		}
+	}
+
+	if (SelectedPolygonIndex == INDEX_NONE || SelectedPolygonArea <= KINDA_SMALL_NUMBER)
+	{
+		OutFailureReason = TEXT("Stroke cutter polygon is invalid");
+		return false;
+	}
+
+	TArray<FVector2D> CutterPolygonVertices;
+	bool bValidPolygonIndices = false;
+	UGeometryScriptLibrary_PolygonListFunctions::GetPolygonVertices(
+		OffsetPolygonList,
+		CutterPolygonVertices,
+		bValidPolygonIndices,
+		SelectedPolygonIndex,
+		-1);
+	if (!bValidPolygonIndices || CutterPolygonVertices.Num() < 3)
+	{
+		OutFailureReason = TEXT("Stroke cutter polygon has insufficient vertices");
+		return false;
+	}
+
+	if (ComputeSignedPolygonArea2D(CutterPolygonVertices) < 0.0)
+	{
+		Algo::Reverse(CutterPolygonVertices);
+	}
+
+	const float LocalCutDepth = FMath::Max(1.0f, CutDepthCm / SafeAverageScale);
+	UDynamicMesh* CutterMesh = NewObject<UDynamicMesh>(GetTransientPackage(), NAME_None, RF_Transient);
+	if (!CutterMesh)
+	{
+		OutFailureReason = TEXT("Failed to allocate stroke cutter mesh");
+		return false;
+	}
+
+	const FTransform CutterTransform(
+		FRotationMatrix::MakeFromXZ(LocalPathAxis, LocalExtrudeDirection).ToQuat(),
+		LocalPathOrigin);
+	FGeometryScriptPrimitiveOptions PrimitiveOptions;
+	UGeometryScriptLibrary_MeshPrimitiveFunctions::AppendSimpleExtrudePolygon(
+		CutterMesh,
+		PrimitiveOptions,
+		CutterTransform,
+		CutterPolygonVertices,
+		LocalCutDepth,
+		0,
+		true,
+		EGeometryScriptPrimitiveOriginMode::Base,
+		nullptr);
+	if (CutterMesh->IsEmpty())
+	{
+		OutFailureReason = TEXT("Failed to build the stroke cutter mesh");
+		return false;
+	}
+
+	UDynamicMesh* WorkingMesh = NewObject<UDynamicMesh>(GetTransientPackage(), NAME_None, RF_Transient);
+	if (!WorkingMesh)
+	{
+		OutFailureReason = TEXT("Failed to allocate working slice mesh");
+		return false;
+	}
+
+	CachedSourceMesh->ProcessMesh([&](const UE::Geometry::FDynamicMesh3& SourceMesh)
+	{
+		WorkingMesh->SetMesh(UE::Geometry::FDynamicMesh3(SourceMesh));
+	});
+
+	FGeometryScriptMeshBooleanOptions BooleanOptions;
+	BooleanOptions.bFillHoles = true;
+	BooleanOptions.bSimplifyOutput = true;
+	BooleanOptions.OutputTransformSpace = EGeometryScriptBooleanOutputSpace::TargetTransformSpace;
+	UGeometryScriptLibrary_MeshBooleanFunctions::ApplyMeshBoolean(
+		WorkingMesh,
+		FTransform::Identity,
+		CutterMesh,
+		FTransform::Identity,
+		EGeometryScriptBooleanOperation::Subtract,
+		BooleanOptions,
+		nullptr);
+
+	if (WorkingMesh->IsEmpty())
+	{
+		OutFailureReason = TEXT("Stroke cutter removed the entire mesh");
+		return false;
+	}
+
+	FVector SliceMidpointWorld = FVector::ZeroVector;
+	for (const FVector& StrokePoint : StrokePointsWorld)
+	{
+		SliceMidpointWorld += StrokePoint;
+	}
+	SliceMidpointWorld /= static_cast<float>(StrokePointsWorld.Num());
+
+	return FinalizeSliceFromWorkingMesh(
+		WorkingMesh,
+		SafeExtrudeDirectionWorld,
+		SliceMidpointWorld,
+		SliceInstigator,
+		OutFailureReason);
+}
+
+bool UObjectSliceComponent::FinalizeSliceFromWorkingMesh(
+	UDynamicMesh* WorkingMesh,
+	const FVector& PlaneNormalWorld,
+	const FVector& SliceMidpointWorld,
+	AActor* SliceInstigator,
+	FString& OutFailureReason)
+{
+	if (!WorkingMesh || WorkingMesh->IsEmpty())
+	{
+		OutFailureReason = TEXT("Slice produced an empty working mesh");
+		return false;
+	}
+
+	UPrimitiveComponent* SourcePrimitive = GetSliceSourcePrimitive();
+	UWorld* World = GetWorld();
+	AActor* OwnerActor = GetOwner();
+	if (!SourcePrimitive || !World || !OwnerActor)
+	{
+		OutFailureReason = TEXT("Slice target is missing runtime state");
+		return false;
+	}
 
 	TArray<UDynamicMesh*> PieceMeshes;
 	UGeometryScriptLibrary_MeshDecompositionFunctions::SplitMeshByComponents(WorkingMesh, PieceMeshes, nullptr, nullptr);
@@ -370,6 +690,7 @@ bool UObjectSliceComponent::TryExecuteSliceFromBeamGesture(
 		return false;
 	}
 
+	const FTransform SourceTransform = SourcePrimitive->GetComponentTransform();
 	TArray<double> VolumeRatios;
 	TArray<FVector> PieceCentersLocal;
 	VolumeRatios.Reserve(PieceMeshes.Num());
@@ -388,7 +709,6 @@ bool UObjectSliceComponent::TryExecuteSliceFromBeamGesture(
 		TotalPieceVolume += SafePieceVolume;
 	}
 
-	const FVector SliceMidpointWorld = (CurrentEntryPointWorld + CurrentExitPointWorld) * 0.5f;
 	const double SourceVolume = CachedSourceVolumeCm3 > KINDA_SMALL_NUMBER
 		? static_cast<double>(CachedSourceVolumeCm3)
 		: TotalPieceVolume;
@@ -449,6 +769,13 @@ bool UObjectSliceComponent::TryExecuteSliceFromBeamGesture(
 		{
 			SupportBoxReference.OtherActor = OwnerActor;
 		}
+	}
+
+	TArray<UMaterialInterface*> ResultMaterialSet;
+	CollectSourceMaterialSet(ResultMaterialSet);
+	if (SliceCapMaterial)
+	{
+		ResultMaterialSet.Add(SliceCapMaterial);
 	}
 
 	FObjectFragmentCollisionGenerationSettings FragmentCollisionSettings;
@@ -573,7 +900,6 @@ bool UObjectSliceComponent::TryExecuteSliceFromBeamGesture(
 		}
 
 		DisableFractureOnActor(SpawnedPiece);
-
 		UGameplayStatics::FinishSpawningActor(SpawnedPiece, SourceTransform);
 
 		if (PieceBelowMinimumThreshold.IsValidIndex(PieceIndex)
@@ -596,6 +922,7 @@ bool UObjectSliceComponent::TryExecuteSliceFromBeamGesture(
 	++CompletedSliceCount;
 	ApplySourceActorPostSlice();
 
+	const FVector SafePlaneNormalWorld = PlaneNormalWorld.GetSafeNormal();
 	for (int32 PieceIndex = 0; PieceIndex < SpawnedPrimitives.Num(); ++PieceIndex)
 	{
 		if (UPrimitiveComponent* SpawnedPrimitive = SpawnedPrimitives[PieceIndex].Get())
@@ -623,11 +950,11 @@ bool UObjectSliceComponent::TryExecuteSliceFromBeamGesture(
 				SpawnedPrimitive->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Ignore);
 			}
 
-			if (SliceSeparationImpulse > KINDA_SMALL_NUMBER)
+			if (!SafePlaneNormalWorld.IsNearlyZero() && SliceSeparationImpulse > KINDA_SMALL_NUMBER)
 			{
 				const FVector PieceCenterWorld = SourceTransform.TransformPosition(PieceCentersLocal[PieceIndex]);
-				const float Side = FVector::DotProduct(PieceCenterWorld - SliceMidpointWorld, PlaneNormalWorld) >= 0.0f ? 1.0f : -1.0f;
-				SpawnedPrimitive->AddImpulse(PlaneNormalWorld * (SliceSeparationImpulse * Side), NAME_None, true);
+				const float Side = FVector::DotProduct(PieceCenterWorld - SliceMidpointWorld, SafePlaneNormalWorld) >= 0.0f ? 1.0f : -1.0f;
+				SpawnedPrimitive->AddImpulse(SafePlaneNormalWorld * (SliceSeparationImpulse * Side), NAME_None, true);
 			}
 		}
 	}

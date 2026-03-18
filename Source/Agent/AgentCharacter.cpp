@@ -25,6 +25,7 @@
 #include "Camera/CameraComponent.h"
 #include "CollisionShape.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/DynamicMeshComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -44,6 +45,9 @@
 #include "PhysicsEngine/PhysicsHandleComponent.h"
 #include "InputActionValue.h"
 #include "InputCoreTypes.h"
+#include "GeometryScript/MeshPrimitiveFunctions.h"
+#include "UDynamicMesh.h"
+#include "Materials/Material.h"
 #include "UObject/ConstructorHelpers.h"
 #include "Agent.h"
 
@@ -483,6 +487,7 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 	UpdateDronePilotCameraLimits();
 	RefreshPrimaryDroneAvailabilityFromCompanion();
 	UpdateBeamSystems(DeltaSeconds);
+	UpdateControllerDrawSlice(DeltaSeconds);
 	UpdateScannerSystems(DeltaSeconds);
 	UpdateBeamAimZoom(DeltaSeconds);
 	if (!bPrimaryDroneAvailable
@@ -845,6 +850,7 @@ void AAgentCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	PlayerInputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this, &AAgentCharacter::OnMouseScrollDownPressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Right, IE_Pressed, this, &AAgentCharacter::OnGamepadFaceButtonRightPressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_LeftShoulder, IE_Pressed, this, &AAgentCharacter::OnGamepadLeftShoulderPressed);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_LeftShoulder, IE_Released, this, &AAgentCharacter::OnGamepadLeftShoulderReleased);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_RightShoulder, IE_Pressed, this, &AAgentCharacter::OnHookJobButtonPressed);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_RightShoulder, IE_Released, this, &AAgentCharacter::OnHookJobButtonReleased);
 	PlayerInputComponent->BindKey(EKeys::MiddleMouseButton, IE_Pressed, this, &AAgentCharacter::OnHookJobButtonPressed);
@@ -1270,6 +1276,8 @@ void AAgentCharacter::ResetRagdollInputState()
 	bHookJobButtonHeld = false;
 	bHookJobButtonTriggeredHoldRelease = false;
 	HookJobButtonHeldDuration = 0.0f;
+	StopControllerSweepSlice();
+	StopControllerDrawSlice(false);
 
 	bKeyboardPickupHeld = false;
 	bControllerPickupHeld = false;
@@ -1760,13 +1768,51 @@ bool AAgentCharacter::ResolveActiveBeamPose(
 	return true;
 }
 
-bool AAgentCharacter::TryExecuteControllerHorizontalSlice()
+bool AAgentCharacter::CanStartControllerSweepSlice() const
 {
-	if (!bEnableControllerHorizontalSliceShortcut
-		|| !CanUseBeamTool()
-		|| !IsRawControllerBeamAimModifierHeld())
+	return bEnableControllerSweepSliceShortcut
+		&& CanUseBeamTool()
+		&& IsRawControllerBeamAimModifierHeld()
+		&& !bControllerDrawSliceActive;
+}
+
+void AAgentCharacter::StartControllerSweepSlice()
+{
+	StopControllerDrawSlice(false);
+	bHookJobButtonHeld = false;
+	bHookJobButtonTriggeredHoldRelease = false;
+	HookJobButtonHeldDuration = 0.0f;
+	bControllerSweepSliceActive = true;
+	bControllerSweepSliceHasLastPoint = false;
+	ControllerSweepSliceLastPoint = FVector::ZeroVector;
+}
+
+void AAgentCharacter::StopControllerSweepSlice()
+{
+	bControllerSweepSliceActive = false;
+	bControllerSweepSliceHasLastPoint = false;
+	ControllerSweepSliceLastPoint = FVector::ZeroVector;
+}
+
+void AAgentCharacter::UpdateControllerSweepSlice(float DeltaSeconds)
+{
+	(void)DeltaSeconds;
+
+	if (!bControllerSweepSliceActive)
 	{
-		return false;
+		return;
+	}
+
+	if (!CanStartControllerSweepSlice())
+	{
+		StopControllerSweepSlice();
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
 	}
 
 	FVector ViewOrigin = FVector::ZeroVector;
@@ -1774,45 +1820,111 @@ bool AAgentCharacter::TryExecuteControllerHorizontalSlice()
 	FVector VisualOrigin = FVector::ZeroVector;
 	if (!ResolveActiveBeamPose(ViewOrigin, ViewDirection, VisualOrigin))
 	{
-		return false;
+		return;
 	}
 	(void)VisualOrigin;
-
-	UWorld* World = GetWorld();
-	if (!World)
-	{
-		return false;
-	}
 
 	const FVector SafeViewDirection = ViewDirection.GetSafeNormal();
 	if (SafeViewDirection.IsNearlyZero())
 	{
-		return false;
-	}
-
-	FVector HorizontalDirection(SafeViewDirection.X, SafeViewDirection.Y, 0.0f);
-	HorizontalDirection = HorizontalDirection.GetSafeNormal();
-	if (HorizontalDirection.IsNearlyZero())
-	{
-		FVector FallbackForward = GetActorForwardVector();
-		FallbackForward.Z = 0.0f;
-		HorizontalDirection = FallbackForward.GetSafeNormal();
-	}
-
-	if (HorizontalDirection.IsNearlyZero())
-	{
-		return false;
+		return;
 	}
 
 	const FVector TraceStart = ViewOrigin;
-	const FVector TraceEnd = TraceStart + (SafeViewDirection * FMath::Max(1.0f, ControllerHorizontalSliceDistanceCm));
+	const FVector TraceEnd = TraceStart + (SafeViewDirection * FMath::Max(1.0f, ControllerSweepSliceDistanceCm));
 	ECollisionChannel TraceChannel = ECC_Visibility;
 	if (const UAgentBeamToolComponent* ActiveBeamToolComponent = ResolveActiveBeamToolComponent())
 	{
 		TraceChannel = static_cast<ECollisionChannel>(ActiveBeamToolComponent->TraceChannel.GetValue());
 	}
 
-	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(AgentControllerHorizontalSliceTrace), false, this);
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(AgentControllerSweepSliceAimTrace), false, this);
+	QueryParams.bTraceComplex = false;
+	QueryParams.bReturnPhysicalMaterial = false;
+	QueryParams.AddIgnoredActor(this);
+
+	TArray<AActor*> AttachedActors;
+	GetAttachedActors(AttachedActors, true, true);
+	for (AActor* AttachedActor : AttachedActors)
+	{
+		if (AttachedActor)
+		{
+			QueryParams.AddIgnoredActor(AttachedActor);
+		}
+	}
+
+	FHitResult AimHit;
+	const bool bHasAimHit = World->LineTraceSingleByChannel(
+		AimHit,
+		TraceStart,
+		TraceEnd,
+		TraceChannel,
+		QueryParams);
+
+	const FVector CurrentPoint = bHasAimHit
+		? (AimHit.ImpactPoint.IsNearlyZero() ? AimHit.Location : AimHit.ImpactPoint)
+		: TraceEnd;
+
+	if (!bControllerSweepSliceHasLastPoint)
+	{
+		bControllerSweepSliceHasLastPoint = true;
+		ControllerSweepSliceLastPoint = CurrentPoint;
+		return;
+	}
+
+	const FVector RawSegment = CurrentPoint - ControllerSweepSliceLastPoint;
+	const float RawSegmentLength = RawSegment.Size();
+	if (RawSegmentLength <= KINDA_SMALL_NUMBER)
+	{
+		return;
+	}
+
+	const float SampleSpacing = FMath::Max(1.0f, ControllerSweepSliceSampleSpacingCm);
+	const int32 StepCount = FMath::Clamp(FMath::CeilToInt(RawSegmentLength / SampleSpacing), 1, 24);
+
+	FVector SegmentStart = ControllerSweepSliceLastPoint;
+	for (int32 StepIndex = 1; StepIndex <= StepCount; ++StepIndex)
+	{
+		const float Alpha = static_cast<float>(StepIndex) / static_cast<float>(StepCount);
+		const FVector SegmentEnd = FMath::Lerp(ControllerSweepSliceLastPoint, CurrentPoint, Alpha);
+		TryExecuteControllerSweepSliceStep(SegmentStart, SegmentEnd, SafeViewDirection);
+		SegmentStart = SegmentEnd;
+	}
+
+	ControllerSweepSliceLastPoint = CurrentPoint;
+}
+
+bool AAgentCharacter::TryExecuteControllerSweepSliceStep(
+	const FVector& PreviousPointWorld,
+	const FVector& CurrentPointWorld,
+	const FVector& ViewDirectionWorld)
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return false;
+	}
+
+	const FVector SweepDirection = (CurrentPointWorld - PreviousPointWorld).GetSafeNormal();
+	const FVector SafeViewDirection = ViewDirectionWorld.GetSafeNormal();
+	if (SweepDirection.IsNearlyZero() || SafeViewDirection.IsNearlyZero())
+	{
+		return false;
+	}
+
+	// The slice plane is formed from sweep motion + beam direction.
+	if (FMath::Abs(FVector::DotProduct(SweepDirection, SafeViewDirection)) > 0.995f)
+	{
+		return false;
+	}
+
+	ECollisionChannel TraceChannel = ECC_Visibility;
+	if (const UAgentBeamToolComponent* ActiveBeamToolComponent = ResolveActiveBeamToolComponent())
+	{
+		TraceChannel = static_cast<ECollisionChannel>(ActiveBeamToolComponent->TraceChannel.GetValue());
+	}
+
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(AgentControllerSweepSliceTrace), false, this);
 	QueryParams.bTraceComplex = false;
 	QueryParams.bReturnPhysicalMaterial = false;
 	QueryParams.AddIgnoredActor(this);
@@ -1828,30 +1940,30 @@ bool AAgentCharacter::TryExecuteControllerHorizontalSlice()
 	}
 
 	TArray<FHitResult> HitResults;
-	const float TraceRadius = FMath::Max(0.0f, ControllerHorizontalSliceTraceRadiusCm);
+	const float TraceRadius = FMath::Max(0.0f, ControllerSweepSliceTraceRadiusCm);
 	const bool bHasAnyHit = TraceRadius > KINDA_SMALL_NUMBER
 		? World->SweepMultiByChannel(
 			HitResults,
-			TraceStart,
-			TraceEnd,
+			PreviousPointWorld,
+			CurrentPointWorld,
 			FQuat::Identity,
 			TraceChannel,
 			FCollisionShape::MakeSphere(TraceRadius),
 			QueryParams)
 		: World->LineTraceMultiByChannel(
 			HitResults,
-			TraceStart,
-			TraceEnd,
+			PreviousPointWorld,
+			CurrentPointWorld,
 			TraceChannel,
 			QueryParams);
 
-	const float DebugDuration = FMath::Max(0.0f, ControllerHorizontalSliceDebugDuration);
-	if (bDrawControllerHorizontalSliceDebug)
+	const float DebugDuration = FMath::Max(0.0f, ControllerSweepSliceDebugDuration);
+	if (bDrawControllerSweepSliceDebug)
 	{
 		DrawDebugLine(
 			World,
-			TraceStart,
-			TraceEnd,
+			PreviousPointWorld,
+			CurrentPointWorld,
 			bHasAnyHit ? FColor::Cyan : FColor::Silver,
 			false,
 			DebugDuration,
@@ -1859,42 +1971,30 @@ bool AAgentCharacter::TryExecuteControllerHorizontalSlice()
 			2.0f);
 	}
 
-	TSet<AActor*> ProcessedActors;
+	TSet<UObjectSliceComponent*> ProcessedSliceComponents;
 	int32 SuccessfulSlices = 0;
-	const float GestureHalfLength = FMath::Max(1.0f, ControllerHorizontalSliceGestureHalfLengthCm);
-	const float PlaneExtent = FMath::Max(1.0f, ControllerHorizontalSliceDebugPlaneExtentCm);
+	const float GestureHalfLength = FMath::Max(1.0f, ControllerSweepSliceGestureHalfLengthCm);
+	const float PlaneExtent = FMath::Max(1.0f, ControllerSweepSliceDebugPlaneExtentCm);
 	for (const FHitResult& HitResult : HitResults)
 	{
 		AActor* HitActor = HitResult.GetActor();
-		if (!HitActor || ProcessedActors.Contains(HitActor))
+		if (!HitActor)
 		{
 			continue;
 		}
-		ProcessedActors.Add(HitActor);
 
 		UObjectSliceComponent* SliceComponent = UObjectSliceComponent::FindObjectSliceComponent(HitActor, HitResult.GetComponent());
-		if (!SliceComponent)
+		if (!SliceComponent || ProcessedSliceComponents.Contains(SliceComponent))
 		{
 			continue;
 		}
+		ProcessedSliceComponents.Add(SliceComponent);
 
 		const FVector SlicePoint = HitResult.ImpactPoint.IsNearlyZero() ? HitResult.Location : HitResult.ImpactPoint;
-		const FVector CurrentEntryPoint = SlicePoint - (HorizontalDirection * GestureHalfLength);
-		const FVector CurrentExitPoint = SlicePoint + (HorizontalDirection * GestureHalfLength);
-		const FVector CurrentGestureVector = CurrentEntryPoint - SlicePoint;
+		const FVector FirstEntryPoint = SlicePoint + (SweepDirection * GestureHalfLength);
+		const FVector CurrentEntryPoint = SlicePoint - (SafeViewDirection * GestureHalfLength);
+		const FVector CurrentExitPoint = SlicePoint + (SafeViewDirection * GestureHalfLength);
 
-		FVector FirstGestureDirection = FVector::CrossProduct(CurrentGestureVector, FVector::UpVector).GetSafeNormal();
-		if (FirstGestureDirection.IsNearlyZero())
-		{
-			FirstGestureDirection = FVector::CrossProduct(FVector::UpVector, HorizontalDirection).GetSafeNormal();
-		}
-
-		if (FirstGestureDirection.IsNearlyZero())
-		{
-			continue;
-		}
-
-		const FVector FirstEntryPoint = SlicePoint + (FirstGestureDirection * GestureHalfLength);
 		FString SliceFailureReason;
 		const bool bSliced = SliceComponent->TryExecuteSliceFromBeamGesture(
 			SlicePoint,
@@ -1908,15 +2008,10 @@ bool AAgentCharacter::TryExecuteControllerHorizontalSlice()
 			++SuccessfulSlices;
 		}
 
-		if (bDrawControllerHorizontalSliceDebug)
+		if (bDrawControllerSweepSliceDebug)
 		{
-			const FVector PlaneAxisX = HorizontalDirection * PlaneExtent;
-			FVector PlaneAxisY = FVector::CrossProduct(FVector::UpVector, HorizontalDirection).GetSafeNormal() * PlaneExtent;
-			if (PlaneAxisY.IsNearlyZero())
-			{
-				PlaneAxisY = FVector::RightVector * PlaneExtent;
-			}
-
+			const FVector PlaneAxisX = SweepDirection * PlaneExtent;
+			const FVector PlaneAxisY = SafeViewDirection * PlaneExtent;
 			const FVector CornerA = SlicePoint + PlaneAxisX + PlaneAxisY;
 			const FVector CornerB = SlicePoint + PlaneAxisX - PlaneAxisY;
 			const FVector CornerC = SlicePoint - PlaneAxisX - PlaneAxisY;
@@ -1927,20 +2022,453 @@ bool AAgentCharacter::TryExecuteControllerHorizontalSlice()
 			DrawDebugLine(World, CornerB, CornerC, PlaneColor, false, DebugDuration, 0, 1.5f);
 			DrawDebugLine(World, CornerC, CornerD, PlaneColor, false, DebugDuration, 0, 1.5f);
 			DrawDebugLine(World, CornerD, CornerA, PlaneColor, false, DebugDuration, 0, 1.5f);
-			DrawDebugDirectionalArrow(
-				World,
-				SlicePoint,
-				SlicePoint + FVector::UpVector * (PlaneExtent * 0.6f),
-				10.0f,
-				PlaneColor,
-				false,
-				DebugDuration,
-				0,
-				1.5f);
+
+			const FVector PlaneNormal = FVector::CrossProduct(PlaneAxisX, PlaneAxisY).GetSafeNormal();
+			if (!PlaneNormal.IsNearlyZero())
+			{
+				DrawDebugDirectionalArrow(
+					World,
+					SlicePoint,
+					SlicePoint + PlaneNormal * (PlaneExtent * 0.6f),
+					10.0f,
+					PlaneColor,
+					false,
+					DebugDuration,
+					0,
+					1.5f);
+			}
 		}
 	}
 
 	return SuccessfulSlices > 0;
+}
+
+bool AAgentCharacter::CanStartControllerDrawSlice() const
+{
+	return bEnableControllerDrawSliceShortcut
+		&& CanUseBeamTool()
+		&& IsRawControllerBeamAimModifierHeld()
+		&& !bControllerSweepSliceActive;
+}
+
+void AAgentCharacter::StartControllerDrawSlice(bool bUseBeamStartMode)
+{
+	StopControllerSweepSlice();
+	bControllerDrawSliceActive = true;
+	bControllerDrawSliceBeamStartMode = bUseBeamStartMode;
+	bControllerDrawSliceHasLastPoint = false;
+	bControllerDrawSliceHasExtrudeDirection = false;
+	ControllerDrawSliceLastPoint = FVector::ZeroVector;
+	ControllerDrawSliceLastBeamStartPoint = FVector::ZeroVector;
+	ControllerDrawSliceExtrudeDirection = FVector::ZeroVector;
+	ControllerDrawSliceStrokePoints.Reset();
+	ControllerDrawSliceBeamStartPoints.Reset();
+	ControllerDrawSlicePreviewMaterialSource.Reset();
+}
+
+void AAgentCharacter::StopControllerDrawSlice(bool bCommitStroke)
+{
+	if (bControllerDrawSliceActive && bCommitStroke)
+	{
+		CommitControllerDrawSlice();
+	}
+
+	bControllerDrawSliceActive = false;
+	bControllerDrawSliceBeamStartMode = false;
+	bControllerDrawSliceHasLastPoint = false;
+	bControllerDrawSliceHasExtrudeDirection = false;
+	ControllerDrawSliceLastPoint = FVector::ZeroVector;
+	ControllerDrawSliceLastBeamStartPoint = FVector::ZeroVector;
+	ControllerDrawSliceExtrudeDirection = FVector::ZeroVector;
+	ControllerDrawSliceStrokePoints.Reset();
+	ControllerDrawSliceBeamStartPoints.Reset();
+	ControllerDrawSlicePreviewMaterialSource.Reset();
+}
+
+void AAgentCharacter::UpdateControllerDrawSlice(float DeltaSeconds)
+{
+	(void)DeltaSeconds;
+
+	if (!bControllerDrawSliceActive)
+	{
+		return;
+	}
+
+	if (!CanStartControllerDrawSlice())
+	{
+		StopControllerDrawSlice(false);
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	FVector ViewOrigin = FVector::ZeroVector;
+	FVector ViewDirection = FVector::ForwardVector;
+	FVector VisualOrigin = FVector::ZeroVector;
+	if (!ResolveActiveBeamPose(ViewOrigin, ViewDirection, VisualOrigin))
+	{
+		return;
+	}
+	(void)VisualOrigin;
+
+	const FVector SafeViewDirection = ViewDirection.GetSafeNormal();
+	if (SafeViewDirection.IsNearlyZero())
+	{
+		return;
+	}
+
+	ECollisionChannel TraceChannel = ECC_Visibility;
+	float TraceDistance = FMath::Max(1.0f, ControllerDrawSliceDistanceCm);
+	if (const UAgentBeamToolComponent* ActiveBeamToolComponent = ResolveActiveBeamToolComponent())
+	{
+		TraceChannel = static_cast<ECollisionChannel>(ActiveBeamToolComponent->TraceChannel.GetValue());
+		TraceDistance = FMath::Max(100.0f, ActiveBeamToolComponent->BeamRange);
+	}
+	const FVector TraceStart = ViewOrigin;
+	const FVector TraceEnd = TraceStart + (SafeViewDirection * TraceDistance);
+
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(AgentControllerDrawSliceAimTrace), false, this);
+	QueryParams.bTraceComplex = false;
+	QueryParams.bReturnPhysicalMaterial = false;
+	QueryParams.AddIgnoredActor(this);
+
+	TArray<AActor*> AttachedActors;
+	GetAttachedActors(AttachedActors, true, true);
+	for (AActor* AttachedActor : AttachedActors)
+	{
+		if (AttachedActor)
+		{
+			QueryParams.AddIgnoredActor(AttachedActor);
+		}
+	}
+
+	FHitResult AimHit;
+	const bool bHasAimHit = World->LineTraceSingleByChannel(
+		AimHit,
+		TraceStart,
+		TraceEnd,
+		TraceChannel,
+		QueryParams);
+
+	if (!bHasAimHit)
+	{
+		if (bDrawControllerDrawSliceDebug)
+		{
+			DrawDebugLine(
+				World,
+				TraceStart,
+				TraceEnd,
+				FColor::Silver,
+				false,
+				FMath::Max(0.0f, ControllerDrawSliceDebugDuration),
+				0,
+				1.5f);
+		}
+		return;
+	}
+
+	const FVector StrokePoint = AimHit.ImpactPoint.IsNearlyZero() ? AimHit.Location : AimHit.ImpactPoint;
+	const FVector BeamStartPoint = VisualOrigin;
+	const FVector ExtrudeDirectionCandidate = bControllerDrawSliceBeamStartMode
+		? (StrokePoint - BeamStartPoint).GetSafeNormal()
+		: SafeViewDirection;
+	if (!bControllerDrawSliceHasExtrudeDirection && !ExtrudeDirectionCandidate.IsNearlyZero())
+	{
+		bControllerDrawSliceHasExtrudeDirection = true;
+		ControllerDrawSliceExtrudeDirection = ExtrudeDirectionCandidate;
+	}
+
+	const int32 MaxStrokePoints = FMath::Max(8, ControllerDrawSliceMaxPoints);
+	if (!bControllerDrawSliceHasLastPoint)
+	{
+		bControllerDrawSliceHasLastPoint = true;
+		ControllerDrawSliceLastPoint = StrokePoint;
+		ControllerDrawSliceLastBeamStartPoint = BeamStartPoint;
+		ControllerDrawSliceStrokePoints.Reset();
+		ControllerDrawSliceBeamStartPoints.Reset();
+		ControllerDrawSliceStrokePoints.Add(StrokePoint);
+		ControllerDrawSliceBeamStartPoints.Add(BeamStartPoint);
+	}
+	else
+	{
+		const float SampleSpacing = FMath::Max(1.0f, ControllerDrawSliceSampleSpacingCm);
+		const FVector RawSegment = StrokePoint - ControllerDrawSliceLastPoint;
+		const float RawSegmentLength = RawSegment.Size();
+		if (RawSegmentLength > KINDA_SMALL_NUMBER)
+		{
+			const int32 StepCount = FMath::Clamp(FMath::CeilToInt(RawSegmentLength / SampleSpacing), 1, 32);
+			FVector SegmentStart = ControllerDrawSliceLastPoint;
+			for (int32 StepIndex = 1; StepIndex <= StepCount; ++StepIndex)
+			{
+				if (ControllerDrawSliceStrokePoints.Num() >= MaxStrokePoints)
+				{
+					break;
+				}
+
+				const float Alpha = static_cast<float>(StepIndex) / static_cast<float>(StepCount);
+				const FVector SegmentEnd = FMath::Lerp(ControllerDrawSliceLastPoint, StrokePoint, Alpha);
+				const FVector BeamStartSegmentEnd = FMath::Lerp(ControllerDrawSliceLastBeamStartPoint, BeamStartPoint, Alpha);
+				if (ControllerDrawSliceStrokePoints.Num() == 0
+					|| FVector::DistSquared(ControllerDrawSliceStrokePoints.Last(), SegmentEnd) > 1.0f)
+				{
+					ControllerDrawSliceStrokePoints.Add(SegmentEnd);
+					ControllerDrawSliceBeamStartPoints.Add(BeamStartSegmentEnd);
+				}
+
+				if (bDrawControllerDrawSliceDebug)
+				{
+					DrawDebugLine(
+						World,
+						SegmentStart,
+						SegmentEnd,
+						FColor(255, 165, 0),
+						false,
+						FMath::Max(0.0f, ControllerDrawSliceDebugDuration),
+						0,
+						2.0f);
+				}
+				SegmentStart = SegmentEnd;
+			}
+		}
+
+		ControllerDrawSliceLastPoint = StrokePoint;
+		ControllerDrawSliceLastBeamStartPoint = BeamStartPoint;
+	}
+
+	if (!ControllerDrawSlicePreviewMaterialSource.IsValid())
+	{
+		if (UPrimitiveComponent* HitPrimitiveComponent = Cast<UPrimitiveComponent>(AimHit.GetComponent()))
+		{
+			ControllerDrawSlicePreviewMaterialSource = HitPrimitiveComponent;
+		}
+	}
+
+	if (bDrawControllerDrawSliceDebug)
+	{
+		DrawDebugSphere(
+			World,
+			StrokePoint,
+			2.0f,
+			8,
+			FColor(255, 140, 0),
+			false,
+			FMath::Max(0.0f, ControllerDrawSliceDebugDuration),
+			0,
+			1.2f);
+	}
+}
+
+bool AAgentCharacter::CommitControllerDrawSlice()
+{
+	if (ControllerDrawSliceStrokePoints.Num() < 2)
+	{
+		return false;
+	}
+
+	const FVector SafeExtrudeDirection = ControllerDrawSliceExtrudeDirection.GetSafeNormal();
+	if (SafeExtrudeDirection.IsNearlyZero())
+	{
+		return false;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return false;
+	}
+
+	const UAgentBeamToolComponent* ActiveBeamToolComponent = ResolveActiveBeamToolComponent();
+	const float MaxRangeCm = FMath::Max(
+		1.0f,
+		ActiveBeamToolComponent ? ActiveBeamToolComponent->BeamRange : ControllerDrawSliceDistanceCm);
+
+	TArray<FVector> FilteredStrokePoints;
+	TArray<FVector> FilteredBeamStartPoints;
+	FilteredStrokePoints.Reserve(ControllerDrawSliceStrokePoints.Num());
+	FilteredBeamStartPoints.Reserve(ControllerDrawSliceBeamStartPoints.Num());
+	const int32 SampleCount = FMath::Min(ControllerDrawSliceStrokePoints.Num(), ControllerDrawSliceBeamStartPoints.Num());
+	for (int32 SampleIndex = 0; SampleIndex < SampleCount; ++SampleIndex)
+	{
+		const FVector& StrokePoint = ControllerDrawSliceStrokePoints[SampleIndex];
+		const FVector& BeamStartPoint = ControllerDrawSliceBeamStartPoints[SampleIndex];
+		if (FilteredStrokePoints.Num() == 0
+			|| FVector::DistSquared(FilteredStrokePoints.Last(), StrokePoint) > 1.0f)
+		{
+			FilteredStrokePoints.Add(StrokePoint);
+			FilteredBeamStartPoints.Add(BeamStartPoint);
+		}
+	}
+	if (FilteredStrokePoints.Num() < 2)
+	{
+		return false;
+	}
+
+	// Keep the draw behavior polygonal by closing the stroke on release.
+	if (FVector::DistSquared(FilteredStrokePoints[0], FilteredStrokePoints.Last()) > 1.0f)
+	{
+		const FVector FirstStrokePoint = FilteredStrokePoints[0];
+		const FVector FirstBeamStartPoint = FilteredBeamStartPoints[0];
+		FilteredStrokePoints.Add(FirstStrokePoint);
+		FilteredBeamStartPoints.Add(FirstBeamStartPoint);
+	}
+
+	UDynamicMesh* PreviewMesh = NewObject<UDynamicMesh>(GetTransientPackage(), NAME_None, RF_Transient);
+	if (!PreviewMesh)
+	{
+		return false;
+	}
+
+	FGeometryScriptPrimitiveOptions PrimitiveOptions;
+	auto AppendTriangle = [&](const FVector& A, const FVector& B, const FVector& C)
+	{
+		if (FVector::CrossProduct(B - A, C - A).SizeSquared() <= KINDA_SMALL_NUMBER)
+		{
+			return;
+		}
+
+		TArray<FVector> TriangleVertices;
+		TriangleVertices.Reserve(3);
+		TriangleVertices.Add(A);
+		TriangleVertices.Add(B);
+		TriangleVertices.Add(C);
+		UGeometryScriptLibrary_MeshPrimitiveFunctions::AppendTriangulatedPolygon3D(
+			PreviewMesh,
+			PrimitiveOptions,
+			FTransform::Identity,
+			TriangleVertices,
+			nullptr);
+	};
+
+	auto AppendDoubleSidedTriangle = [&](const FVector& A, const FVector& B, const FVector& C)
+	{
+		AppendTriangle(A, B, C);
+		AppendTriangle(C, B, A);
+	};
+
+	auto AppendDoubleSidedQuad = [&](const FVector& A, const FVector& B, const FVector& C, const FVector& D)
+	{
+		AppendDoubleSidedTriangle(A, B, C);
+		AppendDoubleSidedTriangle(A, C, D);
+	};
+
+	if (bControllerDrawSliceBeamStartMode)
+	{
+		for (int32 PointIndex = 1; PointIndex < FilteredStrokePoints.Num(); ++PointIndex)
+		{
+			const FVector& StrokePointA = FilteredStrokePoints[PointIndex - 1];
+			const FVector& StrokePointB = FilteredStrokePoints[PointIndex];
+			const FVector& BeamStartA = FilteredBeamStartPoints[PointIndex - 1];
+			const FVector& BeamStartB = FilteredBeamStartPoints[PointIndex];
+
+			const FVector DirectionA = (StrokePointA - BeamStartA).GetSafeNormal();
+			const FVector DirectionB = (StrokePointB - BeamStartB).GetSafeNormal();
+			if (DirectionA.IsNearlyZero() || DirectionB.IsNearlyZero())
+			{
+				continue;
+			}
+
+			const FVector FarPointA = BeamStartA + (DirectionA * MaxRangeCm);
+			const FVector FarPointB = BeamStartB + (DirectionB * MaxRangeCm);
+
+			// Ribbon from moving beam-start to polyline seam.
+			AppendDoubleSidedQuad(BeamStartA, BeamStartB, StrokePointB, StrokePointA);
+			// Ribbon from seam outward to max beam range.
+			AppendDoubleSidedQuad(StrokePointA, StrokePointB, FarPointB, FarPointA);
+		}
+	}
+	else
+	{
+		const FVector ExtrudeDelta = SafeExtrudeDirection * FMath::Max(1.0f, ControllerDrawSliceCutDepthCm);
+		for (int32 PointIndex = 1; PointIndex < FilteredStrokePoints.Num(); ++PointIndex)
+		{
+			const FVector& SegmentStart = FilteredStrokePoints[PointIndex - 1];
+			const FVector& SegmentEnd = FilteredStrokePoints[PointIndex];
+			const FVector SegmentStartExtruded = SegmentStart + ExtrudeDelta;
+			const FVector SegmentEndExtruded = SegmentEnd + ExtrudeDelta;
+
+			AppendDoubleSidedQuad(SegmentStart, SegmentEnd, SegmentEndExtruded, SegmentStartExtruded);
+		}
+	}
+
+	if (PreviewMesh->IsEmpty())
+	{
+		return false;
+	}
+
+	TArray<UMaterialInterface*> PreviewMaterialSet;
+	if (UPrimitiveComponent* MaterialSourcePrimitive = ControllerDrawSlicePreviewMaterialSource.Get())
+	{
+		const int32 MaterialSlotCount = MaterialSourcePrimitive->GetNumMaterials();
+		for (int32 MaterialIndex = 0; MaterialIndex < MaterialSlotCount; ++MaterialIndex)
+		{
+			if (UMaterialInterface* MaterialInterface = MaterialSourcePrimitive->GetMaterial(MaterialIndex))
+			{
+				PreviewMaterialSet.AddUnique(MaterialInterface);
+			}
+		}
+	}
+
+	if (PreviewMaterialSet.Num() == 0)
+	{
+		PreviewMaterialSet.Add(UMaterial::GetDefaultMaterial(MD_Surface));
+	}
+
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.Owner = this;
+	SpawnParams.Instigator = this;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	AActor* PreviewActor = World->SpawnActor<AActor>(AActor::StaticClass(), FTransform::Identity, SpawnParams);
+	if (!PreviewActor)
+	{
+		return false;
+	}
+
+	UDynamicMeshComponent* PreviewMeshComponent = NewObject<UDynamicMeshComponent>(PreviewActor, TEXT("LaserDrawPreviewMesh"));
+	if (!PreviewMeshComponent)
+	{
+		PreviewActor->Destroy();
+		return false;
+	}
+
+	PreviewActor->AddInstanceComponent(PreviewMeshComponent);
+	PreviewActor->SetRootComponent(PreviewMeshComponent);
+	PreviewMeshComponent->RegisterComponent();
+	PreviewMesh->ProcessMesh([&](const UE::Geometry::FDynamicMesh3& DynamicMeshData)
+	{
+		PreviewMeshComponent->SetMesh(UE::Geometry::FDynamicMesh3(DynamicMeshData));
+	});
+	PreviewMeshComponent->ConfigureMaterialSet(PreviewMaterialSet, true);
+	PreviewMeshComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	PreviewMeshComponent->SetSimulatePhysics(false);
+
+	if (ControllerDrawSlicePreviewLifeSpanSeconds > 0.0f)
+	{
+		PreviewActor->SetLifeSpan(ControllerDrawSlicePreviewLifeSpanSeconds);
+	}
+
+	if (bDrawControllerDrawSliceDebug)
+	{
+		const FColor StrokeColor = FColor::Green;
+		const float DebugDuration = FMath::Max(0.0f, ControllerDrawSliceDebugDuration);
+		for (int32 PointIndex = 1; PointIndex < FilteredStrokePoints.Num(); ++PointIndex)
+		{
+			DrawDebugLine(
+				World,
+				FilteredStrokePoints[PointIndex - 1],
+				FilteredStrokePoints[PointIndex],
+				StrokeColor,
+				false,
+				DebugDuration,
+				0,
+				2.5f);
+		}
+	}
+
+	return true;
 }
 
 void AAgentCharacter::UpdateBeamSystems(float DeltaSeconds)
@@ -2268,6 +2796,12 @@ void AAgentCharacter::OnGamepadFaceButtonRightPressed()
 
 void AAgentCharacter::OnGamepadLeftShoulderPressed()
 {
+	if (CanStartControllerDrawSlice())
+	{
+		StartControllerDrawSlice(false);
+		return;
+	}
+
 	if (IsRawControllerBeamAimModifierHeld() && CanUseBeamTool())
 	{
 		CycleBeamMode(1);
@@ -2281,6 +2815,14 @@ void AAgentCharacter::OnGamepadLeftShoulderPressed()
 	}
 
 	CycleActiveDrone(1);
+}
+
+void AAgentCharacter::OnGamepadLeftShoulderReleased()
+{
+	if (bControllerDrawSliceActive && !bControllerDrawSliceBeamStartMode)
+	{
+		StopControllerDrawSlice(true);
+	}
 }
 
 void AAgentCharacter::UpdateViewModeButtonHold(float DeltaSeconds)
@@ -7207,14 +7749,20 @@ void AAgentCharacter::OnConveyorRotateRightPressed()
 
 void AAgentCharacter::OnHookJobButtonPressed()
 {
+	if (bControllerDrawSliceActive)
+	{
+		return;
+	}
+
 	if (bConveyorPlacementModeActive)
 	{
 		OnConveyorRotateRightPressed();
 		return;
 	}
 
-	if (TryExecuteControllerHorizontalSlice())
+	if (CanStartControllerDrawSlice())
 	{
+		StartControllerDrawSlice(true);
 		return;
 	}
 
@@ -7225,6 +7773,12 @@ void AAgentCharacter::OnHookJobButtonPressed()
 
 void AAgentCharacter::OnHookJobButtonReleased()
 {
+	if (bControllerDrawSliceActive && bControllerDrawSliceBeamStartMode)
+	{
+		StopControllerDrawSlice(true);
+		return;
+	}
+
 	if (bConveyorPlacementModeActive || !bHookJobButtonHeld)
 	{
 		return;

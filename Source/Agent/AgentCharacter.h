@@ -219,6 +219,7 @@ protected:
 	void OnGamepadFaceButtonLeftPressed();
 	void OnGamepadFaceButtonRightPressed();
 	void OnGamepadLeftShoulderPressed();
+	void OnGamepadLeftShoulderReleased();
 	void CycleBeamMode(int32 Direction = 1);
 	void ApplyBeamModeToEmitters();
 	void StopAllBeamTools();
@@ -226,7 +227,16 @@ protected:
 	void UpdateScannerSystems(float DeltaSeconds);
 	void UpdateBeamAimZoom(float DeltaSeconds);
 	void UpdateBeamAimDepthOfField(float DeltaSeconds, bool bAimActive, const FVector& ViewOrigin, const FVector& ViewDirection);
-	bool TryExecuteControllerHorizontalSlice();
+	bool CanStartControllerSweepSlice() const;
+	void StartControllerSweepSlice();
+	void StopControllerSweepSlice();
+	void UpdateControllerSweepSlice(float DeltaSeconds);
+	bool TryExecuteControllerSweepSliceStep(const FVector& PreviousPointWorld, const FVector& CurrentPointWorld, const FVector& ViewDirectionWorld);
+	bool CanStartControllerDrawSlice() const;
+	void StartControllerDrawSlice(bool bUseBeamStartMode);
+	void StopControllerDrawSlice(bool bCommitStroke);
+	void UpdateControllerDrawSlice(float DeltaSeconds);
+	bool CommitControllerDrawSlice();
 	void ResetBeamAimZoomState();
 	bool IsRawMouseBeamAimModifierHeld() const;
 	bool IsRawControllerBeamAimModifierHeld() const;
@@ -559,26 +569,53 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Zoom|Focus", meta=(ClampMin="0.01", UIMin="0.01"))
 	float BeamAimDepthOfFieldOutTimeMultiplier = 1.2f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerShortcut")
-	bool bEnableControllerHorizontalSliceShortcut = true;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerSweep")
+	bool bEnableControllerSweepSliceShortcut = true;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerShortcut", meta=(ClampMin="1.0", UIMin="1.0", Units="cm"))
-	float ControllerHorizontalSliceDistanceCm = 200.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerSweep", meta=(ClampMin="1.0", UIMin="1.0", Units="cm"))
+	float ControllerSweepSliceDistanceCm = 200.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerShortcut", meta=(ClampMin="0.0", UIMin="0.0", Units="cm"))
-	float ControllerHorizontalSliceTraceRadiusCm = 6.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerSweep", meta=(ClampMin="0.0", UIMin="0.0", Units="cm"))
+	float ControllerSweepSliceTraceRadiusCm = 6.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerShortcut", meta=(ClampMin="1.0", UIMin="1.0", Units="cm"))
-	float ControllerHorizontalSliceGestureHalfLengthCm = 25.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerSweep", meta=(ClampMin="1.0", UIMin="1.0", Units="cm"))
+	float ControllerSweepSliceGestureHalfLengthCm = 25.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerShortcut|Debug")
-	bool bDrawControllerHorizontalSliceDebug = true;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerSweep", meta=(ClampMin="1.0", UIMin="1.0", Units="cm"))
+	float ControllerSweepSliceSampleSpacingCm = 8.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerShortcut|Debug", meta=(ClampMin="1.0", UIMin="1.0", Units="cm", EditCondition="bDrawControllerHorizontalSliceDebug"))
-	float ControllerHorizontalSliceDebugPlaneExtentCm = 45.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerSweep|Debug")
+	bool bDrawControllerSweepSliceDebug = true;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerShortcut|Debug", meta=(ClampMin="0.0", UIMin="0.0", Units="s", EditCondition="bDrawControllerHorizontalSliceDebug"))
-	float ControllerHorizontalSliceDebugDuration = 1.5f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerSweep|Debug", meta=(ClampMin="1.0", UIMin="1.0", Units="cm", EditCondition="bDrawControllerSweepSliceDebug"))
+	float ControllerSweepSliceDebugPlaneExtentCm = 45.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerSweep|Debug", meta=(ClampMin="0.0", UIMin="0.0", Units="s", EditCondition="bDrawControllerSweepSliceDebug"))
+	float ControllerSweepSliceDebugDuration = 1.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerDraw")
+	bool bEnableControllerDrawSliceShortcut = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerDraw", meta=(ClampMin="1.0", UIMin="1.0", Units="cm"))
+	float ControllerDrawSliceDistanceCm = 250.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerDraw", meta=(ClampMin="1.0", UIMin="1.0", Units="cm"))
+	float ControllerDrawSliceSampleSpacingCm = 8.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerDraw", meta=(ClampMin="1.0", UIMin="1.0", Units="cm"))
+	float ControllerDrawSliceCutDepthCm = 200.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerDraw", meta=(ClampMin="0.0", UIMin="0.0", Units="s"))
+	float ControllerDrawSlicePreviewLifeSpanSeconds = 20.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerDraw", meta=(ClampMin="8", UIMin="8"))
+	int32 ControllerDrawSliceMaxPoints = 128;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerDraw|Debug")
+	bool bDrawControllerDrawSliceDebug = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerDraw|Debug", meta=(ClampMin="0.0", UIMin="0.0", Units="s", EditCondition="bDrawControllerDrawSliceDebug"))
+	float ControllerDrawSliceDebugDuration = 1.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Drone|Crash")
 	bool bUseCrashRollRecovery = true;
@@ -1324,9 +1361,22 @@ protected:
 	bool bMouseBeamFireHeld = false;
 	bool bControllerBeamFireHeld = false;
 	bool bRightMouseBeamAimHeld = false;
+	bool bControllerSweepSliceActive = false;
+	bool bControllerSweepSliceHasLastPoint = false;
+	bool bControllerDrawSliceActive = false;
+	bool bControllerDrawSliceBeamStartMode = false;
+	bool bControllerDrawSliceHasLastPoint = false;
+	bool bControllerDrawSliceHasExtrudeDirection = false;
 	bool bBeamAimZoomLocked = false;
 	bool bBeamAimFocusDistanceInitialized = false;
 
+	FVector ControllerSweepSliceLastPoint = FVector::ZeroVector;
+	FVector ControllerDrawSliceLastPoint = FVector::ZeroVector;
+	FVector ControllerDrawSliceLastBeamStartPoint = FVector::ZeroVector;
+	FVector ControllerDrawSliceExtrudeDirection = FVector::ZeroVector;
+	TArray<FVector> ControllerDrawSliceStrokePoints;
+	TArray<FVector> ControllerDrawSliceBeamStartPoints;
+	TWeakObjectPtr<UPrimitiveComponent> ControllerDrawSlicePreviewMaterialSource;
 	float DroneGamepadThrottleInput = 0.0f;
 	float DroneGamepadYawInput = 0.0f;
 	float DroneGamepadRollInput = 0.0f;

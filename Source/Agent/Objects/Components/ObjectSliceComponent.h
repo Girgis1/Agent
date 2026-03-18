@@ -81,6 +81,13 @@ public:
 		const FVector& CurrentExitPointWorld,
 		AActor* SliceInstigator,
 		FString& OutFailureReason);
+	bool TryExecuteSliceFromStrokeCutter(
+		const TArray<FVector>& StrokePointsWorld,
+		const FVector& ExtrudeDirectionTowardRayStartWorld,
+		float CutDepthCm,
+		float StrokeWidthCm,
+		AActor* SliceInstigator,
+		FString& OutFailureReason);
 	void InvalidateSourceMeshCache();
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice")
@@ -158,6 +165,12 @@ protected:
 	bool BuildSliceSourceCache(FString& OutFailureReason);
 	bool ValidateCachedSourceMesh(FString& OutFailureReason) const;
 	bool CollectSourceMaterialSet(TArray<UMaterialInterface*>& OutMaterialSet) const;
+	bool FinalizeSliceFromWorkingMesh(
+		UDynamicMesh* WorkingMesh,
+		const FVector& PlaneNormalWorld,
+		const FVector& SliceMidpointWorld,
+		AActor* SliceInstigator,
+		FString& OutFailureReason);
 	void ApplySourceActorPostSlice() const;
 	void DisableFractureOnActor(AActor* Actor) const;
 	bool IsPieceAnchored(const FBox& PieceLocalBounds, const FTransform& SourceTransform) const;
