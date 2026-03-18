@@ -11,6 +11,7 @@
 #include "Material/AgentResourceTypes.h"
 #include "Material/MaterialComponent.h"
 #include "Material/MaterialDefinitionAsset.h"
+#include "Misc/ScopeExit.h"
 #include "Objects/Components/ObjectFractureComponent.h"
 #include "Objects/Components/ObjectHealthComponent.h"
 #include "PhysicsEngine/BodyInstance.h"
@@ -241,6 +242,7 @@ void UAgentScannerComponent::BeginPlay()
 void UAgentScannerComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	ClearScanner(true);
+	UnbindAllObservedHealthComponents();
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -256,6 +258,11 @@ void UAgentScannerComponent::UpdateScanner(
 	const FVector& ViewDirection,
 	const FAgentBeamTraceState* BeamTraceState)
 {
+	ON_SCOPE_EXIT
+	{
+		SyncObservedHealthComponents();
+	};
+
 	if (!GetWorld())
 	{
 		ClearScanner(true);
@@ -441,6 +448,7 @@ void UAgentScannerComponent::ClearScanner(bool bImmediate)
 			DestroyReadoutState(DwellingReadout);
 		}
 		DwellingReadouts.Reset();
+		SyncObservedHealthComponents();
 		return;
 	}
 
@@ -455,6 +463,8 @@ void UAgentScannerComponent::ClearScanner(bool bImmediate)
 			ClearActiveReadout(true);
 		}
 	}
+
+	SyncObservedHealthComponents();
 }
 
 bool UAgentScannerComponent::ResolveTraceResult(
@@ -1514,4 +1524,140 @@ bool UAgentScannerComponent::TryHoldCandidateProgress(
 	}
 
 	return true;
+}
+
+void UAgentScannerComponent::SyncObservedHealthComponents()
+{
+	TSet<UObjectHealthComponent*> DesiredHealthComponents;
+	if (bShowHealthInScan)
+	{
+		auto AddStateHealthComponent = [this, &DesiredHealthComponents](const FScannerReadoutState& ReadoutState)
+		{
+			AActor* TargetActor = ReadoutState.TargetActor.Get();
+			if (!TargetActor || !IsReadoutTargetValid(ReadoutState))
+			{
+				return;
+			}
+
+			if (UObjectHealthComponent* HealthComponent = UObjectHealthComponent::FindObjectHealthComponent(TargetActor))
+			{
+				DesiredHealthComponents.Add(HealthComponent);
+			}
+		};
+
+		if (bHasActiveReadout)
+		{
+			AddStateHealthComponent(ActiveReadout);
+		}
+
+		for (const FScannerReadoutState& DwellingReadout : DwellingReadouts)
+		{
+			AddStateHealthComponent(DwellingReadout);
+		}
+	}
+
+	for (int32 Index = ObservedHealthComponents.Num() - 1; Index >= 0; --Index)
+	{
+		UObjectHealthComponent* HealthComponent = ObservedHealthComponents[Index].Get();
+		if (!HealthComponent || !DesiredHealthComponents.Contains(HealthComponent))
+		{
+			if (HealthComponent)
+			{
+				HealthComponent->OnHealthChanged.RemoveDynamic(this, &UAgentScannerComponent::HandleTrackedTargetHealthChanged);
+			}
+
+			ObservedHealthComponents.RemoveAt(Index);
+		}
+	}
+
+	for (UObjectHealthComponent* DesiredHealthComponent : DesiredHealthComponents)
+	{
+		if (!DesiredHealthComponent)
+		{
+			continue;
+		}
+
+		bool bAlreadyObserved = false;
+		for (const TWeakObjectPtr<UObjectHealthComponent>& ObservedHealthComponent : ObservedHealthComponents)
+		{
+			if (ObservedHealthComponent.Get() == DesiredHealthComponent)
+			{
+				bAlreadyObserved = true;
+				break;
+			}
+		}
+
+		if (bAlreadyObserved)
+		{
+			continue;
+		}
+
+		DesiredHealthComponent->OnHealthChanged.AddUniqueDynamic(this, &UAgentScannerComponent::HandleTrackedTargetHealthChanged);
+		ObservedHealthComponents.Add(DesiredHealthComponent);
+	}
+}
+
+void UAgentScannerComponent::UnbindAllObservedHealthComponents()
+{
+	for (const TWeakObjectPtr<UObjectHealthComponent>& ObservedHealthComponent : ObservedHealthComponents)
+	{
+		if (UObjectHealthComponent* HealthComponent = ObservedHealthComponent.Get())
+		{
+			HealthComponent->OnHealthChanged.RemoveDynamic(this, &UAgentScannerComponent::HandleTrackedTargetHealthChanged);
+		}
+	}
+
+	ObservedHealthComponents.Reset();
+}
+
+void UAgentScannerComponent::RefreshTrackedReadoutsForHealthChange()
+{
+	if (bHasActiveReadout)
+	{
+		if (!ActiveReadout.Actor.IsValid() || !IsReadoutTargetValid(ActiveReadout))
+		{
+			ClearActiveReadout(true);
+		}
+		else if (RefreshReadoutPresentation(ActiveReadout))
+		{
+			CurrentPresentation = ActiveReadout.Presentation;
+			UpdateReadoutActor(ActiveReadout, 1.0f, true);
+		}
+	}
+
+	for (int32 Index = DwellingReadouts.Num() - 1; Index >= 0; --Index)
+	{
+		FScannerReadoutState& DwellingReadout = DwellingReadouts[Index];
+		if (!DwellingReadout.Actor.IsValid() || !IsReadoutTargetValid(DwellingReadout))
+		{
+			DestroyReadoutState(DwellingReadout);
+			DwellingReadouts.RemoveAt(Index);
+			continue;
+		}
+
+		if (!RefreshReadoutPresentation(DwellingReadout))
+		{
+			continue;
+		}
+
+		const float Alpha = ScanLingerDuration > KINDA_SMALL_NUMBER
+			? FMath::Clamp(DwellingReadout.LingerTimeRemaining / ScanLingerDuration, 0.0f, 1.0f)
+			: 1.0f;
+		UpdateReadoutActor(DwellingReadout, Alpha, true);
+	}
+}
+
+void UAgentScannerComponent::HandleTrackedTargetHealthChanged(
+	float PreviousHealth,
+	float NewHealth,
+	float MaxHealth,
+	float TotalDamagedPenaltyPercent)
+{
+	(void)PreviousHealth;
+	(void)NewHealth;
+	(void)MaxHealth;
+	(void)TotalDamagedPenaltyPercent;
+
+	RefreshTrackedReadoutsForHealthChange();
+	SyncObservedHealthComponents();
 }

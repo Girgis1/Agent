@@ -226,7 +226,9 @@ float UObjectHealthComponent::ComputeMaxHealthFromPrimitive(UPrimitiveComponent*
 	}
 
 	const float SourceMassKg = ResolvePrimitiveMassKgWithoutWarning(SourcePrimitive);
-	const float DesiredMaxHealth = BaseHealthOffset + (SourceMassKg * FMath::Max(0.0f, HealthPerKg));
+	const float BaseMassDerivedHealth = BaseHealthOffset + (SourceMassKg * FMath::Max(0.0f, HealthPerKg));
+	const float MassHealthScalar = FMath::Max(0.0f, MassHealthPercent) / 100.0f;
+	const float DesiredMaxHealth = BaseMassDerivedHealth * MassHealthScalar;
 	return ClampResolvedMaxHealth(DesiredMaxHealth);
 }
 
@@ -581,6 +583,7 @@ void UObjectHealthComponent::ClampConfiguredValues()
 	ResolvedMaxHealth = FMath::Max(0.01f, ResolvedMaxHealth);
 	CurrentHealth = FMath::Max(0.0f, CurrentHealth);
 	HealthPerKg = FMath::Max(0.0f, HealthPerKg);
+	MassHealthPercent = FMath::Max(0.0f, MassHealthPercent);
 	MinimumResolvedMaxHealth = FMath::Max(0.01f, MinimumResolvedMaxHealth);
 	ImpactDamageVelocity = FMath::Max(0.0f, ImpactDamageVelocity);
 	MaxImpactDamageVelocity = FMath::Max(ImpactDamageVelocity, MaxImpactDamageVelocity);

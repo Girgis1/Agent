@@ -8,6 +8,7 @@
 #include "AgentScannerComponent.generated.h"
 
 class AAgentScannerReadoutActor;
+class UObjectHealthComponent;
 class UPrimitiveComponent;
 struct FAgentBeamTraceState;
 
@@ -201,6 +202,16 @@ protected:
 		const FVector& ViewDirection,
 		bool bHasViewerLocation,
 		bool bAllowHoldDisplay);
+	void SyncObservedHealthComponents();
+	void UnbindAllObservedHealthComponents();
+	void RefreshTrackedReadoutsForHealthChange();
+
+	UFUNCTION()
+	void HandleTrackedTargetHealthChanged(
+		float PreviousHealth,
+		float NewHealth,
+		float MaxHealth,
+		float TotalDamagedPenaltyPercent);
 
 	TWeakObjectPtr<AActor> CandidateActor;
 	TWeakObjectPtr<UPrimitiveComponent> CandidateComponent;
@@ -214,4 +225,5 @@ protected:
 	FScannerReadoutState ActiveReadout;
 	bool bHasActiveReadout = false;
 	TArray<FScannerReadoutState> DwellingReadouts;
+	TArray<TWeakObjectPtr<UObjectHealthComponent>> ObservedHealthComponents;
 };

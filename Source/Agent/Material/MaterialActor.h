@@ -8,6 +8,7 @@
 
 class UMaterialComponent;
 class UMaterialInterface;
+class UObjectDepletionResponseComponent;
 class UObjectFractureComponent;
 class UObjectHealthComponent;
 class UStaticMesh;
@@ -45,6 +46,9 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Objects|MaterialActor")
 	TObjectPtr<UObjectFractureComponent> ObjectFracture = nullptr;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Objects|MaterialActor")
+	TObjectPtr<UObjectDepletionResponseComponent> DepletionResponse = nullptr;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MaterialActor")
 	bool bRandomizeMeshOnSpawn = false;

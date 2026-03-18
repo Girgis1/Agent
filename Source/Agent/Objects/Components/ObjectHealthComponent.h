@@ -155,6 +155,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Health|Derived", meta=(ClampMin="0.0", UIMin="0.0"))
 	float HealthPerKg = 1.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Health|Derived", meta=(ClampMin="0.0", UIMin="0.0", Units="%", DisplayName="Mass Health Percent", ToolTip="Only used when InitializationMode is FromCurrentMass. 100 keeps current behavior, 10 = 10% of mass-derived max health."))
+	float MassHealthPercent = 100.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Health|Derived")
 	float BaseHealthOffset = 0.0f;
 

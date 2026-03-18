@@ -4,6 +4,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "Material/MaterialComponent.h"
 #include "Materials/MaterialInterface.h"
+#include "Objects/Components/ObjectDepletionResponseComponent.h"
 #include "Objects/Components/ObjectFractureComponent.h"
 #include "Objects/Components/ObjectHealthComponent.h"
 #include "Objects/Types/ObjectHealthTypes.h"
@@ -33,6 +34,7 @@ AMaterialActor::AMaterialActor()
 	ObjectHealth->bDestroyOwnerWhenDepleted = true;
 
 	ObjectFracture = CreateDefaultSubobject<UObjectFractureComponent>(TEXT("ObjectFracture"));
+	DepletionResponse = CreateDefaultSubobject<UObjectDepletionResponseComponent>(TEXT("DepletionResponse"));
 
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> DefaultMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
 	if (DefaultMesh.Succeeded())
