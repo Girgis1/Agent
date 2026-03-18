@@ -487,7 +487,6 @@ void AAgentCharacter::Tick(float DeltaSeconds)
 	UpdateDronePilotCameraLimits();
 	RefreshPrimaryDroneAvailabilityFromCompanion();
 	UpdateBeamSystems(DeltaSeconds);
-	UpdateControllerDrawSlice(DeltaSeconds);
 	UpdateScannerSystems(DeltaSeconds);
 	UpdateBeamAimZoom(DeltaSeconds);
 	if (!bPrimaryDroneAvailable
@@ -2270,7 +2269,7 @@ bool AAgentCharacter::CommitControllerDrawSlice()
 	}
 
 	const FVector SafeExtrudeDirection = ControllerDrawSliceExtrudeDirection.GetSafeNormal();
-	if (SafeExtrudeDirection.IsNearlyZero())
+	if (!bControllerDrawSliceBeamStartMode && SafeExtrudeDirection.IsNearlyZero())
 	{
 		return false;
 	}
@@ -2307,13 +2306,37 @@ bool AAgentCharacter::CommitControllerDrawSlice()
 		return false;
 	}
 
-	// Keep the draw behavior polygonal by closing the stroke on release.
-	if (FVector::DistSquared(FilteredStrokePoints[0], FilteredStrokePoints.Last()) > 1.0f)
+	const TArray<FVector> SliceStrokePoints = FilteredStrokePoints;
+	const TArray<FVector> SliceBeamStartPoints = FilteredBeamStartPoints;
+
+	TArray<FVector> PreviewStrokePoints = FilteredStrokePoints;
+	TArray<FVector> PreviewBeamStartPoints = FilteredBeamStartPoints;
+
+	// Keep the non-ribbon draw mode polygonal by closing the stroke on release.
+	if (!bControllerDrawSliceBeamStartMode
+		&& FVector::DistSquared(PreviewStrokePoints[0], PreviewStrokePoints.Last()) > 1.0f)
 	{
-		const FVector FirstStrokePoint = FilteredStrokePoints[0];
-		const FVector FirstBeamStartPoint = FilteredBeamStartPoints[0];
-		FilteredStrokePoints.Add(FirstStrokePoint);
-		FilteredBeamStartPoints.Add(FirstBeamStartPoint);
+		const FVector FirstStrokePoint = PreviewStrokePoints[0];
+		const FVector FirstBeamStartPoint = PreviewBeamStartPoints[0];
+		PreviewStrokePoints.Add(FirstStrokePoint);
+		PreviewBeamStartPoints.Add(FirstBeamStartPoint);
+	}
+
+	TArray<FVector> SliceFarPoints;
+	if (bControllerDrawSliceBeamStartMode)
+	{
+		SliceFarPoints.Reserve(SliceStrokePoints.Num());
+		for (int32 SampleIndex = 0; SampleIndex < SliceStrokePoints.Num(); ++SampleIndex)
+		{
+			const FVector RayDirection = (SliceStrokePoints[SampleIndex] - SliceBeamStartPoints[SampleIndex]).GetSafeNormal();
+			if (RayDirection.IsNearlyZero())
+			{
+				SliceFarPoints.Add(SliceStrokePoints[SampleIndex]);
+				continue;
+			}
+
+			SliceFarPoints.Add(SliceBeamStartPoints[SampleIndex] + (RayDirection * MaxRangeCm));
+		}
 	}
 
 	UDynamicMesh* PreviewMesh = NewObject<UDynamicMesh>(GetTransientPackage(), NAME_None, RF_Transient);
@@ -2357,12 +2380,12 @@ bool AAgentCharacter::CommitControllerDrawSlice()
 
 	if (bControllerDrawSliceBeamStartMode)
 	{
-		for (int32 PointIndex = 1; PointIndex < FilteredStrokePoints.Num(); ++PointIndex)
+		for (int32 PointIndex = 1; PointIndex < PreviewStrokePoints.Num(); ++PointIndex)
 		{
-			const FVector& StrokePointA = FilteredStrokePoints[PointIndex - 1];
-			const FVector& StrokePointB = FilteredStrokePoints[PointIndex];
-			const FVector& BeamStartA = FilteredBeamStartPoints[PointIndex - 1];
-			const FVector& BeamStartB = FilteredBeamStartPoints[PointIndex];
+			const FVector& StrokePointA = PreviewStrokePoints[PointIndex - 1];
+			const FVector& StrokePointB = PreviewStrokePoints[PointIndex];
+			const FVector& BeamStartA = PreviewBeamStartPoints[PointIndex - 1];
+			const FVector& BeamStartB = PreviewBeamStartPoints[PointIndex];
 
 			const FVector DirectionA = (StrokePointA - BeamStartA).GetSafeNormal();
 			const FVector DirectionB = (StrokePointB - BeamStartB).GetSafeNormal();
@@ -2383,10 +2406,10 @@ bool AAgentCharacter::CommitControllerDrawSlice()
 	else
 	{
 		const FVector ExtrudeDelta = SafeExtrudeDirection * FMath::Max(1.0f, ControllerDrawSliceCutDepthCm);
-		for (int32 PointIndex = 1; PointIndex < FilteredStrokePoints.Num(); ++PointIndex)
+		for (int32 PointIndex = 1; PointIndex < PreviewStrokePoints.Num(); ++PointIndex)
 		{
-			const FVector& SegmentStart = FilteredStrokePoints[PointIndex - 1];
-			const FVector& SegmentEnd = FilteredStrokePoints[PointIndex];
+			const FVector& SegmentStart = PreviewStrokePoints[PointIndex - 1];
+			const FVector& SegmentEnd = PreviewStrokePoints[PointIndex];
 			const FVector SegmentStartExtruded = SegmentStart + ExtrudeDelta;
 			const FVector SegmentEndExtruded = SegmentEnd + ExtrudeDelta;
 
@@ -2450,16 +2473,153 @@ bool AAgentCharacter::CommitControllerDrawSlice()
 		PreviewActor->SetLifeSpan(ControllerDrawSlicePreviewLifeSpanSeconds);
 	}
 
+	if (bControllerDrawSliceBeamStartMode && SliceStrokePoints.Num() >= 2)
+	{
+		ECollisionChannel TraceChannel = ECC_Visibility;
+		if (ActiveBeamToolComponent)
+		{
+			TraceChannel = static_cast<ECollisionChannel>(ActiveBeamToolComponent->TraceChannel.GetValue());
+		}
+
+		FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(AgentControllerDrawSliceTrace), false, this);
+		QueryParams.bTraceComplex = false;
+		QueryParams.bReturnPhysicalMaterial = false;
+		QueryParams.AddIgnoredActor(this);
+
+		TArray<AActor*> AttachedActors;
+		GetAttachedActors(AttachedActors, true, true);
+		for (AActor* AttachedActor : AttachedActors)
+		{
+			if (AttachedActor)
+			{
+				QueryParams.AddIgnoredActor(AttachedActor);
+			}
+		}
+
+		TSet<UObjectSliceComponent*> CandidateSliceComponents;
+		TArray<FHitResult> HitResults;
+		const float TraceRadius = FMath::Max(0.0f, ControllerSweepSliceTraceRadiusCm);
+		const float SliceDebugDuration = FMath::Max(0.0f, ControllerDrawSliceDebugDuration);
+		auto GatherSliceHitsAlongSegment = [&](const FVector& SegmentStart, const FVector& SegmentEnd)
+		{
+			if (FVector::DistSquared(SegmentStart, SegmentEnd) <= KINDA_SMALL_NUMBER)
+			{
+				return;
+			}
+
+			HitResults.Reset();
+			const bool bHasHit = TraceRadius > KINDA_SMALL_NUMBER
+				? World->SweepMultiByChannel(
+					HitResults,
+					SegmentStart,
+					SegmentEnd,
+					FQuat::Identity,
+					TraceChannel,
+					FCollisionShape::MakeSphere(TraceRadius),
+					QueryParams)
+				: World->LineTraceMultiByChannel(
+					HitResults,
+					SegmentStart,
+					SegmentEnd,
+					TraceChannel,
+					QueryParams);
+
+			if (bDrawControllerDrawSliceDebug)
+			{
+				DrawDebugLine(
+					World,
+					SegmentStart,
+					SegmentEnd,
+					bHasHit ? FColor::Cyan : FColor::Silver,
+					false,
+					SliceDebugDuration,
+					0,
+					1.6f);
+			}
+
+			for (const FHitResult& HitResult : HitResults)
+			{
+				AActor* HitActor = HitResult.GetActor();
+				if (!HitActor)
+				{
+					continue;
+				}
+
+				if (UObjectSliceComponent* SliceComponent = UObjectSliceComponent::FindObjectSliceComponent(HitActor, HitResult.GetComponent()))
+				{
+					CandidateSliceComponents.Add(SliceComponent);
+				}
+			}
+		};
+
+		for (int32 PointIndex = 1; PointIndex < SliceStrokePoints.Num(); ++PointIndex)
+		{
+			GatherSliceHitsAlongSegment(SliceStrokePoints[PointIndex - 1], SliceStrokePoints[PointIndex]);
+		}
+
+		for (int32 PointIndex = 1; PointIndex < SliceFarPoints.Num(); ++PointIndex)
+		{
+			GatherSliceHitsAlongSegment(SliceFarPoints[PointIndex - 1], SliceFarPoints[PointIndex]);
+		}
+
+		const int32 BeamRayCount = FMath::Min(SliceBeamStartPoints.Num(), SliceFarPoints.Num());
+		for (int32 PointIndex = 0; PointIndex < BeamRayCount; ++PointIndex)
+		{
+			GatherSliceHitsAlongSegment(SliceBeamStartPoints[PointIndex], SliceFarPoints[PointIndex]);
+		}
+
+		if (UPrimitiveComponent* MaterialSourcePrimitive = ControllerDrawSlicePreviewMaterialSource.Get())
+		{
+			if (AActor* SourceActor = MaterialSourcePrimitive->GetOwner())
+			{
+				if (UObjectSliceComponent* SourceSliceComponent = UObjectSliceComponent::FindObjectSliceComponent(SourceActor, MaterialSourcePrimitive))
+				{
+					CandidateSliceComponents.Add(SourceSliceComponent);
+				}
+			}
+		}
+
+		int32 SuccessfulSlices = 0;
+		for (UObjectSliceComponent* SliceComponent : CandidateSliceComponents)
+		{
+			if (!SliceComponent)
+			{
+				continue;
+			}
+
+			FString SliceFailureReason;
+			if (SliceComponent->TryExecuteSliceFromRibbonCutter(
+				SliceBeamStartPoints,
+				SliceStrokePoints,
+				SliceFarPoints,
+				ControllerDrawSliceRibbonThicknessCm,
+				this,
+				SliceFailureReason))
+			{
+				++SuccessfulSlices;
+			}
+			else if (bDrawControllerDrawSliceDebug && !SliceFailureReason.IsEmpty())
+			{
+				UE_LOG(LogAgent, Verbose, TEXT("Ribbon slice failed: %s"), *SliceFailureReason);
+			}
+		}
+
+		if (bDrawControllerDrawSliceDebug)
+		{
+			UE_LOG(LogAgent, Verbose, TEXT("Ribbon slice commit touched %d candidates, sliced %d"), CandidateSliceComponents.Num(), SuccessfulSlices);
+		}
+	}
+
 	if (bDrawControllerDrawSliceDebug)
 	{
 		const FColor StrokeColor = FColor::Green;
 		const float DebugDuration = FMath::Max(0.0f, ControllerDrawSliceDebugDuration);
-		for (int32 PointIndex = 1; PointIndex < FilteredStrokePoints.Num(); ++PointIndex)
+		for (int32 PointIndex = 1; PointIndex < PreviewStrokePoints.Num(); ++PointIndex)
 		{
 			DrawDebugLine(
 				World,
-				FilteredStrokePoints[PointIndex - 1],
-				FilteredStrokePoints[PointIndex],
+				PreviewStrokePoints[PointIndex - 1],
+				PreviewStrokePoints[PointIndex],
 				StrokeColor,
 				false,
 				DebugDuration,
@@ -2796,12 +2956,6 @@ void AAgentCharacter::OnGamepadFaceButtonRightPressed()
 
 void AAgentCharacter::OnGamepadLeftShoulderPressed()
 {
-	if (CanStartControllerDrawSlice())
-	{
-		StartControllerDrawSlice(false);
-		return;
-	}
-
 	if (IsRawControllerBeamAimModifierHeld() && CanUseBeamTool())
 	{
 		CycleBeamMode(1);
@@ -2819,10 +2973,6 @@ void AAgentCharacter::OnGamepadLeftShoulderPressed()
 
 void AAgentCharacter::OnGamepadLeftShoulderReleased()
 {
-	if (bControllerDrawSliceActive && !bControllerDrawSliceBeamStartMode)
-	{
-		StopControllerDrawSlice(true);
-	}
 }
 
 void AAgentCharacter::UpdateViewModeButtonHold(float DeltaSeconds)
@@ -7749,20 +7899,9 @@ void AAgentCharacter::OnConveyorRotateRightPressed()
 
 void AAgentCharacter::OnHookJobButtonPressed()
 {
-	if (bControllerDrawSliceActive)
-	{
-		return;
-	}
-
 	if (bConveyorPlacementModeActive)
 	{
 		OnConveyorRotateRightPressed();
-		return;
-	}
-
-	if (CanStartControllerDrawSlice())
-	{
-		StartControllerDrawSlice(true);
 		return;
 	}
 
@@ -7773,12 +7912,6 @@ void AAgentCharacter::OnHookJobButtonPressed()
 
 void AAgentCharacter::OnHookJobButtonReleased()
 {
-	if (bControllerDrawSliceActive && bControllerDrawSliceBeamStartMode)
-	{
-		StopControllerDrawSlice(true);
-		return;
-	}
-
 	if (bConveyorPlacementModeActive || !bHookJobButtonHeld)
 	{
 		return;

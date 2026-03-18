@@ -658,6 +658,275 @@ bool UObjectSliceComponent::TryExecuteSliceFromStrokeCutter(
 		OutFailureReason);
 }
 
+bool UObjectSliceComponent::TryExecuteSliceFromRibbonCutter(
+	const TArray<FVector>& BeamStartPointsWorld,
+	const TArray<FVector>& StrokePointsWorld,
+	const TArray<FVector>& FarPointsWorld,
+	float RibbonThicknessCm,
+	AActor* SliceInstigator,
+	FString& OutFailureReason)
+{
+	if (!BuildSliceSourceCache(OutFailureReason))
+	{
+		return false;
+	}
+
+	UPrimitiveComponent* SourcePrimitive = GetSliceSourcePrimitive();
+	UWorld* World = GetWorld();
+	AActor* OwnerActor = GetOwner();
+	if (!SourcePrimitive || !World || !OwnerActor)
+	{
+		OutFailureReason = TEXT("Slice target is missing runtime state");
+		return false;
+	}
+
+	const int32 SampleCount = FMath::Min(
+		BeamStartPointsWorld.Num(),
+		FMath::Min(StrokePointsWorld.Num(), FarPointsWorld.Num()));
+	if (SampleCount < 2)
+	{
+		OutFailureReason = TEXT("Ribbon cutter requires at least two samples");
+		return false;
+	}
+
+	const FTransform SourceTransform = SourcePrimitive->GetComponentTransform();
+	const float SafeAverageScale = ResolveAverageScale(SourceTransform);
+	const float LocalPointMergeTolerance = FMath::Max(0.01f, 0.25f / SafeAverageScale);
+	const float LocalPointMergeToleranceSq = FMath::Square(LocalPointMergeTolerance);
+
+	TArray<FVector> LocalBeamStartPoints;
+	TArray<FVector> LocalStrokePoints;
+	TArray<FVector> LocalFarPoints;
+	TArray<FVector> FilteredBeamStartPointsWorld;
+	TArray<FVector> FilteredStrokePointsWorld;
+	TArray<FVector> FilteredFarPointsWorld;
+	LocalBeamStartPoints.Reserve(SampleCount);
+	LocalStrokePoints.Reserve(SampleCount);
+	LocalFarPoints.Reserve(SampleCount);
+	FilteredBeamStartPointsWorld.Reserve(SampleCount);
+	FilteredStrokePointsWorld.Reserve(SampleCount);
+	FilteredFarPointsWorld.Reserve(SampleCount);
+
+	for (int32 SampleIndex = 0; SampleIndex < SampleCount; ++SampleIndex)
+	{
+		const FVector LocalBeamStart = SourceTransform.InverseTransformPosition(BeamStartPointsWorld[SampleIndex]);
+		const FVector LocalStroke = SourceTransform.InverseTransformPosition(StrokePointsWorld[SampleIndex]);
+		const FVector LocalFar = SourceTransform.InverseTransformPosition(FarPointsWorld[SampleIndex]);
+
+		const bool bShouldAddPoint = LocalStrokePoints.Num() == 0
+			|| FVector::DistSquared(LocalStrokePoints.Last(), LocalStroke) > LocalPointMergeToleranceSq
+			|| FVector::DistSquared(LocalBeamStartPoints.Last(), LocalBeamStart) > LocalPointMergeToleranceSq
+			|| FVector::DistSquared(LocalFarPoints.Last(), LocalFar) > LocalPointMergeToleranceSq;
+		if (!bShouldAddPoint)
+		{
+			continue;
+		}
+
+		LocalBeamStartPoints.Add(LocalBeamStart);
+		LocalStrokePoints.Add(LocalStroke);
+		LocalFarPoints.Add(LocalFar);
+		FilteredBeamStartPointsWorld.Add(BeamStartPointsWorld[SampleIndex]);
+		FilteredStrokePointsWorld.Add(StrokePointsWorld[SampleIndex]);
+		FilteredFarPointsWorld.Add(FarPointsWorld[SampleIndex]);
+	}
+
+	if (LocalStrokePoints.Num() < 2)
+	{
+		OutFailureReason = TEXT("Ribbon cutter path collapsed to a single sample");
+		return false;
+	}
+
+	UDynamicMesh* CutterMesh = NewObject<UDynamicMesh>(GetTransientPackage(), NAME_None, RF_Transient);
+	if (!CutterMesh)
+	{
+		OutFailureReason = TEXT("Failed to allocate ribbon cutter mesh");
+		return false;
+	}
+
+	const float LocalRibbonThickness = FMath::Max(0.01f, RibbonThicknessCm / SafeAverageScale);
+	FGeometryScriptPrimitiveOptions PrimitiveOptions;
+	auto ComputeSignedArea2D = [](const TArray<FVector2D>& Polygon) -> double
+	{
+		if (Polygon.Num() < 3)
+		{
+			return 0.0;
+		}
+
+		double DoubleArea = 0.0;
+		for (int32 Index = 0; Index < Polygon.Num(); ++Index)
+		{
+			const FVector2D& Current = Polygon[Index];
+			const FVector2D& Next = Polygon[(Index + 1) % Polygon.Num()];
+			DoubleArea += (static_cast<double>(Current.X) * static_cast<double>(Next.Y))
+				- (static_cast<double>(Next.X) * static_cast<double>(Current.Y));
+		}
+		return DoubleArea * 0.5;
+	};
+
+	auto AppendThickenedQuad = [&](const FVector& A, const FVector& B, const FVector& C, const FVector& D, int32& InOutPrismCount)
+	{
+		const FVector AxisXRaw = B - A;
+		if (AxisXRaw.SizeSquared() <= KINDA_SMALL_NUMBER)
+		{
+			return;
+		}
+
+		const FVector AxisX = AxisXRaw.GetSafeNormal();
+		FVector AxisYSeed = D - A;
+		AxisYSeed -= FVector::DotProduct(AxisYSeed, AxisX) * AxisX;
+		if (AxisYSeed.SizeSquared() <= KINDA_SMALL_NUMBER)
+		{
+			AxisYSeed = C - A;
+			AxisYSeed -= FVector::DotProduct(AxisYSeed, AxisX) * AxisX;
+		}
+		if (AxisYSeed.SizeSquared() <= KINDA_SMALL_NUMBER)
+		{
+			return;
+		}
+
+		FVector AxisY = AxisYSeed.GetSafeNormal();
+		const FVector Normal = FVector::CrossProduct(AxisX, AxisY).GetSafeNormal();
+		if (Normal.IsNearlyZero())
+		{
+			return;
+		}
+
+		AxisY = FVector::CrossProduct(Normal, AxisX).GetSafeNormal();
+		if (AxisY.IsNearlyZero())
+		{
+			return;
+		}
+
+		auto ProjectToFrame = [&](const FVector& Point) -> FVector2D
+		{
+			const FVector Delta = Point - A;
+			return FVector2D(
+				FVector::DotProduct(Delta, AxisX),
+				FVector::DotProduct(Delta, AxisY));
+		};
+
+		TArray<FVector2D> QuadPolygon;
+		QuadPolygon.Reserve(4);
+		const FVector2D Candidates[4] = { ProjectToFrame(A), ProjectToFrame(B), ProjectToFrame(C), ProjectToFrame(D) };
+		for (const FVector2D& Candidate : Candidates)
+		{
+			if (QuadPolygon.Num() == 0 || FVector2D::Distance(QuadPolygon.Last(), Candidate) > 0.001f)
+			{
+				QuadPolygon.Add(Candidate);
+			}
+		}
+		if (QuadPolygon.Num() >= 2 && FVector2D::Distance(QuadPolygon[0], QuadPolygon.Last()) <= 0.001f)
+		{
+			QuadPolygon.Pop();
+		}
+		if (QuadPolygon.Num() < 3)
+		{
+			return;
+		}
+
+		if (ComputeSignedArea2D(QuadPolygon) < 0.0)
+		{
+			Algo::Reverse(QuadPolygon);
+		}
+
+		const FTransform QuadTransform(
+			FRotationMatrix::MakeFromXZ(AxisX, Normal).ToQuat(),
+			A - (Normal * (LocalRibbonThickness * 0.5f)));
+		UGeometryScriptLibrary_MeshPrimitiveFunctions::AppendSimpleExtrudePolygon(
+			CutterMesh,
+			PrimitiveOptions,
+			QuadTransform,
+			QuadPolygon,
+			LocalRibbonThickness,
+			0,
+			true,
+			EGeometryScriptPrimitiveOriginMode::Base,
+			nullptr);
+		++InOutPrismCount;
+	};
+
+	int32 AddedPrismCount = 0;
+	for (int32 PointIndex = 1; PointIndex < LocalStrokePoints.Num(); ++PointIndex)
+	{
+		const FVector& BeamStartA = LocalBeamStartPoints[PointIndex - 1];
+		const FVector& BeamStartB = LocalBeamStartPoints[PointIndex];
+		const FVector& StrokeA = LocalStrokePoints[PointIndex - 1];
+		const FVector& StrokeB = LocalStrokePoints[PointIndex];
+		const FVector& FarA = LocalFarPoints[PointIndex - 1];
+		const FVector& FarB = LocalFarPoints[PointIndex];
+
+		AppendThickenedQuad(BeamStartA, BeamStartB, StrokeB, StrokeA, AddedPrismCount);
+		AppendThickenedQuad(StrokeA, StrokeB, FarB, FarA, AddedPrismCount);
+	}
+
+	if (AddedPrismCount <= 0 || CutterMesh->IsEmpty())
+	{
+		OutFailureReason = TEXT("Failed to build ribbon cutter surface");
+		return false;
+	}
+
+	if (!UGeometryScriptLibrary_MeshQueryFunctions::GetIsClosedMesh(CutterMesh))
+	{
+		const int32 OpenEdgeCount = UGeometryScriptLibrary_MeshQueryFunctions::GetNumOpenBorderEdges(CutterMesh);
+		OutFailureReason = FString::Printf(
+			TEXT("Ribbon cutter shell is not closed (%d open border edges)"),
+			OpenEdgeCount);
+		return false;
+	}
+
+	UDynamicMesh* WorkingMesh = NewObject<UDynamicMesh>(GetTransientPackage(), NAME_None, RF_Transient);
+	if (!WorkingMesh)
+	{
+		OutFailureReason = TEXT("Failed to allocate working slice mesh");
+		return false;
+	}
+
+	CachedSourceMesh->ProcessMesh([&](const UE::Geometry::FDynamicMesh3& SourceMesh)
+	{
+		WorkingMesh->SetMesh(UE::Geometry::FDynamicMesh3(SourceMesh));
+	});
+
+	FGeometryScriptMeshBooleanOptions BooleanOptions;
+	BooleanOptions.bFillHoles = true;
+	BooleanOptions.bSimplifyOutput = true;
+	BooleanOptions.OutputTransformSpace = EGeometryScriptBooleanOutputSpace::TargetTransformSpace;
+	UGeometryScriptLibrary_MeshBooleanFunctions::ApplyMeshBoolean(
+		WorkingMesh,
+		FTransform::Identity,
+		CutterMesh,
+		FTransform::Identity,
+		EGeometryScriptBooleanOperation::Subtract,
+		BooleanOptions,
+		nullptr);
+
+	if (WorkingMesh->IsEmpty())
+	{
+		OutFailureReason = TEXT("Ribbon cutter removed the entire mesh");
+		return false;
+	}
+
+	FVector SliceMidpointWorld = FVector::ZeroVector;
+	for (const FVector& StrokePointWorld : FilteredStrokePointsWorld)
+	{
+		SliceMidpointWorld += StrokePointWorld;
+	}
+	SliceMidpointWorld /= static_cast<float>(FilteredStrokePointsWorld.Num());
+
+	FVector TowardRayStartWorld = FVector::ZeroVector;
+	for (int32 PointIndex = 0; PointIndex < FilteredStrokePointsWorld.Num(); ++PointIndex)
+	{
+		const FVector TowardSample = (FilteredBeamStartPointsWorld[PointIndex] - FilteredFarPointsWorld[PointIndex]).GetSafeNormal();
+		TowardRayStartWorld += TowardSample;
+	}
+
+	return FinalizeSliceFromWorkingMesh(
+		WorkingMesh,
+		TowardRayStartWorld.GetSafeNormal(),
+		SliceMidpointWorld,
+		SliceInstigator,
+		OutFailureReason);
+}
+
 bool UObjectSliceComponent::FinalizeSliceFromWorkingMesh(
 	UDynamicMesh* WorkingMesh,
 	const FVector& PlaneNormalWorld,

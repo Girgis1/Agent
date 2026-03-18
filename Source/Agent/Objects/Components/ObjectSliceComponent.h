@@ -88,6 +88,13 @@ public:
 		float StrokeWidthCm,
 		AActor* SliceInstigator,
 		FString& OutFailureReason);
+	bool TryExecuteSliceFromRibbonCutter(
+		const TArray<FVector>& BeamStartPointsWorld,
+		const TArray<FVector>& StrokePointsWorld,
+		const TArray<FVector>& FarPointsWorld,
+		float RibbonThicknessCm,
+		AActor* SliceInstigator,
+		FString& OutFailureReason);
 	void InvalidateSourceMeshCache();
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Slice")

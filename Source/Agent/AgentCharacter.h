@@ -570,7 +570,7 @@ public:
 	float BeamAimDepthOfFieldOutTimeMultiplier = 1.2f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerSweep")
-	bool bEnableControllerSweepSliceShortcut = true;
+	bool bEnableControllerSweepSliceShortcut = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerSweep", meta=(ClampMin="1.0", UIMin="1.0", Units="cm"))
 	float ControllerSweepSliceDistanceCm = 200.0f;
@@ -594,7 +594,7 @@ public:
 	float ControllerSweepSliceDebugDuration = 1.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerDraw")
-	bool bEnableControllerDrawSliceShortcut = true;
+	bool bEnableControllerDrawSliceShortcut = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerDraw", meta=(ClampMin="1.0", UIMin="1.0", Units="cm"))
 	float ControllerDrawSliceDistanceCm = 250.0f;
@@ -604,6 +604,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerDraw", meta=(ClampMin="1.0", UIMin="1.0", Units="cm"))
 	float ControllerDrawSliceCutDepthCm = 200.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerDraw", meta=(ClampMin="0.01", UIMin="0.01", Units="cm"))
+	float ControllerDrawSliceRibbonThicknessCm = 0.2f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Beam|Slice|ControllerDraw", meta=(ClampMin="0.0", UIMin="0.0", Units="s"))
 	float ControllerDrawSlicePreviewLifeSpanSeconds = 20.0f;

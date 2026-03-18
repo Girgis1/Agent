@@ -3,6 +3,7 @@
 #include "Material/MaterialActor.h"
 #include "Components/StaticMeshComponent.h"
 #include "Material/MaterialComponent.h"
+#include "Materials/MaterialInterface.h"
 #include "Objects/Components/ObjectFractureComponent.h"
 #include "Objects/Components/ObjectHealthComponent.h"
 #include "Objects/Types/ObjectHealthTypes.h"
@@ -46,6 +47,7 @@ void AMaterialActor::BeginPlay()
 
 	ApplyMeshVariant();
 	ApplyRandomizedScale();
+	ApplyRandomizedMaterials();
 	HandlePostItemMeshConfiguration();
 
 	if (MaterialData)
@@ -105,5 +107,46 @@ void AMaterialActor::ApplyRandomizedScale()
 	const float SelectedScale = FMath::FRandRange(SafeMinScale, SafeMaxScale);
 
 	ItemMesh->SetWorldScale3D(FVector(SelectedScale));
+}
+
+void AMaterialActor::ApplyRandomizedMaterials()
+{
+	if (!ItemMesh || !bRandomizeMaterialOnSpawn || RandomizedMaterialSlots.Num() == 0)
+	{
+		return;
+	}
+
+	const int32 MaterialCount = ItemMesh->GetNumMaterials();
+	if (MaterialCount <= 0)
+	{
+		return;
+	}
+
+	for (const FMaterialActorMaterialSlot& MaterialSlot : RandomizedMaterialSlots)
+	{
+		const int32 SlotIndex = MaterialSlot.MaterialSlotIndex;
+		if (SlotIndex < 0 || SlotIndex >= MaterialCount)
+		{
+			continue;
+		}
+
+		TArray<UMaterialInterface*> ValidMaterialVariants;
+		ValidMaterialVariants.Reserve(MaterialSlot.MaterialInstances.Num());
+		for (UMaterialInterface* MaterialVariant : MaterialSlot.MaterialInstances)
+		{
+			if (IsValid(MaterialVariant))
+			{
+				ValidMaterialVariants.Add(MaterialVariant);
+			}
+		}
+
+		if (ValidMaterialVariants.Num() == 0)
+		{
+			continue;
+		}
+
+		const int32 MaterialIndex = FMath::RandRange(0, ValidMaterialVariants.Num() - 1);
+		ItemMesh->SetMaterial(SlotIndex, ValidMaterialVariants[MaterialIndex]);
+	}
 }
 

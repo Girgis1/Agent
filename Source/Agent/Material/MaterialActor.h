@@ -7,11 +7,24 @@
 #include "MaterialActor.generated.h"
 
 class UMaterialComponent;
+class UMaterialInterface;
 class UObjectFractureComponent;
 class UObjectHealthComponent;
 class UStaticMesh;
 class UStaticMeshComponent;
 class UPrimitiveComponent;
+
+USTRUCT(BlueprintType)
+struct FMaterialActorMaterialSlot
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MaterialActor|Material", meta=(ClampMin="0", UIMin="0"))
+	int32 MaterialSlotIndex = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MaterialActor|Material", meta=(DisplayName="Material Instances"))
+	TArray<TObjectPtr<UMaterialInterface>> MaterialInstances;
+};
 
 UCLASS()
 class AMaterialActor : public AActor
@@ -42,6 +55,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MaterialActor")
 	bool bRandomizeScaleOnSpawn = false;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MaterialActor|Material", meta=(DisplayName="Randomise Material"))
+	bool bRandomizeMaterialOnSpawn = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MaterialActor|Material", meta=(EditCondition="bRandomizeMaterialOnSpawn", EditConditionHides))
+	TArray<FMaterialActorMaterialSlot> RandomizedMaterialSlots;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MaterialActor", meta=(ClampMin="0.05"))
 	float ItemMinScale = 0.75f;
 
@@ -55,5 +74,6 @@ protected:
 
 	void ApplyMeshVariant();
 	void ApplyRandomizedScale();
+	void ApplyRandomizedMaterials();
 };
 
