@@ -10,6 +10,7 @@ class AActor;
 class AFactoryPayloadActor;
 class UMaterialComponent;
 class UMaterialDefinitionAsset;
+class UMaterialInterface;
 class UObjectHealthComponent;
 class UParticleSystem;
 class UPrimitiveComponent;
@@ -113,6 +114,18 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Depletion|Decal", meta=(ClampMin="0.0", UIMin="0.0", EditCondition="bSpawnGroundDecalOnDepleted", EditConditionHides, Units="deg"))
 	float GroundDecalRandomYawDegrees = 180.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Depletion|Decal", meta=(EditCondition="bSpawnGroundDecalOnDepleted", EditConditionHides))
+	bool bRandomizeGroundDecalScaleOnSpawn = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Depletion|Decal", meta=(ClampMin="0.01", UIMin="0.01", EditCondition="bSpawnGroundDecalOnDepleted && bRandomizeGroundDecalScaleOnSpawn", EditConditionHides))
+	float GroundDecalScaleMultiplierMin = 0.8f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Depletion|Decal", meta=(ClampMin="0.01", UIMin="0.01", EditCondition="bSpawnGroundDecalOnDepleted && bRandomizeGroundDecalScaleOnSpawn", EditConditionHides))
+	float GroundDecalScaleMultiplierMax = 1.2f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Depletion|Decal", meta=(EditCondition="bSpawnGroundDecalOnDepleted", EditConditionHides, DisplayName="Ground Decal Material Variants"))
+	TArray<TObjectPtr<UMaterialInterface>> GroundDecalMaterialVariants;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Depletion|GroundTrace", meta=(ClampMin="0.0", UIMin="0.0", Units="cm"))
 	float GroundTraceUpDistanceCm = 50.0f;
 
@@ -186,6 +199,7 @@ protected:
 	void ExecuteDepletionResponses();
 	void SpawnEmitterResponse(const FHitResult* GroundHit);
 	void SpawnGroundDecalResponse(const FHitResult& GroundHit);
+	void ApplyGroundDecalSpawnOverrides(AActor* SpawnedDecalActor) const;
 	void SpawnRawMaterialDrops();
 	void SpawnBlueprintDrops();
 	void ApplyOwnerPostDepletionState();

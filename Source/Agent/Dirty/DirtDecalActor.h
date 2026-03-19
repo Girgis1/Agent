@@ -84,6 +84,9 @@ public:
 	TObjectPtr<UMaterialInterface> BaseDecalMaterial = nullptr;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal|Material")
+	bool bApplyBaseDecalMaterialOnInitialize = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal|Material")
 	bool bUseMaterialVisualDefaults = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty|Decal|Debug")

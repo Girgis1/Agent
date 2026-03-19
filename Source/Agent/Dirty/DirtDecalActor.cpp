@@ -127,7 +127,7 @@ void ADirtDecalActor::OnConstruction(const FTransform& Transform)
 	if (DirtDecalComponent)
 	{
 		DirtDecalComponent->SetRelativeRotation(FRotator(-90.0f, 0.0f, 0.0f));
-		if (BaseDecalMaterial)
+		if (bApplyBaseDecalMaterialOnInitialize && BaseDecalMaterial)
 		{
 			DirtDecalComponent->SetDecalMaterial(BaseDecalMaterial);
 		}
@@ -176,7 +176,7 @@ void ADirtDecalActor::InitializeDirtDecal()
 		return;
 	}
 
-	if (BaseDecalMaterial)
+	if (bApplyBaseDecalMaterialOnInitialize && BaseDecalMaterial)
 	{
 		DirtDecalComponent->SetDecalMaterial(BaseDecalMaterial);
 	}

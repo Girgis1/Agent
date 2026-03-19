@@ -1,7 +1,9 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Objects/Components/ObjectDepletionResponseComponent.h"
+#include "Components/DecalComponent.h"
 #include "Components/PrimitiveComponent.h"
+#include "Dirty/DirtDecalActor.h"
 #include "Engine/EngineTypes.h"
 #include "Engine/World.h"
 #include "Factory/FactoryPayloadActor.h"
@@ -10,6 +12,7 @@
 #include "Material/AgentResourceTypes.h"
 #include "Material/MaterialComponent.h"
 #include "Material/MaterialDefinitionAsset.h"
+#include "Materials/MaterialInterface.h"
 #include "Math/RotationMatrix.h"
 #include "Objects/Components/ObjectHealthComponent.h"
 #include "Objects/Types/ObjectBreakUtilities.h"
@@ -179,7 +182,65 @@ void UObjectDepletionResponseComponent::SpawnGroundDecalResponse(const FHitResul
 	}
 
 	const FTransform SpawnTransform = BuildGroundAlignedTransform(GroundHit, GroundDecalNormalOffsetCm, GroundDecalRandomYawDegrees);
-	SpawnActorAtWorldTransform(GroundDecalActorClass, SpawnTransform);
+	AActor* SpawnedDecalActor = SpawnActorAtWorldTransform(GroundDecalActorClass, SpawnTransform);
+	ApplyGroundDecalSpawnOverrides(SpawnedDecalActor);
+}
+
+void UObjectDepletionResponseComponent::ApplyGroundDecalSpawnOverrides(AActor* SpawnedDecalActor) const
+{
+	if (!SpawnedDecalActor)
+	{
+		return;
+	}
+
+	if (bRandomizeGroundDecalScaleOnSpawn)
+	{
+		const float SafeMinScale = FMath::Max(0.01f, GroundDecalScaleMultiplierMin);
+		const float SafeMaxScale = FMath::Max(SafeMinScale, GroundDecalScaleMultiplierMax);
+		const float ScaleMultiplier = FMath::FRandRange(SafeMinScale, SafeMaxScale);
+		SpawnedDecalActor->SetActorScale3D(SpawnedDecalActor->GetActorScale3D() * ScaleMultiplier);
+	}
+
+	TArray<UMaterialInterface*> ValidMaterialVariants;
+	ValidMaterialVariants.Reserve(GroundDecalMaterialVariants.Num());
+	for (UMaterialInterface* MaterialVariant : GroundDecalMaterialVariants)
+	{
+		if (IsValid(MaterialVariant))
+		{
+			ValidMaterialVariants.Add(MaterialVariant);
+		}
+	}
+
+	if (ValidMaterialVariants.Num() == 0)
+	{
+		return;
+	}
+
+	const int32 MaterialIndex = FMath::RandRange(0, ValidMaterialVariants.Num() - 1);
+	UMaterialInterface* SelectedMaterial = ValidMaterialVariants[MaterialIndex];
+	if (!SelectedMaterial)
+	{
+		return;
+	}
+
+	if (ADirtDecalActor* DirtDecalActor = Cast<ADirtDecalActor>(SpawnedDecalActor))
+	{
+		DirtDecalActor->BaseDecalMaterial = SelectedMaterial;
+		if (DirtDecalActor->HasActorBegunPlay())
+		{
+			DirtDecalActor->InitializeDirtDecal();
+		}
+	}
+
+	TArray<UDecalComponent*> DecalComponents;
+	SpawnedDecalActor->GetComponents<UDecalComponent>(DecalComponents);
+	for (UDecalComponent* DecalComponent : DecalComponents)
+	{
+		if (DecalComponent)
+		{
+			DecalComponent->SetDecalMaterial(SelectedMaterial);
+		}
+	}
 }
 
 void UObjectDepletionResponseComponent::SpawnRawMaterialDrops()
