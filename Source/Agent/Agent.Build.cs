@@ -12,6 +12,7 @@ public class Agent : ModuleRules
 			"Core",
 			"CoreUObject",
 			"Engine",
+			"Niagara",
 			"GeometryCore",
 			"GeometryCollectionEngine",
 			"GeometryFramework",

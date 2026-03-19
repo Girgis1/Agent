@@ -1571,6 +1571,11 @@ bool AAgentCharacter::IsBeamAimModifierActive() const
 	return CanUseBeamTool() && (IsRawMouseBeamAimModifierHeld() || IsRawControllerBeamAimModifierHeld());
 }
 
+bool AAgentCharacter::IsScannerModeActive() const
+{
+	return IsRawMouseBeamAimModifierHeld() || IsRawControllerBeamAimModifierHeld();
+}
+
 bool AAgentCharacter::IsBeamFireInputHeld() const
 {
 	return bMouseBeamFireHeld || bControllerBeamFireHeld;
@@ -5317,8 +5322,17 @@ bool AAgentCharacter::UpdatePickupCandidate()
 		return true;
 	}
 
-	PickupCandidateLocation = TraceEnd;
-	DrawPickupInfluenceDebug(TraceEnd, FColor(200, 200, 200));
+	FHitResult VisualHit;
+	const bool bHasVisualHit = World->LineTraceSingleByChannel(
+		VisualHit,
+		ViewLocation,
+		TraceEnd,
+		ECC_Visibility,
+		QueryParams);
+	PickupCandidateLocation = bHasVisualHit
+		? (VisualHit.ImpactPoint.IsNearlyZero() ? VisualHit.Location : VisualHit.ImpactPoint)
+		: TraceEnd;
+	DrawPickupInfluenceDebug(PickupCandidateLocation, FColor(200, 200, 200));
 	return false;
 }
 
@@ -5352,13 +5366,14 @@ UPrimitiveComponent* AAgentCharacter::ResolvePickupPhysicsComponent(UPrimitiveCo
 		return nullptr;
 	}
 
+	AActor* PrimitiveOwner = PrimitiveComponent->GetOwner();
 	if (PrimitiveComponent->IsSimulatingPhysics()
 		&& PrimitiveComponent->GetCollisionEnabled() != ECollisionEnabled::NoCollision)
 	{
 		return PrimitiveComponent;
 	}
 
-	AMiningBotActor* MiningBotOwner = Cast<AMiningBotActor>(PrimitiveComponent->GetOwner());
+	AMiningBotActor* MiningBotOwner = Cast<AMiningBotActor>(PrimitiveOwner);
 	if (MiningBotOwner)
 	{
 		if (UPrimitiveComponent* BotPickupPhysicsComponent = MiningBotOwner->GetPickupPhysicsComponent())
@@ -5370,7 +5385,7 @@ UPrimitiveComponent* AAgentCharacter::ResolvePickupPhysicsComponent(UPrimitiveCo
 		}
 	}
 
-	ADroneCompanion* DroneOwner = Cast<ADroneCompanion>(PrimitiveComponent->GetOwner());
+	ADroneCompanion* DroneOwner = Cast<ADroneCompanion>(PrimitiveOwner);
 	if (!DroneOwner)
 	{
 		return nullptr;

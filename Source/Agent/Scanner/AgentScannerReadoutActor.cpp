@@ -290,7 +290,6 @@ void AAgentScannerReadoutActor::Tick(float DeltaSeconds)
 	}
 
 	const float SafePositionInterp = FMath::Max(0.0f, PositionInterpSpeed);
-	const float SafeRotationInterp = FMath::Max(0.0f, RotationInterpSpeed);
 	SmoothedPanelLocation = SafePositionInterp > KINDA_SMALL_NUMBER
 		? FMath::VInterpTo(SmoothedPanelLocation, DesiredPanelLocation, DeltaSeconds, SafePositionInterp)
 		: DesiredPanelLocation;
@@ -302,18 +301,16 @@ void AAgentScannerReadoutActor::Tick(float DeltaSeconds)
 	const FVector FinalPanelLocation = SmoothedPanelLocation + FloatOffset;
 	SetActorLocation(FinalPanelLocation);
 
-	if (!ViewerLocation.IsNearlyZero())
+	FRotator TargetRotation = GetActorRotation();
+	if (ResolveTargetFacingRotation(FinalPanelLocation, ViewerLocation, TargetRotation))
 	{
-		const FVector ToViewer = (ViewerLocation - FinalPanelLocation).GetSafeNormal();
-		if (!ToViewer.IsNearlyZero())
-		{
-			FRotator TargetRotation = ToViewer.Rotation();
-			TargetRotation.Roll = 0.0f;
-			const FRotator SmoothedRotation = SafeRotationInterp > KINDA_SMALL_NUMBER
-				? FMath::RInterpTo(GetActorRotation(), TargetRotation, DeltaSeconds, SafeRotationInterp)
-				: TargetRotation;
-			SetActorRotation(SmoothedRotation);
-		}
+		const float EffectiveRotationInterp = FMath::Max(
+			0.0f,
+			ResolveRotationInterpSpeed(GetActorRotation(), TargetRotation));
+		const FRotator SmoothedRotation = EffectiveRotationInterp > KINDA_SMALL_NUMBER
+			? FMath::RInterpTo(GetActorRotation(), TargetRotation, DeltaSeconds, EffectiveRotationInterp)
+			: TargetRotation;
+		SetActorRotation(SmoothedRotation);
 	}
 
 	UpdateLeaderLine(DisplayAlpha);
@@ -863,6 +860,34 @@ FAgentScannerPresentation AAgentScannerReadoutActor::BuildPreviewPresentation() 
 	PreviewPresentation.AccentColor = LeaderColor;
 	PreviewPresentation.Rows = PreviewRows;
 	return PreviewPresentation;
+}
+
+bool AAgentScannerReadoutActor::ResolveTargetFacingRotation(
+	const FVector& InPanelLocation,
+	const FVector& InViewerLocation,
+	FRotator& OutTargetRotation) const
+{
+	if (InViewerLocation.IsNearlyZero())
+	{
+		return false;
+	}
+
+	const FVector ToViewer = (InViewerLocation - InPanelLocation).GetSafeNormal();
+	if (ToViewer.IsNearlyZero())
+	{
+		return false;
+	}
+
+	OutTargetRotation = ToViewer.Rotation();
+	OutTargetRotation.Roll = 0.0f;
+	return true;
+}
+
+float AAgentScannerReadoutActor::ResolveRotationInterpSpeed(const FRotator& CurrentRotation, const FRotator& TargetRotation) const
+{
+	(void)CurrentRotation;
+	(void)TargetRotation;
+	return RotationInterpSpeed;
 }
 
 void AAgentScannerReadoutActor::UpdateLeaderLine(float Alpha)

@@ -47,7 +47,7 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Objects|MaterialActor")
 	TObjectPtr<UObjectFractureComponent> ObjectFracture = nullptr;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Objects|MaterialActor")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Objects|MaterialActor", meta=(DisplayName="Object Destroyed"))
 	TObjectPtr<UObjectDepletionResponseComponent> DepletionResponse = nullptr;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Factory|MaterialActor")

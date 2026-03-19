@@ -12,6 +12,7 @@ class UMaterialComponent;
 class UMaterialDefinitionAsset;
 class UMaterialInterface;
 class UObjectHealthComponent;
+class UNiagaraSystem;
 class UParticleSystem;
 class UPrimitiveComponent;
 
@@ -56,7 +57,7 @@ struct FObjectDepletionRawDropClassOverride
 	bool IsUsable() const;
 };
 
-UCLASS(ClassGroup=(Objects), meta=(BlueprintSpawnableComponent))
+UCLASS(ClassGroup=(Objects), meta=(BlueprintSpawnableComponent, DisplayName="Object Destroyed"))
 class UObjectDepletionResponseComponent : public UActorComponent
 {
 	GENERATED_BODY()
@@ -90,7 +91,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Depletion|Emitter")
 	bool bSpawnEmitterOnDepleted = false;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Depletion|Emitter", meta=(EditCondition="bSpawnEmitterOnDepleted", EditConditionHides))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Depletion|Emitter", meta=(EditCondition="bSpawnEmitterOnDepleted", EditConditionHides, DisplayName="Niagara Template"))
+	TObjectPtr<UNiagaraSystem> DepletionNiagaraTemplate = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Depletion|Emitter", meta=(EditCondition="bSpawnEmitterOnDepleted", EditConditionHides, DisplayName="Cascade Template"))
 	TObjectPtr<UParticleSystem> DepletionEmitterTemplate = nullptr;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Depletion|Emitter", meta=(EditCondition="bSpawnEmitterOnDepleted", EditConditionHides))
@@ -114,17 +118,26 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Depletion|Decal", meta=(ClampMin="0.0", UIMin="0.0", EditCondition="bSpawnGroundDecalOnDepleted", EditConditionHides, Units="deg"))
 	float GroundDecalRandomYawDegrees = 180.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Depletion|Decal", meta=(EditCondition="bSpawnGroundDecalOnDepleted", EditConditionHides))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Depletion|Decal", meta=(EditCondition="bSpawnGroundDecalOnDepleted", EditConditionHides, DisplayName="Randomize Spawn Size"))
 	bool bRandomizeGroundDecalScaleOnSpawn = false;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Depletion|Decal", meta=(ClampMin="0.01", UIMin="0.01", EditCondition="bSpawnGroundDecalOnDepleted && bRandomizeGroundDecalScaleOnSpawn", EditConditionHides))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Depletion|Decal", meta=(ClampMin="0.01", UIMin="0.01", EditCondition="bSpawnGroundDecalOnDepleted && bRandomizeGroundDecalScaleOnSpawn", EditConditionHides, DisplayName="Spawn Size Min"))
 	float GroundDecalScaleMultiplierMin = 0.8f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Depletion|Decal", meta=(ClampMin="0.01", UIMin="0.01", EditCondition="bSpawnGroundDecalOnDepleted && bRandomizeGroundDecalScaleOnSpawn", EditConditionHides))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Depletion|Decal", meta=(ClampMin="0.01", UIMin="0.01", EditCondition="bSpawnGroundDecalOnDepleted && bRandomizeGroundDecalScaleOnSpawn", EditConditionHides, DisplayName="Spawn Size Max"))
 	float GroundDecalScaleMultiplierMax = 1.2f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Depletion|Decal", meta=(EditCondition="bSpawnGroundDecalOnDepleted", EditConditionHides, DisplayName="Ground Decal Material Variants"))
 	TArray<TObjectPtr<UMaterialInterface>> GroundDecalMaterialVariants;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Depletion|Decal", meta=(EditCondition="bSpawnGroundDecalOnDepleted", EditConditionHides, DisplayName="Randomize Dirty Intensity"))
+	bool bRandomizeGroundDecalDirtyIntensityOnSpawn = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Depletion|Decal", meta=(ClampMin="0.0", UIMin="0.0", EditCondition="bSpawnGroundDecalOnDepleted && bRandomizeGroundDecalDirtyIntensityOnSpawn", EditConditionHides, DisplayName="Dirty Intensity Min"))
+	float GroundDecalDirtyIntensityMin = 0.75f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Depletion|Decal", meta=(ClampMin="0.0", UIMin="0.0", EditCondition="bSpawnGroundDecalOnDepleted && bRandomizeGroundDecalDirtyIntensityOnSpawn", EditConditionHides, DisplayName="Dirty Intensity Max"))
+	float GroundDecalDirtyIntensityMax = 1.25f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objects|Depletion|GroundTrace", meta=(ClampMin="0.0", UIMin="0.0", Units="cm"))
 	float GroundTraceUpDistanceCm = 50.0f;

@@ -264,6 +264,11 @@ protected:
 	UTextRenderComponent* CreateTextComponent(const FName ComponentName, USceneComponent* AttachParent);
 	FText FormatRowText(const FAgentScannerRowPresentation& Row) const;
 	FAgentScannerPresentation BuildPreviewPresentation() const;
+	virtual bool ResolveTargetFacingRotation(
+		const FVector& InPanelLocation,
+		const FVector& InViewerLocation,
+		FRotator& OutTargetRotation) const;
+	virtual float ResolveRotationInterpSpeed(const FRotator& CurrentRotation, const FRotator& TargetRotation) const;
 	void UpdateLeaderLine(float Alpha);
 	void UpdateLeaderSegment(UStaticMeshComponent* LineMesh, const FVector& StartLocation, const FVector& EndLocation, float Alpha, bool bCanShowLine) const;
 	void ApplyLeaderMaterialColor(const FLinearColor& InColor);

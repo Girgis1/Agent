@@ -3,6 +3,7 @@
 #include "AgentScannerComponent.h"
 #include "AgentBeamToolComponent.h"
 #include "AgentScannerReadoutActor.h"
+#include "MachineUIScannerTargeting.h"
 #include "Components/PrimitiveComponent.h"
 #include "Engine/OverlapResult.h"
 #include "Engine/World.h"
@@ -329,6 +330,14 @@ void UAgentScannerComponent::UpdateScanner(
 				}
 			}
 		}
+		return;
+	}
+
+	// Machines use a dedicated machine UI; skip material scanner readouts for them.
+	if (AgentMachineUITargeting::IsMachineActorOrChild(TraceResult.HitActor.Get()))
+	{
+		ResetCandidate();
+		ClearActiveReadout(true);
 		return;
 	}
 

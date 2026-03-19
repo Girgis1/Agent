@@ -1438,6 +1438,9 @@ public:
 	UFUNCTION(BlueprintPure, Category="Scanner")
 	UAgentScannerComponent* GetScannerComponent() const { return ScannerComponent; }
 
+	UFUNCTION(BlueprintPure, Category="Scanner")
+	bool IsScannerModeActive() const;
+
 	FORCEINLINE USpringArmComponent* GetCameraBoom() const { return CameraBoom; }
 	FORCEINLINE UCameraComponent* GetFollowCamera() const { return FollowCamera; }
 	FORCEINLINE UCameraComponent* GetFirstPersonCamera() const { return ResolveFirstPersonCamera(); }

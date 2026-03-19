@@ -14,6 +14,8 @@
 #include "Material/MaterialDefinitionAsset.h"
 #include "Materials/MaterialInterface.h"
 #include "Math/RotationMatrix.h"
+#include "NiagaraFunctionLibrary.h"
+#include "NiagaraSystem.h"
 #include "Objects/Components/ObjectHealthComponent.h"
 #include "Objects/Types/ObjectBreakUtilities.h"
 #include "Particles/ParticleSystem.h"
@@ -144,7 +146,7 @@ void UObjectDepletionResponseComponent::ExecuteDepletionResponses()
 
 void UObjectDepletionResponseComponent::SpawnEmitterResponse(const FHitResult* GroundHit)
 {
-	if (!DepletionEmitterTemplate)
+	if (!DepletionNiagaraTemplate && !DepletionEmitterTemplate)
 	{
 		return;
 	}
@@ -163,6 +165,19 @@ void UObjectDepletionResponseComponent::SpawnEmitterResponse(const FHitResult* G
 	{
 		SpawnTransform = BuildGroundAlignedTransform(*GroundHit, EmitterGroundOffsetCm, 0.0f);
 		SpawnTransform.SetLocation(SpawnTransform.GetLocation() + EmitterWorldOffset);
+	}
+
+	if (DepletionNiagaraTemplate)
+	{
+		UNiagaraFunctionLibrary::SpawnSystemAtLocation(
+			World,
+			DepletionNiagaraTemplate,
+			SpawnTransform.GetLocation(),
+			SpawnTransform.GetRotation().Rotator(),
+			SpawnTransform.GetScale3D(),
+			true,
+			true);
+		return;
 	}
 
 	UGameplayStatics::SpawnEmitterAtLocation(
@@ -201,6 +216,16 @@ void UObjectDepletionResponseComponent::ApplyGroundDecalSpawnOverrides(AActor* S
 		SpawnedDecalActor->SetActorScale3D(SpawnedDecalActor->GetActorScale3D() * ScaleMultiplier);
 	}
 
+	bool bHasDirtyIntensityOverride = false;
+	float SpawnDirtyIntensity = 1.0f;
+	if (bRandomizeGroundDecalDirtyIntensityOnSpawn)
+	{
+		const float SafeMinDirtyIntensity = FMath::Max(0.0f, GroundDecalDirtyIntensityMin);
+		const float SafeMaxDirtyIntensity = FMath::Max(SafeMinDirtyIntensity, GroundDecalDirtyIntensityMax);
+		SpawnDirtyIntensity = FMath::FRandRange(SafeMinDirtyIntensity, SafeMaxDirtyIntensity);
+		bHasDirtyIntensityOverride = true;
+	}
+
 	TArray<UMaterialInterface*> ValidMaterialVariants;
 	ValidMaterialVariants.Reserve(GroundDecalMaterialVariants.Num());
 	for (UMaterialInterface* MaterialVariant : GroundDecalMaterialVariants)
@@ -211,34 +236,48 @@ void UObjectDepletionResponseComponent::ApplyGroundDecalSpawnOverrides(AActor* S
 		}
 	}
 
-	if (ValidMaterialVariants.Num() == 0)
+	UMaterialInterface* SelectedMaterial = nullptr;
+	if (ValidMaterialVariants.Num() > 0)
 	{
-		return;
-	}
-
-	const int32 MaterialIndex = FMath::RandRange(0, ValidMaterialVariants.Num() - 1);
-	UMaterialInterface* SelectedMaterial = ValidMaterialVariants[MaterialIndex];
-	if (!SelectedMaterial)
-	{
-		return;
+		const int32 MaterialIndex = FMath::RandRange(0, ValidMaterialVariants.Num() - 1);
+		SelectedMaterial = ValidMaterialVariants[MaterialIndex];
 	}
 
 	if (ADirtDecalActor* DirtDecalActor = Cast<ADirtDecalActor>(SpawnedDecalActor))
 	{
-		DirtDecalActor->BaseDecalMaterial = SelectedMaterial;
+		if (SelectedMaterial)
+		{
+			DirtDecalActor->BaseDecalMaterial = SelectedMaterial;
+		}
+
+		if (bHasDirtyIntensityOverride)
+		{
+			DirtDecalActor->DirtIntensity = SpawnDirtyIntensity;
+		}
+
 		if (DirtDecalActor->HasActorBegunPlay())
 		{
-			DirtDecalActor->InitializeDirtDecal();
+			if (SelectedMaterial)
+			{
+				DirtDecalActor->InitializeDirtDecal();
+			}
+			else if (bHasDirtyIntensityOverride)
+			{
+				DirtDecalActor->RefreshVisualParameters();
+			}
 		}
 	}
 
-	TArray<UDecalComponent*> DecalComponents;
-	SpawnedDecalActor->GetComponents<UDecalComponent>(DecalComponents);
-	for (UDecalComponent* DecalComponent : DecalComponents)
+	if (SelectedMaterial)
 	{
-		if (DecalComponent)
+		TArray<UDecalComponent*> DecalComponents;
+		SpawnedDecalActor->GetComponents<UDecalComponent>(DecalComponents);
+		for (UDecalComponent* DecalComponent : DecalComponents)
 		{
-			DecalComponent->SetDecalMaterial(SelectedMaterial);
+			if (DecalComponent)
+			{
+				DecalComponent->SetDecalMaterial(SelectedMaterial);
+			}
 		}
 	}
 }
