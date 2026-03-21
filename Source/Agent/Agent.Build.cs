@@ -58,6 +58,8 @@ public class Agent : ModuleRules
 			"Agent/Objects/Assets",
 			"Agent/Objects/Components",
 			"Agent/Objects/Types",
+			"Agent/Tools",
+			"Agent/WorldUI",
 			"Agent/Vehicle",
 			"Agent/Vehicle/Actors",
 			"Agent/Vehicle/Components",

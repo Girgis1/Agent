@@ -4,6 +4,7 @@
 #include "AgentBeamToolComponent.h"
 #include "Camera/AgentAimFocusCameraModifier.h"
 #include "Scanner/AgentScannerComponent.h"
+#include "WorldUI/WorldUIInteractorComponent.h"
 #include "Backpack/Actors/BlackHoleBackpackActor.h"
 #include "Backpack/Components/BackAttachmentComponent.h"
 #include "Backpack/Components/PlayerMagnetComponent.h"
@@ -21,6 +22,7 @@
 #include "Machine/MachineActor.h"
 #include "Factory/StorageBin.h"
 #include "Objects/Components/ObjectSliceComponent.h"
+#include "Tools/ToolSystemComponent.h"
 #include "Vehicle/Components/VehicleInteractionComponent.h"
 #include "Camera/CameraComponent.h"
 #include "CollisionShape.h"
@@ -192,6 +194,7 @@ AAgentCharacter::AAgentCharacter(const FObjectInitializer& ObjectInitializer)
 
 	PickupPhysicsHandle = CreateDefaultSubobject<UPhysicsHandleComponent>(TEXT("PickupPhysicsHandle"));
 	VehicleInteractionComponent = CreateDefaultSubobject<UVehicleInteractionComponent>(TEXT("VehicleInteractionComponent"));
+	ToolSystemComponent = CreateDefaultSubobject<UToolSystemComponent>(TEXT("ToolSystemComponent"));
 	BackAttachmentComponent = CreateDefaultSubobject<UBackAttachmentComponent>(TEXT("BackAttachmentComponent"));
 	PlayerMagnetComponent = CreateDefaultSubobject<UPlayerMagnetComponent>(TEXT("PlayerMagnetComponent"));
 	PlayerBeamToolComponent = CreateDefaultSubobject<UAgentBeamToolComponent>(TEXT("PlayerBeamToolComponent"));
@@ -201,6 +204,7 @@ AAgentCharacter::AAgentCharacter(const FObjectInitializer& ObjectInitializer)
 	PlayerBeamToolComponent->BaseTraceRadius = 6.0f;
 	PlayerBeamToolComponent->BeamRange = 3000.0f;
 	ScannerComponent = CreateDefaultSubobject<UAgentScannerComponent>(TEXT("ScannerComponent"));
+	WorldUIInteractorComponent = CreateDefaultSubobject<UWorldUIInteractorComponent>(TEXT("WorldUIInteractorComponent"));
 	DroneSwarmComponent = CreateDefaultSubobject<UDroneSwarmComponent>(TEXT("DroneSwarmComponent"));
 
 	ThirdPersonDroneProxyMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ThirdPersonDroneProxyMesh"));
@@ -1330,6 +1334,11 @@ void AAgentCharacter::EnterRagdollInternal(EAgentRagdollReason Reason)
 	if (bReleaseHeldPickupOnRagdollEntry && HeldPickupComponent.IsValid())
 	{
 		EndPickup();
+	}
+
+	if (ToolSystemComponent && ToolSystemComponent->IsToolEquipped())
+	{
+		ToolSystemComponent->DropEquippedTool(true);
 	}
 
 	if (bReleaseHookJobDronesOnRagdollEntry)
@@ -2873,6 +2882,12 @@ void AAgentCharacter::ResetBeamAimZoomState()
 
 void AAgentCharacter::OnLeftMouseButtonPressed()
 {
+	if (ToolSystemComponent && ToolSystemComponent->IsToolEquipped())
+	{
+		ToolSystemComponent->SetPushInputActive(true);
+		return;
+	}
+
 	if (CanUseBeamTool())
 	{
 		bMouseBeamFireHeld = true;
@@ -2894,6 +2909,12 @@ void AAgentCharacter::OnLeftMouseButtonPressed()
 
 void AAgentCharacter::OnLeftMouseButtonReleased()
 {
+	if (ToolSystemComponent && ToolSystemComponent->IsToolEquipped())
+	{
+		ToolSystemComponent->SetPushInputActive(false);
+		return;
+	}
+
 	bMouseBeamFireHeld = false;
 	StopAllBeamTools();
 }
@@ -4371,6 +4392,36 @@ bool AAgentCharacter::CanUseCharacterInteraction() const
 		&& (CurrentViewMode == EAgentViewMode::ThirdPerson || CurrentViewMode == EAgentViewMode::FirstPerson);
 }
 
+bool AAgentCharacter::CanUseHeldToolInteraction() const
+{
+	if (!CanUseCharacterInteraction())
+	{
+		return false;
+	}
+
+	if (VehicleInteractionComponent && VehicleInteractionComponent->IsControllingVehicle())
+	{
+		return false;
+	}
+
+	return !HeldPickupComponent.IsValid();
+}
+
+float AAgentCharacter::GetHeldToolStrengthKg() const
+{
+	return FMath::Max(0.0f, CharacterPickupStrengthMultiplier) * FMath::Max(1.0f, PickupStrengthMassScaleKg);
+}
+
+bool AAgentCharacter::GetHeldToolView(FVector& OutLocation, FRotator& OutRotation) const
+{
+	return GetCharacterPickupView(OutLocation, OutRotation);
+}
+
+bool AAgentCharacter::IsHeldToolEquipped() const
+{
+	return ToolSystemComponent && ToolSystemComponent->IsToolEquipped();
+}
+
 void AAgentCharacter::ToggleConveyorPlacementMode()
 {
 	if (bConveyorPlacementModeActive)
@@ -5046,6 +5097,11 @@ void AAgentCharacter::SelectFactoryPlacementType(EAgentFactoryPlacementType NewT
 
 bool AAgentCharacter::CanUsePickupInteraction() const
 {
+	if (ToolSystemComponent && ToolSystemComponent->IsToolEquipped())
+	{
+		return false;
+	}
+
 	if (IsRagdolling())
 	{
 		return false;
@@ -5073,6 +5129,11 @@ bool AAgentCharacter::CanUsePickupInteraction() const
 
 bool AAgentCharacter::CanMaintainHeldPickup() const
 {
+	if (ToolSystemComponent && ToolSystemComponent->IsToolEquipped())
+	{
+		return false;
+	}
+
 	if (IsRagdolling())
 	{
 		return false;
@@ -7586,6 +7647,7 @@ void AAgentCharacter::OnDroneGamepadPitchAxis(float Value)
 void AAgentCharacter::OnDroneGamepadLeftTriggerAxis(float Value)
 {
 	DroneGamepadLeftTriggerInput = FMath::Clamp(Value, 0.0f, 1.0f);
+
 	const bool bWasPickupRotationModeActive = bPickupRotationModeActive;
 	bPickupRotationModeActive = bControllerPickupHeld
 		&& HeldPickupComponent.IsValid()
@@ -8018,6 +8080,12 @@ void AAgentCharacter::OnPickupOrDroneYawRightReleased()
 
 void AAgentCharacter::OnPickupOrPlacePressed()
 {
+	if (ToolSystemComponent && ToolSystemComponent->IsToolEquipped())
+	{
+		ToolSystemComponent->SetPushInputActive(true);
+		return;
+	}
+
 	const bool bWantsBeamFire = IsRawControllerBeamAimModifierHeld() && CanUseBeamTool();
 	bControllerBeamFireHeld = bWantsBeamFire;
 	if (bWantsBeamFire)
@@ -8081,6 +8149,13 @@ void AAgentCharacter::OnPickupOrPlacePressed()
 
 void AAgentCharacter::OnPickupOrPlaceReleased()
 {
+	if (ToolSystemComponent && ToolSystemComponent->IsToolEquipped())
+	{
+		bControllerBeamFireHeld = false;
+		ToolSystemComponent->SetPushInputActive(false);
+		return;
+	}
+
 	bControllerBeamFireHeld = false;
 	if (PlayerBeamToolComponent && PlayerBeamToolComponent->IsBeamActive())
 	{
@@ -8153,18 +8228,24 @@ void AAgentCharacter::OnInteractReleased()
 
 void AAgentCharacter::OnVehicleInteractPressed()
 {
-	if (!VehicleInteractionComponent)
-	{
-		return;
-	}
-
-	if (VehicleInteractionComponent->IsControllingVehicle())
+	if (VehicleInteractionComponent && VehicleInteractionComponent->IsControllingVehicle())
 	{
 		VehicleInteractionComponent->TryExitCurrentVehicle();
 		return;
 	}
 
-	if (IsRagdolling())
+	if (ToolSystemComponent && ToolSystemComponent->IsToolEquipped())
+	{
+		ToolSystemComponent->DropEquippedTool();
+		return;
+	}
+
+	if (ToolSystemComponent && CanUseHeldToolInteraction() && ToolSystemComponent->TryEquipNearestTool())
+	{
+		return;
+	}
+
+	if (!VehicleInteractionComponent)
 	{
 		return;
 	}

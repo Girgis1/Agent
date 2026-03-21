@@ -25,3 +25,14 @@
 # OS noise
 .DS_Store
 Thumbs.db
+
+# Large scene/content packs to exclude from Git.
+/Content/Scene_Junkyard/
+/Content/Scene_Trash/
+/Content/OLDSandbox/
+/Content/NiagaraExamples/
+/Content/Mining_pack/
+/Content/MiningPack/
+/Content/Scene_UnfinishedBuilding/
+/Content/Scene_Warehouse/
+/Content/BigNiagaraBundle/

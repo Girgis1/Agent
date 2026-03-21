@@ -26,6 +26,8 @@
 namespace
 {
 	const FName DroneBeamStartTagName(TEXT("BeamStart"));
+	const FName DronePowerToggleActionTag(TEXT("TogglePower"));
+	const FName DroneSetPowerEnabledActionTag(TEXT("SetPowerEnabled"));
 
 	USceneComponent* ResolveDroneTaggedSceneComponent(AActor* SourceActor, FName RequiredTag)
 	{
@@ -405,6 +407,119 @@ bool ADroneCompanion::IsBatteryFullyCharged() const
 	}
 
 	return BatteryComponent->IsFullyCharged();
+}
+
+bool ADroneCompanion::BuildWorldUIModel_Implementation(FWorldUIModel& OutModel) const
+{
+	OutModel = FWorldUIModel();
+
+	const float BatteryPercent = FMath::Clamp(GetBatteryPercent(), 0.0f, 100.0f);
+	const float BatteryPercent01 = BatteryPercent / 100.0f;
+	const bool bPoweredOn = !IsDronePoweredOff() && !IsBatteryDepleted();
+
+	FText PowerStateText = NSLOCTEXT("DroneWorldUI", "PowerOnline", "ONLINE");
+	if (IsBatteryDepleted())
+	{
+		PowerStateText = NSLOCTEXT("DroneWorldUI", "PowerFlat", "FLAT");
+	}
+	else if (IsDronePoweredOff())
+	{
+		PowerStateText = NSLOCTEXT("DroneWorldUI", "PowerOffline", "OFFLINE");
+	}
+
+	FLinearColor AccentColor = FLinearColor(0.18f, 0.9f, 1.0f, 1.0f);
+	FLinearColor BatteryColor = FLinearColor(0.5f, 1.0f, 0.65f, 1.0f);
+	if (IsBatteryDepleted())
+	{
+		AccentColor = FLinearColor(1.0f, 0.2f, 0.16f, 1.0f);
+		BatteryColor = AccentColor;
+	}
+	else if (IsDronePoweredOff())
+	{
+		AccentColor = FLinearColor(0.65f, 0.72f, 0.82f, 1.0f);
+		BatteryColor = AccentColor;
+	}
+	else if (BatteryPercent01 <= 0.2f)
+	{
+		AccentColor = FLinearColor(1.0f, 0.56f, 0.18f, 1.0f);
+		BatteryColor = AccentColor;
+	}
+
+	OutModel.AccentColor = AccentColor;
+
+	FWorldUITextBinding TitleBinding;
+	TitleBinding.FieldTag = TEXT("Title");
+	TitleBinding.Value = NSLOCTEXT("DroneWorldUI", "DroneTitle", "Drone");
+	OutModel.TextBindings.Add(TitleBinding);
+
+	FWorldUITextBinding BatteryBinding;
+	BatteryBinding.FieldTag = TEXT("Battery");
+	BatteryBinding.Value = FText::Format(
+		NSLOCTEXT("DroneWorldUI", "BatteryFormat", "{0}%"),
+		FText::AsNumber(FMath::RoundToInt(BatteryPercent)));
+	OutModel.TextBindings.Add(BatteryBinding);
+
+	FWorldUITextBinding PowerBinding;
+	PowerBinding.FieldTag = TEXT("PowerState");
+	PowerBinding.Value = PowerStateText;
+	OutModel.TextBindings.Add(PowerBinding);
+
+	FWorldUITextBinding ModeBinding;
+	ModeBinding.FieldTag = TEXT("Mode");
+	ModeBinding.Value = StaticEnum<EDroneCompanionMode>()
+		? StaticEnum<EDroneCompanionMode>()->GetDisplayNameTextByValue(static_cast<int64>(CompanionMode))
+		: FText::GetEmpty();
+	OutModel.TextBindings.Add(ModeBinding);
+
+	FWorldUIScalarBinding BatteryPercentBinding;
+	BatteryPercentBinding.FieldTag = TEXT("BatteryPercent01");
+	BatteryPercentBinding.Value = BatteryPercent01;
+	OutModel.ScalarBindings.Add(BatteryPercentBinding);
+
+	FWorldUIBoolBinding PowerEnabledBinding;
+	PowerEnabledBinding.FieldTag = TEXT("PowerEnabled");
+	PowerEnabledBinding.bValue = bPoweredOn;
+	OutModel.BoolBindings.Add(PowerEnabledBinding);
+
+	FWorldUIBoolBinding ChargerBinding;
+	ChargerBinding.FieldTag = TEXT("InCharger");
+	ChargerBinding.bValue = IsInChargerVolume();
+	OutModel.BoolBindings.Add(ChargerBinding);
+
+	FWorldUIColorBinding BatteryColorBinding;
+	BatteryColorBinding.FieldTag = TEXT("Battery");
+	BatteryColorBinding.Value = BatteryColor;
+	OutModel.ColorBindings.Add(BatteryColorBinding);
+
+	FWorldUIColorBinding PowerColorBinding;
+	PowerColorBinding.FieldTag = TEXT("PowerState");
+	PowerColorBinding.Value = AccentColor;
+	OutModel.ColorBindings.Add(PowerColorBinding);
+
+	return true;
+}
+
+bool ADroneCompanion::HandleWorldUIAction_Implementation(const FWorldUIAction& Action)
+{
+	const FName ActionTag = Action.ActionTag;
+	if (ActionTag == DronePowerToggleActionTag)
+	{
+		ToggleManualPowerOff();
+		return true;
+	}
+
+	if (ActionTag == DroneSetPowerEnabledActionTag)
+	{
+		const bool bEnablePower = Action.IntValue != 0
+			|| Action.FloatValue > 0.5f
+			|| Action.NameValue == TEXT("On")
+			|| Action.NameValue == TEXT("Enabled")
+			|| Action.NameValue == TEXT("True");
+		SetManualPowerOff(!bEnablePower);
+		return true;
+	}
+
+	return false;
 }
 
 bool ADroneCompanion::SetManualPowerOff(bool bPowerOff)

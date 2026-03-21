@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "WorldUI/WorldUIDataProviderInterface.h"
 #include "DroneCompanion.generated.h"
 
 class UCameraComponent;
@@ -75,7 +76,7 @@ struct FDroneLiftAssistForceTuning
 };
 
 UCLASS()
-class ADroneCompanion : public AActor
+class ADroneCompanion : public AActor, public IWorldUIDataProviderInterface
 {
 	GENERATED_BODY()
 
@@ -241,6 +242,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category="Drone|State")
 	EDroneControlState GetControlState() const { return CurrentControlState; }
+
+	virtual bool BuildWorldUIModel_Implementation(FWorldUIModel& OutModel) const override;
+	virtual bool HandleWorldUIAction_Implementation(const FWorldUIAction& Action) override;
 
 	UFUNCTION(BlueprintCallable, Category="Drone|Battery")
 	void NotifyEnteredChargerVolume();

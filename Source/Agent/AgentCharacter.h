@@ -20,10 +20,12 @@ class AMinerActor;
 class AMiningSwarmMachine;
 class AStorageBin;
 class AActor;
+class UToolSystemComponent;
 class UVehicleInteractionComponent;
 class UBackAttachmentComponent;
 class UPlayerMagnetComponent;
 class UAgentScannerComponent;
+class UWorldUIInteractorComponent;
 class UAgentAimFocusCameraModifier;
 class UCameraComponent;
 class UDroneSwarmComponent;
@@ -125,6 +127,10 @@ class AAgentCharacter : public ACharacter
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UVehicleInteractionComponent* VehicleInteractionComponent;
 
+	/** Modular held-tool manager used for broom-style procedural tools. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	UToolSystemComponent* ToolSystemComponent;
+
 	/** Reusable backpack deploy/recall manager used by carried world items */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UBackAttachmentComponent* BackAttachmentComponent;
@@ -140,6 +146,10 @@ class AAgentCharacter : public ACharacter
 	/** Passive scanner that reveals target health and composition while aiming. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	UAgentScannerComponent* ScannerComponent;
+
+	/** Player-owned contextual world UI focus and interaction manager. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	UWorldUIInteractorComponent* WorldUIInteractorComponent;
 
 	/** Swarm registry and role-slot coordinator for all known drones */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
@@ -461,6 +471,20 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category="Ragdoll")
 	bool RequestExitRagdoll(EAgentRagdollReason Reason);
+
+	UFUNCTION(BlueprintPure, Category="Tools")
+	bool CanUseHeldToolInteraction() const;
+
+	UFUNCTION(BlueprintPure, Category="Tools")
+	float GetHeldToolStrengthKg() const;
+
+	bool GetHeldToolView(FVector& OutLocation, FRotator& OutRotation) const;
+
+	UFUNCTION(BlueprintPure, Category="Tools")
+	bool IsHeldToolEquipped() const;
+
+	UFUNCTION(BlueprintPure, Category="Camera")
+	EAgentViewMode GetCurrentViewMode() const { return CurrentViewMode; }
 
 	UFUNCTION(BlueprintPure, Category="Ragdoll")
 	bool IsRagdolling() const { return RagdollState == EAgentRagdollState::Ragdoll; }
@@ -1437,6 +1461,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category="Scanner")
 	UAgentScannerComponent* GetScannerComponent() const { return ScannerComponent; }
+
+	UFUNCTION(BlueprintPure, Category="World UI")
+	UWorldUIInteractorComponent* GetWorldUIInteractorComponent() const { return WorldUIInteractorComponent; }
 
 	UFUNCTION(BlueprintPure, Category="Scanner")
 	bool IsScannerModeActive() const;
